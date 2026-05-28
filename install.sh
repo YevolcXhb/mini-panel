@@ -11,7 +11,7 @@ NC='\033[0m'
 
 # Config
 VERSION="1.0.0"
-GITHUB_REPO="minipanel/minipanel"
+GITHUB_REPO="YevolcXhb/mini-panel"
 
 # Installation directory (can be overridden via env)
 INSTALL_DIR="${MINIPANEL_DIR:-/opt/minipanel}"

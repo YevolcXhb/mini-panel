@@ -33,13 +33,23 @@
 
 ## 快速开始
 
-### 环境要求
+### 一键部署（推荐）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/YevolcXhb/mini-panel/main/install.sh | bash
+```
+
+自动检测并下载对应平台的预编译二进制。
+
+### 从源码构建
+
+#### 环境要求
 
 - Go 1.23+
 - Node.js 18+
 - DockRoot (可选，用于容器管理)
 
-### 后端启动
+#### 后端启动
 
 ```bash
 cd backend
@@ -48,7 +58,7 @@ go mod tidy
 go run cmd/server/main.go
 ```
 
-### 前端开发
+#### 前端开发
 
 ```bash
 cd frontend
@@ -56,7 +66,7 @@ npm install
 npm run dev
 ```
 
-### 构建
+#### 构建
 
 ```bash
 # 后端
@@ -66,7 +76,7 @@ make build
 npm run build
 ```
 
-### Android 构建
+#### Android 构建
 
 ```bash
 cd backend
@@ -107,7 +117,7 @@ mini-panel/
 
 ## 容器管理说明
 
-Mini Panel 使用 [DockRoot](https://github.com/...) 作为容器运行时，支持：
+Mini Panel 使用 [DockRoot](https://github.com/kspeeder/dockroot) 作为容器运行时，支持：
 
 - 拉取 Docker 镜像
 - 运行/停止/删除容器
