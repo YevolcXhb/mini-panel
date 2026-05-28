@@ -1,126 +1,138 @@
 <template>
-  <el-container class="layout">
-    <el-aside width="200px" class="sidebar">
-      <div class="logo">
-        <el-icon size="24"><Monitor /></el-icon>
-        <span>Mini Panel</span>
+  <div class="main-app">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <span class="sidebar-logo">🍔</span>
+        <span class="sidebar-title">MiniPanel</span>
       </div>
-      <el-menu :default-active="$route.path" router class="menu" background-color="#1a1a2e" text-color="#b0b0b0" active-text-color="#409eff">
-        <el-menu-item index="/dashboard">
-          <el-icon><Odometer /></el-icon>
-          <span>仪表盘</span>
-        </el-menu-item>
-        <el-menu-item index="/files">
-          <el-icon><Folder /></el-icon>
-          <span>文件管理</span>
-        </el-menu-item>
-        <el-menu-item index="/terminal">
-          <el-icon><Terminal /></el-icon>
-          <span>终端</span>
-        </el-menu-item>
-        <el-menu-item index="/processes">
-          <el-icon><Cpu /></el-icon>
-          <span>进程管理</span>
-        </el-menu-item>
-        <el-menu-item index="/containers">
-          <el-icon><Box /></el-icon>
-          <span>容器管理</span>
-        </el-menu-item>
-        <el-menu-item index="/apps">
-          <el-icon><Shop /></el-icon>
-          <span>应用商店</span>
-        </el-menu-item>
-        <el-menu-item index="/cronjobs">
-          <el-icon><Timer /></el-icon>
-          <span>计划任务</span>
-        </el-menu-item>
-        <el-menu-item index="/settings">
-          <el-icon><Setting /></el-icon>
-          <span>设置</span>
-        </el-menu-item>
-      </el-menu>
-    </el-aside>
-    <el-container>
-      <el-header class="header">
-        <div class="header-right">
-          <el-dropdown @command="handleCommand">
-            <span class="user-info">
-              <el-icon><User /></el-icon>
-              {{ auth.username }}
-            </span>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="logout">退出登录</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-        </div>
-      </el-header>
-      <el-main class="main">
-        <router-view />
-      </el-main>
-    </el-container>
-  </el-container>
+      <nav class="sidebar-nav">
+        <router-link v-for="item in menus" :key="item.path" :to="item.path"
+          class="nav-item" :class="{ active: $route.path === item.path }">
+          <el-icon class="nav-icon" size="18"><component :is="item.icon" /></el-icon>
+          <span class="nav-text">{{ item.label }}</span>
+        </router-link>
+      </nav>
+      <div class="sidebar-footer">
+        <el-button class="btn-ghost" @click="logout" :icon="SwitchButton">退出登录</el-button>
+      </div>
+    </aside>
+    <main class="content">
+      <router-view />
+    </main>
+  </div>
 </template>
 
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
+import {
+  Odometer, Folder, Monitor, Cpu, Box, Shop, Timer, Setting, SwitchButton
+} from '@element-plus/icons-vue'
 import { useAuthStore } from '../store'
 import { authApi } from '../api'
 
 const router = useRouter()
 const auth = useAuthStore()
 
-function handleCommand(cmd: string) {
-  if (cmd === 'logout') {
-    authApi.logout()
-    auth.clearAuth()
-    router.push('/login')
-  }
+const menus = [
+  { path: '/dashboard', label: '仪表盘', icon: Odometer },
+  { path: '/files', label: '文件管理', icon: Folder },
+  { path: '/terminal', label: '终端', icon: Monitor },
+  { path: '/processes', label: '进程管理', icon: Cpu },
+  { path: '/containers', label: '容器管理', icon: Box },
+  { path: '/apps', label: '应用商店', icon: Shop },
+  { path: '/cronjobs', label: '计划任务', icon: Timer },
+  { path: '/settings', label: '设置', icon: Setting },
+]
+
+function logout() {
+  authApi.logout()
+  auth.clearAuth()
+  router.push('/login')
 }
 </script>
 
 <style scoped>
-.layout {
+.main-app {
+  display: flex;
   height: 100vh;
+  width: 100vw;
 }
 .sidebar {
-  background: #1a1a2e;
-}
-.logo {
-  height: 60px;
+  width: 220px;
+  min-width: 220px;
+  background: var(--sb);
+  border-right: 1px solid var(--bdr);
   display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  color: #fff;
-  font-size: 18px;
-  font-weight: bold;
-  border-bottom: 1px solid #2a2a3e;
-}
-.menu {
-  border-right: none;
-}
-.header {
-  background: #fff;
-  border-bottom: 1px solid #eee;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-}
-.header-right {
-  display: flex;
-  align-items: center;
-}
-.user-info {
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-.main {
-  background: #f5f7fa;
-  padding: 20px;
+  flex-direction: column;
   overflow-y: auto;
+  flex-shrink: 0;
+}
+.sidebar-header {
+  padding: 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--bdr);
+}
+.sidebar-logo {
+  font-size: 28px;
+}
+.sidebar-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--txt);
+}
+.sidebar-nav {
+  flex: 1;
+  padding: 12px 0;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 20px;
+  color: var(--dim);
+  text-decoration: none;
+  font-size: 14px;
+  border-left: 3px solid transparent;
+  transition: all 0.15s;
+  cursor: pointer;
+}
+.nav-item:hover {
+  color: var(--txt);
+  background: rgba(255, 255, 255, 0.03);
+}
+.nav-item.active {
+  color: var(--acc);
+  background: rgba(79, 140, 255, 0.08);
+  border-left-color: var(--acc);
+}
+.nav-icon {
+  width: 24px;
+  text-align: center;
+}
+.sidebar-footer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--bdr);
+}
+.sidebar-footer .el-button {
+  width: 100%;
+  text-align: left;
+  justify-content: flex-start;
+}
+.content {
+  flex: 1;
+  padding: 24px 32px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+@media (max-width: 768px) {
+  .sidebar { width: 60px; min-width: 60px; }
+  .sidebar-title, .nav-text { display: none; }
+  .sidebar-header { justify-content: center; padding: 16px 8px; }
+  .sidebar-logo { font-size: 24px; }
+  .nav-item { justify-content: center; padding: 12px 0; border-left: none; }
+  .nav-icon { width: auto; }
+  .content { padding: 16px; }
 }
 </style>

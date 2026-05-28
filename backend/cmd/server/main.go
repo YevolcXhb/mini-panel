@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/minipanel/minipanel/internal/config"
@@ -21,10 +22,19 @@ func main() {
 }
 
 func run() error {
-	cfg, err := config.Load("config.yaml")
+	exeDir := getExecutableDir()
+
+	configPath := os.Getenv("MINIPANEL_CONFIG")
+	if configPath == "" {
+		configPath = filepath.Join(exeDir, "config.yaml")
+	}
+
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	cfg.DBPath = absPath(exeDir, cfg.DBPath)
+	cfg.DataDir = absPath(exeDir, cfg.DataDir)
 	global.CONF = cfg
 
 	if err := global.InitLogger(cfg.LogLevel); err != nil {
@@ -66,6 +76,21 @@ func run() error {
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	global.LOG.Infof("mini-panel listening on http://%s", addr)
 	return r.Run(addr)
+}
+
+func getExecutableDir() string {
+	ex, err := os.Executable()
+	if err != nil {
+		return "."
+	}
+	return filepath.Dir(ex)
+}
+
+func absPath(base, path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(base, path)
 }
 
 func detectAndroidChroot() bool {

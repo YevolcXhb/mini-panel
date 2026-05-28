@@ -10,6 +10,7 @@ import (
 	"github.com/minipanel/minipanel/internal/global"
 	"github.com/minipanel/minipanel/internal/model"
 	"github.com/minipanel/minipanel/internal/repository"
+	"github.com/robfig/cron/v3"
 )
 
 type CronjobService struct {

@@ -17,8 +17,7 @@ func NewRouter() *gin.Engine {
 
 	// Static files
 	if _, err := os.Stat("static/index.html"); err == nil {
-		r.StaticFS("/static", http.Dir("static"))
-		r.StaticFile("/", "static/index.html")
+		r.StaticFS("/", http.Dir("static"))
 		r.NoRoute(func(c *gin.Context) {
 			c.File("static/index.html")
 		})

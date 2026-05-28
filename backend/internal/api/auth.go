@@ -5,7 +5,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/minipanel/minipanel/internal/dto"
-	"github.com/minipanel/minipanel/internal/global"
 	"github.com/minipanel/minipanel/internal/service"
 )
 

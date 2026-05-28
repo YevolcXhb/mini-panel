@@ -1,120 +1,138 @@
 <template>
   <div>
-    <el-row :gutter="20">
-      <el-col :span="6">
-        <el-card>
-          <div class="stat-card">
-            <el-icon size="40" color="#409eff"><Cpu /></el-icon>
-            <div class="stat-info">
-              <div class="stat-label">CPU 使用率</div>
-              <div class="stat-value">{{ monitor.cpu_usage?.toFixed(1) || 0 }}%</div>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-      <el-col :span="6">
-        <el-card>
-          <div class="stat-card">
-            <el-icon size="40" color="#67c23a"><Tickets /></el-icon>
-            <div class="stat-info">
-              <div class="stat-label">内存使用</div>
-              <div class="stat-value">{{ formatBytes(monitor.memory?.used) }} / {{ formatBytes(monitor.memory?.total) }}</div>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-      <el-col :span="6">
-        <el-card>
-          <div class="stat-card">
-            <el-icon size="40" color="#e6a23c"><Box /></el-icon>
-            <div class="stat-info">
-              <div class="stat-label">容器运行</div>
-              <div class="stat-value">{{ runningContainers }}</div>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-      <el-col :span="6">
-        <el-card>
-          <div class="stat-card">
-            <el-icon size="40" color="#f56c6c"><Timer /></el-icon>
-            <div class="stat-info">
-              <div class="stat-label">运行时间</div>
-              <div class="stat-value">{{ formatUptime(info.system?.uptime) }}</div>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
+    <h2 class="page-title">📊 系统概览</h2>
 
-    <el-row :gutter="20" style="margin-top: 20px">
-      <el-col :span="12">
-        <el-card title="系统信息">
-          <template #header>系统信息</template>
-          <el-descriptions :column="2" border>
-            <el-descriptions-item label="主机名">{{ info.system?.hostname }}</el-descriptions-item>
-            <el-descriptions-item label="操作系统">{{ info.system?.os }} {{ info.system?.platform }}</el-descriptions-item>
-            <el-descriptions-item label="内核版本">{{ info.system?.kernel_version }}</el-descriptions-item>
-            <el-descriptions-item label="架构">{{ info.system?.kernel_arch }}</el-descriptions-item>
-            <el-descriptions-item label="进程数">{{ info.system?.procs }}</el-descriptions-item>
-            <el-descriptions-item label="平台版本">{{ info.system?.platform_version }}</el-descriptions-item>
-          </el-descriptions>
-        </el-card>
-      </el-col>
-      <el-col :span="12">
-        <el-card title="磁盘使用">
-          <template #header>磁盘使用</template>
-          <el-table :data="monitor.disks" size="small">
-            <el-table-column prop="path" label="挂载点" />
-            <el-table-column label="已用/总量">
-              <template #default="{ row }">
-                {{ formatBytes(row.used) }} / {{ formatBytes(row.total) }}
-              </template>
-            </el-table-column>
-            <el-table-column label="使用率">
-              <template #default="{ row }">
-                <el-progress :percentage="row.used_percent" :status="row.used_percent > 90 ? 'exception' : ''" />
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-card>
-      </el-col>
-    </el-row>
+    <div class="info-grid">
+      <div class="info-card">
+        <div class="info-label">主机名</div>
+        <div class="info-value">{{ info.system?.hostname || '-' }}</div>
+      </div>
+      <div class="info-card">
+        <div class="info-label">系统</div>
+        <div class="info-value">{{ info.system?.platform || '-' }}</div>
+      </div>
+      <div class="info-card">
+        <div class="info-label">内核</div>
+        <div class="info-value">{{ info.system?.kernel_version || '-' }}</div>
+      </div>
+      <div class="info-card">
+        <div class="info-label">架构</div>
+        <div class="info-value">{{ info.system?.kernel_arch || '-' }}</div>
+      </div>
+      <div class="info-card">
+        <div class="info-label">运行时间</div>
+        <div class="info-value">{{ formatUptime(info.system?.uptime) }}</div>
+      </div>
+      <div class="info-card">
+        <div class="info-label">CPU 核心</div>
+        <div class="info-value">{{ info.cpu?.length || '-' }} 核</div>
+      </div>
+    </div>
 
-    <el-row :gutter="20" style="margin-top: 20px">
-      <el-col :span="24">
-        <el-card title="实时负载">
-          <template #header>实时负载</template>
-          <div ref="chartRef" style="height: 300px"></div>
-        </el-card>
-      </el-col>
-    </el-row>
+    <h3 class="section-title">资源使用</h3>
+    <div class="meter-grid">
+      <div class="meter-card">
+        <div class="meter-header">
+          <span>CPU 负载</span>
+          <span class="meter-pct" :style="{ color: pctColor(loadPct) }">{{ loadPct }}%</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" :style="{ width: loadPct + '%', background: pctColor(loadPct) }"></div>
+        </div>
+        <div class="meter-detail">负载: {{ monitor.load?.load1?.toFixed(2) || 0 }} / {{ monitor.load?.load5?.toFixed(2) || 0 }} / {{ monitor.load?.load15?.toFixed(2) || 0 }}</div>
+      </div>
+      <div class="meter-card">
+        <div class="meter-header">
+          <span>内存使用</span>
+          <span class="meter-pct" :style="{ color: pctColor(memPct) }">{{ memPct }}%</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill mem" :style="{ width: memPct + '%', background: pctColor(memPct) }"></div>
+        </div>
+        <div class="meter-detail">{{ formatBytes(monitor.memory?.used) }} / {{ formatBytes(monitor.memory?.total) }}</div>
+      </div>
+      <div class="meter-card">
+        <div class="meter-header">
+          <span>磁盘使用</span>
+          <span class="meter-pct" :style="{ color: pctColor(diskPct) }">{{ diskPct }}%</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill disk" :style="{ width: diskPct + '%', background: pctColor(diskPct) }"></div>
+        </div>
+        <div class="meter-detail">{{ formatBytes(diskUsed) }} / {{ formatBytes(diskTotal) }}</div>
+      </div>
+    </div>
+
+    <h3 class="section-title">磁盘详情</h3>
+    <div class="table-wrap">
+      <el-table :data="monitor.disks" size="small">
+        <el-table-column prop="path" label="挂载点" />
+        <el-table-column label="已用/总量">
+          <template #default="{ row }">{{ formatBytes(row.used) }} / {{ formatBytes(row.total) }}</template>
+        </el-table-column>
+        <el-table-column label="使用率" width="180">
+          <template #default="{ row }">
+            <div class="progress-bar" style="margin-top:4px">
+              <div class="progress-fill" :style="{ width: row.used_percent + '%', background: pctColor(row.used_percent) }"></div>
+            </div>
+            <span style="font-size:11px;color:var(--dim)">{{ row.used_percent?.toFixed(1) }}%</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="fs_type" label="类型" width="100" />
+      </el-table>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
-import { dashboardApi, containerApi } from '../api'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { dashboardApi } from '../api'
 
 const info = ref<any>({})
 const monitor = ref<any>({})
-const runningContainers = ref(0)
-const chartRef = ref<HTMLElement>()
 let timer: any
+
+const loadPct = computed(() => {
+  const l = monitor.value.load?.load1 || 0
+  const cores = info.value.cpu?.length || 1
+  return Math.min(Math.round((l / cores) * 100), 100)
+})
+const memPct = computed(() => {
+  const m = monitor.value.memory
+  if (!m || !m.total) return 0
+  return ((m.used / m.total) * 100).toFixed(1)
+})
+const diskUsed = computed(() => {
+  const d = monitor.value.disks || []
+  return d.reduce((sum: number, x: any) => sum + (x.used || 0), 0)
+})
+const diskTotal = computed(() => {
+  const d = monitor.value.disks || []
+  return d.reduce((sum: number, x: any) => sum + (x.total || 0), 0)
+})
+const diskPct = computed(() => {
+  if (!diskTotal.value) return 0
+  return ((diskUsed.value / diskTotal.value) * 100).toFixed(1)
+})
 
 function formatBytes(bytes: number) {
   if (!bytes) return '0 B'
   const k = 1024
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
   const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return (bytes / Math.pow(k, i)).toFixed(2) + ' ' + sizes[i]
+  return (bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i]
 }
-
 function formatUptime(seconds: number) {
-  if (!seconds) return '0h'
-  const h = Math.floor(seconds / 3600)
-  const m = Math.floor((seconds % 3600) / 60)
-  return `${h}h ${m}m`
+  if (!seconds) return '-'
+  const d = Math.floor(seconds / 86400)
+  const h = Math.floor(seconds % 86400 / 3600)
+  const m = Math.floor(seconds % 3600 / 60)
+  if (d > 0) return d + '天' + h + '时'
+  if (h > 0) return h + '时' + m + '分'
+  return m + '分'
+}
+function pctColor(p: number) {
+  return p > 80 ? 'var(--red)' : p > 60 ? 'var(--org)' : 'var(--grn)'
 }
 
 async function loadData() {
@@ -123,40 +141,14 @@ async function loadData() {
     info.value = res.data || {}
     const mon: any = await dashboardApi.getMonitor()
     monitor.value = mon.data || {}
-    const ctn: any = await containerApi.list()
-    const list = ctn.data || []
-    runningContainers.value = list.filter((x: any) => x.status === 'running').length
-  } catch (e) {
-    // ignore
-  }
+  } catch (e) {}
 }
 
-onMounted(() => {
-  loadData()
-  timer = setInterval(loadData, 5000)
-})
-
-onUnmounted(() => {
-  clearInterval(timer)
-})
+onMounted(() => { loadData(); timer = setInterval(loadData, 5000) })
+onUnmounted(() => clearInterval(timer))
 </script>
 
 <style scoped>
-.stat-card {
-  display: flex;
-  align-items: center;
-  gap: 15px;
-}
-.stat-info {
-  flex: 1;
-}
-.stat-label {
-  color: #888;
-  font-size: 14px;
-}
-.stat-value {
-  font-size: 24px;
-  font-weight: bold;
-  margin-top: 5px;
-}
+.page-title { margin-bottom: 20px; }
+.section-title { margin-top: 24px; }
 </style>

@@ -1,14 +1,12 @@
 <template>
   <div>
-    <el-card>
-      <template #header>
-        <div class="terminal-header">
-          <span>Web 终端</span>
-          <el-button size="small" @click="reconnect">重新连接</el-button>
-        </div>
-      </template>
-      <div ref="terminalRef" class="terminal-container"></div>
-    </el-card>
+    <h2 class="page-title">💻 Web 终端</h2>
+    <div class="terminal-wrap">
+      <div ref="terminalRef" class="term-output"></div>
+    </div>
+    <div style="margin-top: 12px">
+      <el-button size="small" @click="reconnect">🔄 重新连接</el-button>
+    </div>
   </div>
 </template>
 
@@ -16,6 +14,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { Terminal } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
+import 'xterm/css/xterm.css'
 
 const terminalRef = ref<HTMLElement>()
 let term: Terminal
@@ -23,16 +22,24 @@ let ws: WebSocket
 let fitAddon: FitAddon
 
 function initTerminal() {
-  if (term) term.dispose()
+  if (term) {
+    term.dispose()
+    term = undefined as any
+  }
+
   term = new Terminal({
     cursorBlink: true,
-    fontSize: 14,
-    fontFamily: 'monospace',
+    fontSize: 13,
+    fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
     theme: {
-      background: '#1e1e1e',
-      foreground: '#d4d4d4'
-    }
+      background: '#000000',
+      foreground: '#00ff00',
+      cursor: '#00ff00',
+      selectionBackground: 'rgba(0, 255, 0, 0.3)'
+    },
+    convertEol: true
   })
+
   fitAddon = new FitAddon()
   term.loadAddon(fitAddon)
   term.open(terminalRef.value!)
@@ -43,7 +50,7 @@ function initTerminal() {
   ws = new WebSocket(wsUrl)
 
   ws.onopen = () => {
-    term.writeln('\x1b[32mConnected to mini-panel terminal\x1b[0m')
+    term.writeln('\x1b[32m[mini-panel terminal connected]\x1b[0m')
   }
 
   ws.onmessage = (e) => {
@@ -55,11 +62,11 @@ function initTerminal() {
   }
 
   ws.onclose = () => {
-    term.writeln('\x1b[31mConnection closed\x1b[0m')
+    term.writeln('\x1b[31m[connection closed]\x1b[0m')
   }
 
-  ws.onerror = (err) => {
-    term.writeln('\x1b[31mConnection error\x1b[0m')
+  ws.onerror = () => {
+    term.writeln('\x1b[31m[connection error]\x1b[0m')
   }
 
   term.onData((data) => {
@@ -86,15 +93,20 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.terminal-container {
-  height: 600px;
-  background: #1e1e1e;
-  border-radius: 4px;
-  padding: 10px;
-}
-.terminal-header {
+.terminal-wrap {
+  background: #000;
+  border: 1px solid var(--bdr);
+  border-radius: var(--r);
+  height: calc(100vh - 200px);
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  flex-direction: column;
+  overflow: hidden;
+}
+.term-output {
+  flex: 1;
+  padding: 12px;
+}
+.term-output :deep(.xterm) {
+  height: 100%;
 }
 </style>

@@ -1,4 +1,4 @@
-# Mini Panel
+# 🍔Mini Panel🍔
 
 基于1panel管理面板+dockroot开发的轻量级chroot容器面板管理服务，轻量级服务器管理面板，专为 Android Magisk chroot Linux 环境设计。
 
@@ -122,4 +122,11 @@ Mini Panel 使用 [DockRoot](https://github.com/...) 作为容器运行时，支
 
 ## License
 
-MIT
+AGPL-3.0 License
+
+## 致谢
+
+在这里感谢 1Panel 官方以及 DockRoot 开发者开源的源代码。
+
+- [1Panel](https://github.com/1Panel-dev/1Panel)
+- [DockRoot](https://github.com/kspeeder/dockroot)

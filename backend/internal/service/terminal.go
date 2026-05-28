@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"sync"
 	"syscall"
-	"time"
 	"unsafe"
 
 	"github.com/gorilla/websocket"
@@ -16,14 +15,17 @@ import (
 type TerminalSession struct {
 	conn   *websocket.Conn
 	pty    *os.File
+	stdin  io.WriteCloser
+	stdout io.ReadCloser
 	cmd    *exec.Cmd
 	mu     sync.Mutex
 	closed bool
+	usePTY bool
 }
 
 var (
-	sessions     = make(map[string]*TerminalSession)
-	sessionsMu   sync.RWMutex
+	sessions   = make(map[string]*TerminalSession)
+	sessionsMu sync.RWMutex
 )
 
 func NewTerminalSession(id string, conn *websocket.Conn, shell string) (*TerminalSession, error) {
@@ -34,20 +36,20 @@ func NewTerminalSession(id string, conn *websocket.Conn, shell string) (*Termina
 		}
 	}
 
-	cmd := exec.Command(shell)
-	cmd.Env = append(os.Environ(), "TERM=xterm")
-
-	ptmx, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
-	if err != nil {
-		return nil, fmt.Errorf("open ptmx: %w", err)
+	// Try PTY first, fallback to direct exec if /dev/ptmx unavailable
+	if ptmx, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0); err == nil {
+		return newPTYSession(id, conn, shell, ptmx)
 	}
+	return newExecSession(id, conn, shell)
+}
+
+func newPTYSession(id string, conn *websocket.Conn, shell string, ptmx *os.File) (*TerminalSession, error) {
 	defer func() {
-		if err != nil {
+		if ptmx != nil {
 			ptmx.Close()
 		}
 	}()
 
-	// Unlock the pseudoterminal master
 	if err := unlockpt(ptmx); err != nil {
 		return nil, fmt.Errorf("unlockpt: %w", err)
 	}
@@ -63,6 +65,8 @@ func NewTerminalSession(id string, conn *websocket.Conn, shell string) (*Termina
 	}
 	defer pts.Close()
 
+	cmd := exec.Command(shell)
+	cmd.Env = append(os.Environ(), "TERM=xterm")
 	cmd.Stdin = pts
 	cmd.Stdout = pts
 	cmd.Stderr = pts
@@ -75,10 +79,50 @@ func NewTerminalSession(id string, conn *websocket.Conn, shell string) (*Termina
 		return nil, fmt.Errorf("start shell: %w", err)
 	}
 
+	ptmxFile := ptmx
+	ptmx = nil // prevent defer from closing
+
 	sess := &TerminalSession{
-		conn: conn,
-		pty:  ptmx,
-		cmd:  cmd,
+		conn:   conn,
+		pty:    ptmxFile,
+		cmd:    cmd,
+		usePTY: true,
+	}
+
+	sessionsMu.Lock()
+	sessions[id] = sess
+	sessionsMu.Unlock()
+
+	go sess.readLoop()
+	go sess.writeLoop()
+
+	return sess, nil
+}
+
+func newExecSession(id string, conn *websocket.Conn, shell string) (*TerminalSession, error) {
+	cmd := exec.Command(shell)
+	cmd.Env = append(os.Environ(), "TERM=xterm")
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stdout pipe: %w", err)
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stdin pipe: %w", err)
+	}
+	cmd.Stderr = cmd.Stdout
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start shell: %w", err)
+	}
+
+	sess := &TerminalSession{
+		conn:   conn,
+		stdin:  stdin,
+		stdout: stdout,
+		cmd:    cmd,
+		usePTY: false,
 	}
 
 	sessionsMu.Lock()
@@ -93,8 +137,15 @@ func NewTerminalSession(id string, conn *websocket.Conn, shell string) (*Termina
 
 func (s *TerminalSession) readLoop() {
 	buf := make([]byte, 1024)
+	var reader io.Reader
+	if s.usePTY {
+		reader = s.pty
+	} else {
+		reader = s.stdout
+	}
+
 	for {
-		n, err := s.pty.Read(buf)
+		n, err := reader.Read(buf)
 		if err != nil {
 			if err != io.EOF {
 				s.conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\r\n[disconnect: %v]\r\n", err)))
@@ -107,12 +158,19 @@ func (s *TerminalSession) readLoop() {
 }
 
 func (s *TerminalSession) writeLoop() {
+	var writer io.Writer
+	if s.usePTY {
+		writer = s.pty
+	} else {
+		writer = s.stdin
+	}
+
 	for {
 		_, data, err := s.conn.ReadMessage()
 		if err != nil {
 			break
 		}
-		s.pty.Write(data)
+		writer.Write(data)
 	}
 	s.Close()
 }
@@ -131,7 +189,19 @@ func (s *TerminalSession) Close() {
 	if s.pty != nil {
 		s.pty.Close()
 	}
+	if s.stdin != nil {
+		s.stdin.Close()
+	}
+	if s.stdout != nil {
+		s.stdout.Close()
+	}
 	s.conn.Close()
+}
+
+func (s *TerminalSession) IsClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func GetSession(id string) (*TerminalSession, bool) {
@@ -167,5 +237,3 @@ func ptsname(f *os.File) (string, error) {
 	}
 	return fmt.Sprintf("/dev/pts/%d", n), nil
 }
-
-

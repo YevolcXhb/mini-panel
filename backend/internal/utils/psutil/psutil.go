@@ -90,6 +90,10 @@ func GetCPUInfo() ([]CPUInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(infos) == 0 {
+		// Fallback for ARM/Android where cpu.Info() may return empty
+		return []CPUInfo{{ModelName: "ARM", Cores: 1}}, nil
+	}
 	var result []CPUInfo
 	for _, info := range infos {
 		result = append(result, CPUInfo{
@@ -195,7 +199,18 @@ func GetNetInfo() ([]NetInfo, error) {
 }
 
 func GetLoadAvg() (*load.AvgStat, error) {
-	return load.Avg()
+	stat, err := load.Avg()
+	if err == nil && stat != nil {
+		return stat, nil
+	}
+	// Fallback: read /proc/loadavg directly
+	data, err := os.ReadFile("/proc/loadavg")
+	if err != nil {
+		return &load.AvgStat{Load1: 0, Load5: 0, Load15: 0}, nil
+	}
+	var l1, l5, l15 float64
+	fmt.Sscanf(string(data), "%f %f %f", &l1, &l5, &l15)
+	return &load.AvgStat{Load1: l1, Load5: l5, Load15: l15}, nil
 }
 
 func GetProcesses() ([]ProcessInfo, error) {

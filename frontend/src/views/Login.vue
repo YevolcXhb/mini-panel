@@ -1,56 +1,53 @@
 <template>
-  <div class="login-container">
-    <el-card class="login-card">
-      <template #header>
-        <div class="login-header">
-          <h2>Mini Panel</h2>
-          <p>轻量级服务器管理面板</p>
+  <div class="login-page">
+    <div class="login-bg"></div>
+    <div class="login-card">
+      <div class="login-logo">🍔</div>
+      <h1 class="login-title">MiniPanel</h1>
+      <p class="login-subtitle">服务器管理面板</p>
+      <form @submit.prevent="handleLogin">
+        <div class="input-group">
+          <label>用户名</label>
+          <el-input v-model="form.username" placeholder="输入用户名" :prefix-icon="User" size="large" />
         </div>
-      </template>
-      <el-form :model="form" :rules="rules" ref="formRef">
-        <el-form-item prop="username">
-          <el-input v-model="form.username" placeholder="用户名" prefix-icon="User" />
-        </el-form-item>
-        <el-form-item prop="password">
-          <el-input v-model="form.password" type="password" placeholder="密码" prefix-icon="Lock" @keyup.enter="handleLogin" />
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" :loading="loading" @click="handleLogin" style="width: 100%">登录</el-button>
-        </el-form-item>
-      </el-form>
-    </el-card>
+        <div class="input-group">
+          <label>密码</label>
+          <el-input v-model="form.password" type="password" placeholder="输入密码" :prefix-icon="Lock" size="large" @keyup.enter="handleLogin" />
+        </div>
+        <div v-if="error" class="login-error">{{ error }}</div>
+        <el-button type="primary" :loading="loading" @click="handleLogin" class="btn-block" size="large">登 录</el-button>
+      </form>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
+import { User, Lock } from '@element-plus/icons-vue'
 import { useAuthStore } from '../store'
 import { authApi } from '../api'
-import { ElMessage } from 'element-plus'
 
 const router = useRouter()
 const auth = useAuthStore()
-const formRef = ref()
 const loading = ref(false)
+const error = ref('')
 
 const form = reactive({ username: 'admin', password: 'admin123' })
 
-const rules = {
-  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
-}
-
 async function handleLogin() {
-  await formRef.value.validate()
+  if (!form.username || !form.password) {
+    error.value = '请输入用户名和密码'
+    return
+  }
+  error.value = ''
   loading.value = true
   try {
     const res: any = await authApi.login(form)
     auth.setAuth(res.data.token, res.data.username)
-    ElMessage.success('登录成功')
     router.push('/')
-  } catch (e) {
-    // handled by interceptor
+  } catch (e: any) {
+    error.value = e?.response?.data?.message || '登录失败'
   } finally {
     loading.value = false
   }
@@ -58,26 +55,64 @@ async function handleLogin() {
 </script>
 
 <style scoped>
-.login-container {
-  height: 100vh;
+.login-page {
+  position: fixed;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  z-index: 50;
+}
+.login-bg {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, #0f1117 0%, #1a1d2e 50%, #0f1117 100%);
 }
 .login-card {
-  width: 400px;
-}
-.login-header {
+  position: relative;
+  background: var(--card);
+  border: 1px solid var(--bdr);
+  border-radius: 16px;
+  padding: 48px 40px;
+  width: 380px;
   text-align: center;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
 }
-.login-header h2 {
-  margin: 0;
-  color: #409eff;
+.login-logo {
+  font-size: 48px;
+  margin-bottom: 8px;
 }
-.login-header p {
-  margin: 8px 0 0;
-  color: #888;
+.login-title {
+  font-size: 24px;
+  font-weight: 700;
+  margin-bottom: 4px;
+  color: var(--txt);
+}
+.login-subtitle {
+  color: var(--dim);
+  margin-bottom: 32px;
   font-size: 14px;
+}
+.input-group {
+  margin-bottom: 16px;
+  text-align: left;
+}
+.input-group label {
+  display: block;
+  font-size: 12px;
+  color: var(--dim);
+  margin-bottom: 6px;
+  font-weight: 500;
+}
+.login-error {
+  color: var(--red);
+  font-size: 13px;
+  margin-bottom: 12px;
+  padding: 8px;
+  background: rgba(248, 113, 113, 0.1);
+  border-radius: var(--r);
+}
+.btn-block {
+  width: 100%;
 }
 </style>

@@ -1,38 +1,33 @@
 <template>
   <div>
-    <el-card>
-      <template #header>
-        <div class="container-header">
-          <span>容器管理</span>
-          <el-button type="primary" size="small" @click="showCreate = true">创建容器</el-button>
-        </div>
-      </template>
-      <el-table :data="containers" v-loading="loading" size="small">
-        <el-table-column prop="name" label="名称" sortable />
-        <el-table-column prop="image" label="镜像" show-overflow-tooltip />
-        <el-table-column prop="status" label="状态" width="100">
-          <template #default="{ row }">
-            <el-tag :type="row.status === 'running' ? 'success' : 'info'">{{ row.status }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="PID" width="100">
-          <template #default="{ row }">
-            {{ row.pids?.join(', ') || '-' }}
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="250">
-          <template #default="{ row }">
-            <el-button size="small" v-if="row.status !== 'running'" @click="startContainer(row.name)">启动</el-button>
-            <el-button size="small" v-if="row.status === 'running'" @click="stopContainer(row.name)">停止</el-button>
-            <el-button size="small" @click="showLogs(row.name)">日志</el-button>
-            <el-button size="small" type="danger" @click="removeContainer(row.name)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
+    <h2 class="page-title">📦 容器管理</h2>
 
-    <el-dialog v-model="showCreate" title="创建容器" width="500px">
-      <el-form :model="createForm" label-width="100px">
+    <div class="ct-grid" v-if="containers.length">
+      <div class="ct-card" v-for="c in containers" :key="c.name">
+        <div class="ct-info">
+          <div class="ct-name">
+            📦 {{ c.name }}
+            <span :class="c.status === 'running' ? 'tag-on' : 'tag-off'">{{ c.status === 'running' ? '运行中' : '已停止' }}</span>
+          </div>
+          <div class="ct-meta">{{ c.image }} · PID: {{ c.pids?.join(', ') || '-' }}</div>
+        </div>
+        <div class="ct-acts">
+          <el-button size="small" v-if="c.status !== 'running'" type="primary" @click="startContainer(c.name)">▶ 启动</el-button>
+          <el-button size="small" v-if="c.status === 'running'" @click="stopContainer(c.name)">⏹ 停止</el-button>
+          <el-button size="small" @click="showLogs(c.name)">📋 日志</el-button>
+          <el-button size="small" type="danger" @click="removeContainer(c.name)">🗑 删除</el-button>
+        </div>
+      </div>
+    </div>
+    <div v-else class="empty-state">暂无容器，点击上方按钮创建</div>
+
+    <div style="margin-top: 20px">
+      <el-button type="primary" @click="showCreate = true">+ 创建容器</el-button>
+      <el-button @click="loadContainers">🔄 刷新</el-button>
+    </div>
+
+    <el-dialog v-model="showCreate" title="创建容器" width="520px">
+      <el-form :model="createForm" label-width="90px">
         <el-form-item label="名称">
           <el-input v-model="createForm.name" placeholder="容器名称" />
         </el-form-item>
@@ -55,8 +50,8 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="showLogDialog" title="容器日志" width="800px">
-      <el-input v-model="logs" type="textarea" :rows="20" readonly />
+    <el-dialog v-model="showLogDialog" title="容器日志" width="700px">
+      <div class="mono-block">{{ logs || '无日志' }}</div>
     </el-dialog>
   </div>
 </template>
@@ -72,36 +67,21 @@ const showCreate = ref(false)
 const showLogDialog = ref(false)
 const logs = ref('')
 
-const createForm = ref({
-  name: '',
-  image: '',
-  envStr: '',
-  volumeStr: '',
-  detach: true
-})
+const createForm = ref({ name: '', image: '', envStr: '', volumeStr: '', detach: true })
 
 async function loadContainers() {
   loading.value = true
   try {
     const res: any = await containerApi.list()
     containers.value = res.data || []
-  } catch (e) {
-  } finally {
-    loading.value = false
-  }
+  } catch (e) {} finally { loading.value = false }
 }
 
 async function createContainer() {
   const env = createForm.value.envStr.split('\n').filter(Boolean)
   const volumes = createForm.value.volumeStr.split('\n').filter(Boolean)
   try {
-    await containerApi.create({
-      name: createForm.value.name,
-      image: createForm.value.image,
-      env,
-      volumes,
-      detach: createForm.value.detach
-    })
+    await containerApi.create({ name: createForm.value.name, image: createForm.value.image, env, volumes, detach: createForm.value.detach })
     ElMessage.success('创建成功')
     showCreate.value = false
     loadContainers()
@@ -109,45 +89,24 @@ async function createContainer() {
 }
 
 async function startContainer(name: string) {
-  try {
-    await containerApi.start(name)
-    ElMessage.success('启动成功')
-    loadContainers()
-  } catch (e) {}
+  try { await containerApi.start(name); ElMessage.success('启动成功'); loadContainers() } catch (e) {}
 }
-
 async function stopContainer(name: string) {
-  try {
-    await containerApi.stop(name)
-    ElMessage.success('停止成功')
-    loadContainers()
-  } catch (e) {}
+  try { await containerApi.stop(name); ElMessage.success('停止成功'); loadContainers() } catch (e) {}
 }
-
 async function removeContainer(name: string) {
   try {
-    await ElMessageBox.confirm(`确定要删除容器 ${name} 吗？`, '确认删除')
-    await containerApi.remove(name)
-    ElMessage.success('删除成功')
-    loadContainers()
+    await ElMessageBox.confirm(`确定要删除容器 ${name} 吗？`, '确认删除', { confirmButtonClass: 'el-button--danger' })
+    await containerApi.remove(name); ElMessage.success('删除成功'); loadContainers()
   } catch (e) {}
 }
-
 async function showLogs(name: string) {
   try {
     const res: any = await containerApi.logs(name, 100)
-    logs.value = res.data
+    logs.value = res.data || '无日志'
     showLogDialog.value = true
   } catch (e) {}
 }
 
 onMounted(loadContainers)
 </script>
-
-<style scoped>
-.container-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-</style>

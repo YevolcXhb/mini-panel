@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -45,11 +46,8 @@ func (a *TerminalAPI) HandleWS(c *gin.Context) {
 	}
 	defer sess.Close()
 
-	// Block until session ends
-	for {
-		_, _, err := conn.ReadMessage()
-		if err != nil {
-			break
-		}
+	// Wait for session to end (writeLoop handles all reads)
+	for !sess.IsClosed() {
+		time.Sleep(100 * time.Millisecond)
 	}
 }

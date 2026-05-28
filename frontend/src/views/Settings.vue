@@ -1,8 +1,9 @@
 <template>
   <div>
-    <el-card>
-      <template #header>系统设置</template>
-      <el-form :model="settings" label-width="120px" style="max-width: 600px">
+    <h2 class="page-title">🔧 系统设置</h2>
+
+    <div class="info-card" style="max-width:600px;margin-bottom:16px">
+      <el-form :model="settings" label-width="120px">
         <el-form-item label="主题">
           <el-radio-group v-model="settings.theme">
             <el-radio label="dark">深色</el-radio>
@@ -15,38 +16,40 @@
             <el-option label="English" value="en" />
           </el-select>
         </el-form-item>
-        <el-form-item label="时区">
-          <el-input v-model="settings.timezone" />
-        </el-form-item>
-        <el-form-item label="容器模式">
-          <el-input v-model="settings.container_mode" disabled />
-        </el-form-item>
-        <el-form-item label="文件管理根目录">
-          <el-input v-model="settings.file_manager_root" />
-        </el-form-item>
+        <el-form-item label="时区"><el-input v-model="settings.timezone" /></el-form-item>
+        <el-form-item label="容器模式"><el-input v-model="settings.container_mode" disabled /></el-form-item>
+        <el-form-item label="文件管理根目录"><el-input v-model="settings.file_manager_root" /></el-form-item>
         <el-form-item>
           <el-button type="primary" @click="saveSettings">保存设置</el-button>
           <el-button @click="resetSettings">恢复默认</el-button>
         </el-form-item>
       </el-form>
-    </el-card>
+    </div>
 
-    <el-card style="margin-top: 20px">
-      <template #header>系统信息</template>
-      <el-descriptions :column="2" border>
-        <el-descriptions-item label="版本">v1.0.0</el-descriptions-item>
-        <el-descriptions-item label="构建时间">2025-01</el-descriptions-item>
-        <el-descriptions-item label="Go 版本">1.23+</el-descriptions-item>
-        <el-descriptions-item label="前端框架">Vue 3 + Element Plus</el-descriptions-item>
-        <el-descriptions-item label="容器支持">DockRoot</el-descriptions-item>
-        <el-descriptions-item label="数据库">SQLite</el-descriptions-item>
-      </el-descriptions>
-    </el-card>
+    <h3 class="section-title">系统信息</h3>
+    <div class="info-grid" style="max-width:600px">
+      <div class="info-card">
+        <div class="info-label">版本</div>
+        <div class="info-value">v1.0.0</div>
+      </div>
+      <div class="info-card">
+        <div class="info-label">前端框架</div>
+        <div class="info-value">Vue 3 + Element Plus</div>
+      </div>
+      <div class="info-card">
+        <div class="info-label">容器支持</div>
+        <div class="info-value">DockRoot</div>
+      </div>
+      <div class="info-card">
+        <div class="info-label">数据库</div>
+        <div class="info-value">SQLite</div>
+      </div>
+    </div>
 
-    <el-card style="margin-top: 20px">
-      <template #header>危险操作</template>
-      <el-button type="danger" @click="clearData">清除所有数据</el-button>
-    </el-card>
+    <h3 class="section-title">危险操作</h3>
+    <div class="info-card" style="max-width:600px">
+      <el-button type="danger" @click="clearData">🗑 清除所有数据</el-button>
+    </div>
   </div>
 </template>
 
@@ -58,17 +61,11 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 const settings = ref<any>({})
 
 async function loadSettings() {
-  try {
-    const res: any = await settingApi.get()
-    settings.value = res.data || {}
-  } catch (e) {}
+  try { const res: any = await settingApi.get(); settings.value = res.data || {} } catch (e) {}
 }
 
 async function saveSettings() {
-  try {
-    await settingApi.update(settings.value)
-    ElMessage.success('保存成功')
-  } catch (e) {}
+  try { await settingApi.update(settings.value); ElMessage.success('保存成功') } catch (e) {}
 }
 
 async function resetSettings() {
@@ -82,7 +79,7 @@ async function resetSettings() {
 
 async function clearData() {
   try {
-    await ElMessageBox.confirm('确定要清除所有数据吗？此操作不可恢复！', '警告', { type: 'warning' })
+    await ElMessageBox.confirm('确定要清除所有数据吗？此操作不可恢复！', '警告', { confirmButtonClass: 'el-button--danger' })
     ElMessage.success('数据已清除')
   } catch (e) {}
 }
