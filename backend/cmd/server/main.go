@@ -1,10 +1,13 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/minipanel/minipanel/internal/config"
 	"github.com/minipanel/minipanel/internal/global"
@@ -15,13 +18,32 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+func init() {
+	// Ignore SIGHUP to prevent accidental termination in chroot / nohup environments
+	signal.Ignore(syscall.SIGHUP)
+}
+
+var (
+	version   = "dev"
+	buildTime = "unknown"
+	gitCommit = "unknown"
+)
+
 func main() {
+	showVersion := flag.Bool("v", false, "show version")
+	flag.Parse()
+	if *showVersion {
+		fmt.Printf("Mini Panel %s (commit: %s, built: %s)\n", version, gitCommit, buildTime)
+		return
+	}
 	if err := run(); err != nil {
 		logrus.Fatal(err)
 	}
 }
 
 func run() error {
+	logrus.Infof("Mini Panel %s (commit: %s, built: %s)", version, gitCommit, buildTime)
+
 	exeDir := getExecutableDir()
 
 	configPath := os.Getenv("MINIPANEL_CONFIG")

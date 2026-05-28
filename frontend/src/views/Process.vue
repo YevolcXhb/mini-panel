@@ -48,12 +48,16 @@ function pctColor(p: number) {
   return p > 80 ? 'var(--red)' : p > 50 ? 'var(--org)' : 'var(--grn)'
 }
 
-async function loadProcesses() {
-  loading.value = true
+async function loadProcesses(showLoading = false) {
+  if (showLoading) loading.value = true
   try {
     const res: any = await processApi.list()
     processes.value = res.data || []
-  } catch (e) {} finally { loading.value = false }
+  } catch (e) {
+    console.error(e)
+  } finally {
+    if (showLoading) loading.value = false
+  }
 }
 
 async function killProcess(pid: number, force: boolean) {
@@ -65,6 +69,6 @@ async function killProcess(pid: number, force: boolean) {
   } catch (e) {}
 }
 
-onMounted(() => { loadProcesses(); timer = setInterval(loadProcesses, 5000) })
+onMounted(() => { loadProcesses(true); timer = setInterval(() => loadProcesses(false), 5000) })
 onUnmounted(() => clearInterval(timer))
 </script>

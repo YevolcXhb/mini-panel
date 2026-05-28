@@ -1,0 +1,83 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm install
+          npm run build
+
+      - name: Build backend binaries
+        run: |
+          cd backend
+          VERSION=${GITHUB_REF_NAME#v}
+          GIT_COMMIT=$(git rev-parse --short HEAD)
+          BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S')
+          LDFLAGS="-X main.version=${VERSION} -X main.buildTime=${BUILD_TIME} -X main.gitCommit=${GIT_COMMIT} -s -w"
+          TAGS="osusergo netgo static_build"
+
+          mkdir -p ../build
+
+          for platform in linux/amd64 linux/arm64 linux/arm; do
+            GOOS=${platform%/*}
+            GOARCH=${platform#*/}
+            output="../build/minipanel-${GOOS}-${GOARCH}"
+            echo "Building for ${GOOS}/${GOARCH}..."
+            CGO_ENABLED=0 GOOS=${GOOS} GOARCH=${GOARCH} \
+              go build -trimpath -ldflags "${LDFLAGS}" \
+              -tags "${TAGS}" -o "${output}" ./cmd/server
+          done
+
+      - name: Package releases
+        run: |
+          mkdir -p dist
+          VERSION=${GITHUB_REF_NAME#v}
+
+          for binary in build/minipanel-*; do
+            if [ -f "${binary}" ]; then
+              filename=$(basename "${binary}")
+              platform=${filename#minipanel-}
+              tmpdir=$(mktemp -d)
+
+              mkdir -p "${tmpdir}/minipanel"
+              cp "${binary}" "${tmpdir}/minipanel/minipanel"
+              cp -r backend/static "${tmpdir}/minipanel/" 2>/dev/null || true
+              cp install.sh "${tmpdir}/minipanel/"
+              cp README.md "${tmpdir}/minipanel/"
+              cp backend/config.yaml.example "${tmpdir}/minipanel/"
+
+              tar -czf "dist/minipanel-${VERSION}-${platform}.tar.gz" -C "${tmpdir}" minipanel
+              rm -rf "${tmpdir}"
+              echo "Packaged: dist/minipanel-${VERSION}-${platform}.tar.gz"
+            fi
+          done
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tar.gz
+          generate_release_notes: true

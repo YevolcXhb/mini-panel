@@ -14,7 +14,14 @@ func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		auth := c.GetHeader("Authorization")
 		if auth == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "missing authorization header"})
+			// WebSocket cannot set custom headers, fallback to query param
+			token := c.Query("token")
+			if token != "" {
+				auth = "Bearer " + token
+			}
+		}
+		if auth == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "missing authorization"})
 			c.Abort()
 			return
 		}

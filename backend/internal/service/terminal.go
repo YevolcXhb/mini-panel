@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/user"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -27,6 +28,16 @@ var (
 	sessions   = make(map[string]*TerminalSession)
 	sessionsMu sync.RWMutex
 )
+
+func getHomeDir() string {
+	if home := os.Getenv("HOME"); home != "" {
+		return home
+	}
+	if u, err := user.Current(); err == nil && u.HomeDir != "" {
+		return u.HomeDir
+	}
+	return "/"
+}
 
 func NewTerminalSession(id string, conn *websocket.Conn, shell string) (*TerminalSession, error) {
 	if shell == "" {
@@ -66,6 +77,7 @@ func newPTYSession(id string, conn *websocket.Conn, shell string, ptmx *os.File)
 	defer pts.Close()
 
 	cmd := exec.Command(shell)
+	cmd.Dir = getHomeDir()
 	cmd.Env = append(os.Environ(), "TERM=xterm")
 	cmd.Stdin = pts
 	cmd.Stdout = pts
@@ -101,6 +113,7 @@ func newPTYSession(id string, conn *websocket.Conn, shell string, ptmx *os.File)
 
 func newExecSession(id string, conn *websocket.Conn, shell string) (*TerminalSession, error) {
 	cmd := exec.Command(shell)
+	cmd.Dir = getHomeDir()
 	cmd.Env = append(os.Environ(), "TERM=xterm")
 
 	stdout, err := cmd.StdoutPipe()

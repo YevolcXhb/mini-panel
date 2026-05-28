@@ -64,7 +64,11 @@ vet:
 
 lint: fmt vet
 
-release: build-all
+release:
+	@echo "Building frontend..."
+	@cd $(BASE_PATH)/../frontend && npm install && npm run build
+	@echo "Building backend..."
+	@$(MAKE) build-all
 	@mkdir -p $(DIST_PATH)
 	@for binary in $(BUILD_PATH)/$(NAME)-*; do \
 		if [ -f "$$binary" ]; then \

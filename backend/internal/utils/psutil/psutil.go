@@ -3,6 +3,7 @@ package psutil
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -214,24 +215,68 @@ func GetLoadAvg() (*load.AvgStat, error) {
 }
 
 func GetProcesses() ([]ProcessInfo, error) {
+	defer func() {
+		if r := recover(); r != nil {
+			// gopsutil may panic on some Android systems
+		}
+	}()
+
 	procs, err := process.Processes()
+	if err != nil {
+		return getProcessesFromProc()
+	}
+	var result []ProcessInfo
+	for _, p := range procs {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					// skip problematic processes
+				}
+			}()
+			name, _ := p.Name()
+			cpu, _ := p.CPUPercent()
+			mem, _ := p.MemoryPercent()
+			status, _ := p.Status()
+			cmdline, _ := p.Cmdline()
+			result = append(result, ProcessInfo{
+				PID:        p.Pid,
+				Name:       name,
+				CPUPercent: cpu,
+				MemPercent: mem,
+				Status:     strings.Join(status, ","),
+				CmdLine:    cmdline,
+			})
+		}()
+	}
+	if len(result) == 0 {
+		return getProcessesFromProc()
+	}
+	return result, nil
+}
+
+func getProcessesFromProc() ([]ProcessInfo, error) {
+	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return nil, err
 	}
 	var result []ProcessInfo
-	for _, p := range procs {
-		name, _ := p.Name()
-		cpu, _ := p.CPUPercent()
-		mem, _ := p.MemoryPercent()
-		status, _ := p.Status()
-		cmdline, _ := p.Cmdline()
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue
+		}
+		comm, _ := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
+		name := strings.TrimSpace(string(comm))
+		if name == "" {
+			cmdline, _ := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+			name = strings.ReplaceAll(string(cmdline), "\x00", " ")
+		}
 		result = append(result, ProcessInfo{
-			PID:        p.Pid,
-			Name:       name,
-			CPUPercent: cpu,
-			MemPercent: mem,
-			Status:     strings.Join(status, ","),
-			CmdLine:    cmdline,
+			PID:  int32(pid),
+			Name: name,
 		})
 	}
 	return result, nil

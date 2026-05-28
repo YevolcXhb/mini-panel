@@ -26,13 +26,19 @@ func (a *ProcessAPI) List(c *gin.Context) {
 }
 
 func (a *ProcessAPI) Kill(c *gin.Context) {
-	pid := c.PostForm("pid")
-	force := c.PostForm("force") == "true"
+	var req struct {
+		Pid   string `json:"pid"`
+		Force bool   `json:"force"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "invalid request"})
+		return
+	}
 	var err error
-	if force {
-		err = a.service.KillForce(pid)
+	if req.Force {
+		err = a.service.KillForce(req.Pid)
 	} else {
-		err = a.service.Kill(pid)
+		err = a.service.Kill(req.Pid)
 	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})

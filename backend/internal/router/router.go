@@ -1,7 +1,6 @@
 package router
 
 import (
-	"net/http"
 	"os"
 
 	"github.com/gin-gonic/gin"
@@ -15,9 +14,11 @@ func NewRouter() *gin.Engine {
 	r.Use(gin.Recovery())
 	r.Use(middleware.CORSMiddleware())
 
-	// Static files
+	// Static files (exact match to avoid /*filepath wildcard conflict with API routes)
 	if _, err := os.Stat("static/index.html"); err == nil {
-		r.StaticFS("/", http.Dir("static"))
+		r.Static("/assets", "static/assets")
+		r.StaticFile("/favicon.ico", "static/favicon.ico")
+		r.StaticFile("/", "static/index.html")
 		r.NoRoute(func(c *gin.Context) {
 			c.File("static/index.html")
 		})

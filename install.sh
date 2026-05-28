@@ -10,19 +10,22 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # Config
-INSTALL_DIR="/opt/minipanel"
-DATA_DIR="/opt/minipanel/data"
 VERSION="1.0.0"
 GITHUB_REPO="minipanel/minipanel"
+
+# Installation directory (can be overridden via env)
+INSTALL_DIR="${MINIPANEL_DIR:-/opt/minipanel}"
+DATA_DIR="${MINIPANEL_DATA:-$INSTALL_DIR/data}"
 
 ARCH=$(uname -m)
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 
 # Detect architecture
- case "$ARCH" in
+case "$ARCH" in
     x86_64)  ARCH="amd64" ;;
     aarch64) ARCH="arm64" ;;
-    armv7l)  ARCH="arm" ;;
+    armv7l|armv7) ARCH="arm" ;;
+    armv8l)  ARCH="arm64" ;;
     *) echo -e "${RED}Unsupported architecture: $ARCH${NC}"; exit 1 ;;
 esac
 
@@ -30,6 +33,12 @@ esac
 IS_ANDROID=false
 if [ -f "/system/build.prop" ] || grep -q "Android" /proc/version 2>/dev/null; then
     IS_ANDROID=true
+fi
+
+# Detect online install (curl | bash)
+IS_ONLINE=false
+if [ ! -t 0 ] || [ "$(basename "$0")" = "bash" ] || [ "$(basename "$0")" = "sh" ]; then
+    IS_ONLINE=true
 fi
 
 log_info() {
@@ -58,80 +67,93 @@ print_banner() {
 
 check_deps() {
     log_info "Checking dependencies..."
-    
+
     # Check for curl or wget
     if command -v curl &>/dev/null; then
-        DOWNLOADER="curl -fsSL"
-    elif command -v wget &>/dev/null; then
-        DOWNLOADER="wget -qO-"
+        HAS_CURL=true
     else
+        HAS_CURL=false
+    fi
+
+    if command -v wget &>/dev/null; then
+        HAS_WGET=true
+    else
+        HAS_WGET=false
+    fi
+
+    if [ "$HAS_CURL" = false ] && [ "$HAS_WGET" = false ]; then
         log_err "curl or wget is required"
         exit 1
     fi
-    
-    # Check for dockroot (optional but recommended)
-    if command -v dockroot &>/dev/null; then
-        log_ok "DockRoot found: $(dockroot --version 2>/dev/null || echo 'unknown')"
-    else
-        log_warn "DockRoot not found. Container management will be disabled."
-        log_warn "Install DockRoot from: https://github.com/your-repo/dockroot"
-    fi
-    
+
     log_ok "Dependencies check passed"
+}
+
+download_file() {
+    local url="$1"
+    local output="$2"
+
+    if [ "$HAS_CURL" = true ]; then
+        curl -fsSL -o "$output" "$url"
+    else
+        wget -qO "$output" "$url"
+    fi
 }
 
 install_from_release() {
     log_info "Installing from pre-built release..."
-    
+
     local download_url="https://github.com/${GITHUB_REPO}/releases/download/v${VERSION}/minipanel-${OS}-${ARCH}.tar.gz"
     local tmp_dir=$(mktemp -d)
-    
+
     log_info "Downloading from ${download_url}"
-    if ! $DOWNLOADER "$download_url" > "${tmp_dir}/minipanel.tar.gz" 2>/dev/null; then
-        log_err "Failed to download release. Trying alternative method..."
-        # Fallback: build from source if release not available
-        install_from_source
-        return
+    if ! download_file "$download_url" "${tmp_dir}/minipanel.tar.gz"; then
+        log_err "Failed to download release."
+        log_info "You can try installing from source instead."
+        log_info "Or manually download from: https://github.com/${GITHUB_REPO}/releases"
+        rm -rf "${tmp_dir}"
+        exit 1
     fi
-    
+
+    log_info "Extracting to ${INSTALL_DIR}..."
     mkdir -p "${INSTALL_DIR}"
-    tar -xzf "${tmp_dir}/minipanel.tar.gz" -C "${INSTALL_DIR}"
+    tar -xzf "${tmp_dir}/minipanel.tar.gz" -C "${INSTALL_DIR}" --strip-components=1
     rm -rf "${tmp_dir}"
-    
+
     log_ok "Binary installed to ${INSTALL_DIR}"
 }
 
 install_from_source() {
     log_info "Installing from source..."
-    
+
     # Check Go
     if ! command -v go &>/dev/null; then
         log_err "Go is not installed. Please install Go 1.23+ first."
         exit 1
     fi
-    
+
     local GO_VERSION=$(go version | grep -o 'go[0-9.]*' | head -1)
     log_info "Found Go: ${GO_VERSION}"
-    
+
     # Check Node.js
     if ! command -v node &>/dev/null; then
         log_err "Node.js is not installed. Please install Node.js 18+ first."
         exit 1
     fi
-    
+
     local NODE_VERSION=$(node --version)
     log_info "Found Node.js: ${NODE_VERSION}"
-    
+
     # Build frontend
     log_info "Building frontend..."
     cd "${SCRIPT_DIR}/frontend"
     npm install
     npm run build
-    
+
     # Build backend
     log_info "Building backend..."
     cd "${SCRIPT_DIR}/backend"
-    
+
     if [ "$IS_ANDROID" = true ]; then
         log_info "Android chroot detected, building static binary..."
         CGO_ENABLED=0 GOOS=linux GOARCH=${ARCH} go build -trimpath -ldflags '-s -w' \
@@ -142,20 +164,20 @@ install_from_source() {
             -tags 'osusergo netgo static_build' \
             -o "${INSTALL_DIR}/minipanel" ./cmd/server
     fi
-    
+
     # Copy static files
     cp -r "${SCRIPT_DIR}/backend/static" "${INSTALL_DIR}/" 2>/dev/null || true
-    
+
     log_ok "Build complete"
 }
 
 setup_environment() {
     log_info "Setting up environment..."
-    
+
     # Create directories
     mkdir -p "${DATA_DIR}"
     mkdir -p "${INSTALL_DIR}/logs"
-    
+
     # Generate config if not exists
     if [ ! -f "${INSTALL_DIR}/config.yaml" ]; then
         cat > "${INSTALL_DIR}/config.yaml" <<EOF
@@ -167,7 +189,7 @@ jwt_secret: $(openssl rand -hex 16 2>/dev/null || cat /dev/urandom | tr -dc 'a-z
 EOF
         log_ok "Config generated at ${INSTALL_DIR}/config.yaml"
     fi
-    
+
     # Create start script
     cat > "${INSTALL_DIR}/start.sh" <<'EOF'
 #!/bin/bash
@@ -177,7 +199,7 @@ echo $! > minipanel.pid
 echo "Mini Panel started on http://0.0.0.0:8080"
 EOF
     chmod +x "${INSTALL_DIR}/start.sh"
-    
+
     # Create stop script
     cat > "${INSTALL_DIR}/stop.sh" <<'EOF'
 #!/bin/bash
@@ -191,7 +213,7 @@ else
 fi
 EOF
     chmod +x "${INSTALL_DIR}/stop.sh"
-    
+
     # Create status script
     cat > "${INSTALL_DIR}/status.sh" <<'EOF'
 #!/bin/bash
@@ -204,12 +226,12 @@ else
 fi
 EOF
     chmod +x "${INSTALL_DIR}/status.sh"
-    
+
     # Create symlink
     if [ -d "/usr/local/bin" ]; then
         ln -sf "${INSTALL_DIR}/minipanel" /usr/local/bin/minipanel 2>/dev/null || true
     fi
-    
+
     log_ok "Environment setup complete"
 }
 
@@ -227,7 +249,7 @@ print_finish() {
     echo "  Stop:    ${INSTALL_DIR}/stop.sh"
     echo "  Status:  ${INSTALL_DIR}/status.sh"
     echo ""
-    
+
     local ip=$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost')
     echo "Access URL: http://${ip}:8080"
     echo ""
@@ -235,7 +257,7 @@ print_finish() {
     echo "  Username: admin"
     echo "  Password: admin123"
     echo ""
-    
+
     if [ "$IS_ANDROID" = true ]; then
         echo -e "${YELLOW}Android Chroot Tips:${NC}"
         echo "  - Run as root for full functionality"
@@ -247,19 +269,19 @@ print_finish() {
 
 main() {
     SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-    
+
     print_banner
     check_deps
-    
-    # Check if running from source directory
-    if [ -d "${SCRIPT_DIR}/backend" ] && [ -d "${SCRIPT_DIR}/frontend" ]; then
+
+    # Check if running from source directory (not online install)
+    if [ "$IS_ONLINE" = false ] && [ -d "${SCRIPT_DIR}/backend" ] && [ -d "${SCRIPT_DIR}/frontend" ]; then
         log_info "Source directory detected"
         install_from_source
     else
-        log_info "No source found, downloading release..."
+        log_info "Downloading release package..."
         install_from_release
     fi
-    
+
     setup_environment
     print_finish
 }
