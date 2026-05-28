@@ -1,0 +1,97 @@
+import axios from 'axios'
+import { useAuthStore } from '../store'
+import { ElMessage } from 'element-plus'
+
+const api = axios.create({
+  baseURL: '/api/v1',
+  timeout: 30000
+})
+
+api.interceptors.request.use((config) => {
+  const auth = useAuthStore()
+  if (auth.token) {
+    config.headers.Authorization = `Bearer ${auth.token}`
+  }
+  return config
+})
+
+api.interceptors.response.use(
+  (res) => {
+    if (res.data.code !== 200) {
+      ElMessage.error(res.data.message || '请求失败')
+      return Promise.reject(new Error(res.data.message))
+    }
+    return res.data
+  },
+  (err) => {
+    if (err.response?.status === 401) {
+      const auth = useAuthStore()
+      auth.clearAuth()
+      window.location.href = '/login'
+    }
+    ElMessage.error(err.message || '网络错误')
+    return Promise.reject(err)
+  }
+)
+
+export default api
+
+export const authApi = {
+  login: (data: any) => api.post('/login', data),
+  logout: () => api.post('/logout')
+}
+
+export const dashboardApi = {
+  getInfo: () => api.get('/dashboard'),
+  getMonitor: () => api.get('/dashboard/monitor')
+}
+
+export const fileApi = {
+  list: (path: string) => api.get('/files', { params: { path } }),
+  getContent: (path: string) => api.get('/files/content', { params: { path } }),
+  create: (data: any) => api.post('/files', data),
+  update: (data: any) => api.put('/files', data),
+  delete: (data: any) => api.delete('/files', { data }),
+  upload: (path: string, file: File) => {
+    const form = new FormData()
+    form.append('path', path)
+    form.append('file', file)
+    return api.post('/files/upload', form)
+  }
+}
+
+export const processApi = {
+  list: () => api.get('/processes'),
+  kill: (pid: string, force = false) => api.post('/processes/kill', { pid, force })
+}
+
+export const containerApi = {
+  list: () => api.get('/containers'),
+  inspect: (name: string) => api.get(`/containers/${name}`),
+  create: (data: any) => api.post('/containers', data),
+  start: (name: string) => api.post(`/containers/${name}/start`),
+  stop: (name: string) => api.post(`/containers/${name}/stop`),
+  remove: (name: string) => api.delete(`/containers/${name}`),
+  logs: (name: string, tail = 100) => api.get(`/containers/${name}/logs`, { params: { tail } })
+}
+
+export const appApi = {
+  list: () => api.get('/apps'),
+  installed: () => api.get('/apps/installed'),
+  install: (data: any) => api.post('/apps/install', data),
+  uninstall: (id: number) => api.post(`/apps/${id}/uninstall`)
+}
+
+export const cronjobApi = {
+  list: () => api.get('/cronjobs'),
+  create: (data: any) => api.post('/cronjobs', data),
+  update: (id: number, data: any) => api.put(`/cronjobs/${id}`, data),
+  delete: (id: number) => api.delete(`/cronjobs/${id}`),
+  run: (id: number) => api.post(`/cronjobs/${id}/run`)
+}
+
+export const settingApi = {
+  get: () => api.get('/settings'),
+  update: (data: any) => api.put('/settings', data),
+  reset: () => api.post('/settings/reset')
+}

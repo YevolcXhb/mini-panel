@@ -1,0 +1,16 @@
+.idea/
+.vscode/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.log
+minipanel.db
+*.db
+data/
+bin/
+dist/
+config.yaml
+!config.yaml.example

@@ -1,0 +1,5 @@
+port: 8080
+log_level: info
+db_path: ./minipanel.db
+data_dir: ./data
+jwt_secret: change-me-to-a-random-string
