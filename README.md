@@ -41,6 +41,19 @@ curl -fsSL https://raw.githubusercontent.com/YevolcXhb/mini-panel/main/install.s
 
 自动检测并下载对应平台的预编译二进制。
 
+> **网络问题**：如果上述命令无响应（`raw.githubusercontent.com` 被墙），可使用代理：
+> ```bash
+> curl -fsSL -x http://127.0.0.1:7890 https://raw.githubusercontent.com/YevolcXhb/mini-panel/main/install.sh | bash
+> ```
+> 或者手动下载 Release 包并解压运行：
+> ```bash
+> wget https://github.com/YevolcXhb/mini-panel/releases/latest/download/minipanel-1.0.1-linux-arm64.tar.gz
+> tar -xzf minipanel-1.0.1-linux-arm64.tar.gz
+> cd minipanel
+> cp config.yaml.example config.yaml
+> ./minipanel
+> ```
+
 ### 从源码构建
 
 #### 环境要求
