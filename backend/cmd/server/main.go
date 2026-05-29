@@ -72,14 +72,18 @@ func run() error {
 	global.IsAndroidChroot = detectAndroidChroot()
 	global.LOG.Infof("Android chroot detected: %v", global.IsAndroidChroot)
 
-	if cmd.Which("dockroot") {
-		client, err := dockroot.NewClient()
+	dockrootPath := findDockroot()
+	if dockrootPath != "" {
+		global.LOG.Infof("DockRoot found at: %s", dockrootPath)
+		client, err := dockroot.NewClientWithPath(dockrootPath)
 		if err != nil {
 			global.LOG.Warnf("dockroot not available: %v", err)
 		} else {
 			global.DockRootClient = client
 			global.LOG.Info("dockroot client initialized")
 		}
+	} else {
+		global.LOG.Warn("DockRoot not found in PATH or local directory")
 	}
 
 	if err := global.MigrateDB(); err != nil {
@@ -119,10 +123,24 @@ func detectAndroidChroot() bool {
 	if _, err := os.Stat("/system/build.prop"); err == nil {
 		return true
 	}
-	if data, err := os.ReadFile("/proc/version"); err == nil {
+	if data, err := os.ReadFile("/proc/version"); err != nil {
 		if strings.Contains(string(data), "Android") {
 			return true
 		}
 	}
 	return false
+}
+
+func findDockroot() string {
+	localPath := filepath.Join(getExecutableDir(), "DockRoot")
+	if _, err := os.Stat(localPath); err == nil {
+		return localPath
+	}
+	if cmd.Which("dockroot") {
+		return "dockroot"
+	}
+	if cmd.Which("DockRoot") {
+		return "DockRoot"
+	}
+	return ""
 }

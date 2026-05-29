@@ -39,6 +39,7 @@ jobs:
           BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S')
           LDFLAGS="-X main.version=${VERSION} -X main.buildTime=${BUILD_TIME} -X main.gitCommit=${GIT_COMMIT} -s -w"
           TAGS="osusergo netgo static_build"
+          DR_TAGS="containers_image_openpgp exclude_graphdriver_btrfs"
 
           mkdir -p ../build
 
@@ -46,10 +47,18 @@ jobs:
             GOOS=${platform%/*}
             GOARCH=${platform#*/}
             output="../build/minipanel-${GOOS}-${GOARCH}"
-            echo "Building for ${GOOS}/${GOARCH}..."
+            echo "Building minipanel for ${GOOS}/${GOARCH}..."
             CGO_ENABLED=0 GOOS=${GOOS} GOARCH=${GOARCH} \
               go build -trimpath -ldflags "${LDFLAGS}" \
               -tags "${TAGS}" -o "${output}" ./cmd/server
+
+            dr_output="../build/DockRoot-${GOOS}-${GOARCH}"
+            echo "Building DockRoot for ${GOOS}/${GOARCH}..."
+            cd cmd/dockroot
+            CGO_ENABLED=0 GOOS=${GOOS} GOARCH=${GOARCH} \
+              go build -trimpath -ldflags "${LDFLAGS}" \
+              -tags "${DR_TAGS}" -o "../../../${dr_output}" .
+            cd ../..
           done
 
       - name: Package releases
@@ -65,6 +74,10 @@ jobs:
 
               mkdir -p "${tmpdir}/minipanel"
               cp "${binary}" "${tmpdir}/minipanel/minipanel"
+              dr_binary="build/DockRoot-${platform}"
+              if [ -f "${dr_binary}" ]; then
+                cp "${dr_binary}" "${tmpdir}/minipanel/DockRoot"
+              fi
               cp -r backend/static "${tmpdir}/minipanel/" 2>/dev/null || true
               cp install.sh "${tmpdir}/minipanel/"
               cp README.md "${tmpdir}/minipanel/"

@@ -51,7 +51,7 @@ export const fileApi = {
   getContent: (path: string) => api.get('/files/content', { params: { path } }),
   create: (data: any) => api.post('/files', data),
   update: (data: any) => api.put('/files', data),
-  delete: (data: any) => api.delete('/files', { data }),
+  delete: (path: string) => api.delete('/files', { data: { path } }),
   upload: (path: string, file: File) => {
     const form = new FormData()
     form.append('path', path)

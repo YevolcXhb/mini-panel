@@ -30,19 +30,28 @@ type RegistryInfo struct {
 }
 
 func NewClient() (*Client, error) {
-	path, err := exec.LookPath("dockroot")
-	if err != nil {
-		return nil, fmt.Errorf("dockroot binary not found in PATH")
+	return NewClientWithPath("")
+}
+
+func NewClientWithPath(binaryPath string) (*Client, error) {
+	if binaryPath == "" {
+		if p, err := exec.LookPath("dockroot"); err == nil {
+			binaryPath = p
+		} else if p, err := exec.LookPath("DockRoot"); err == nil {
+			binaryPath = p
+		} else {
+			return nil, fmt.Errorf("dockroot binary not found in PATH")
+		}
 	}
 
-	binaryDir := filepath.Dir(path)
+	binaryDir := filepath.Dir(binaryPath)
 	info, err := readRegistryInfo(binaryDir)
 	if err != nil {
 		return nil, fmt.Errorf("read dockroot registry info: %w", err)
 	}
 
 	return &Client{
-		BinaryPath: path,
+		BinaryPath: binaryPath,
 		DataRoot:   info.DataRoot,
 	}, nil
 }

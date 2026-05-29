@@ -120,6 +120,12 @@ install_from_release() {
     tar -xzf "${tmp_dir}/minipanel.tar.gz" -C "${INSTALL_DIR}" --strip-components=1
     rm -rf "${tmp_dir}"
 
+    if [ -f "${INSTALL_DIR}/DockRoot" ]; then
+        chmod +x "${INSTALL_DIR}/DockRoot"
+        log_ok "DockRoot binary installed"
+    fi
+
+    chmod +x "${INSTALL_DIR}/minipanel"
     log_ok "Binary installed to ${INSTALL_DIR}"
 }
 
@@ -159,10 +165,24 @@ install_from_source() {
         CGO_ENABLED=0 GOOS=linux GOARCH=${ARCH} go build -trimpath -ldflags '-s -w' \
             -tags 'osusergo netgo static_build' \
             -o "${INSTALL_DIR}/minipanel" ./cmd/server
+
+        log_info "Building DockRoot..."
+        cd "${SCRIPT_DIR}/backend/cmd/dockroot"
+        CGO_ENABLED=0 GOOS=linux GOARCH=${ARCH} go build -trimpath -ldflags '-s -w' \
+            -tags 'containers_image_openpgp exclude_graphdriver_btrfs' \
+            -o "${INSTALL_DIR}/DockRoot" .
+        cd "${SCRIPT_DIR}/backend"
     else
         CGO_ENABLED=0 go build -trimpath -ldflags '-s -w' \
             -tags 'osusergo netgo static_build' \
             -o "${INSTALL_DIR}/minipanel" ./cmd/server
+
+        log_info "Building DockRoot..."
+        cd "${SCRIPT_DIR}/backend/cmd/dockroot"
+        CGO_ENABLED=0 go build -trimpath -ldflags '-s -w' \
+            -tags 'containers_image_openpgp exclude_graphdriver_btrfs' \
+            -o "${INSTALL_DIR}/DockRoot" .
+        cd "${SCRIPT_DIR}/backend"
     fi
 
     # Copy static files
@@ -230,7 +250,38 @@ EOF
     # Create symlink
     if [ -d "/usr/local/bin" ]; then
         ln -sf "${INSTALL_DIR}/minipanel" /usr/local/bin/minipanel 2>/dev/null || true
+        if [ -f "${INSTALL_DIR}/DockRoot" ]; then
+            ln -sf "${INSTALL_DIR}/DockRoot" /usr/local/bin/dockroot 2>/dev/null || true
+        fi
     fi
+
+    # Add to PATH if not already there
+    local profile_file=""
+    if [ -f "$HOME/.bashrc" ]; then
+        profile_file="$HOME/.bashrc"
+    elif [ -f "$HOME/.profile" ]; then
+        profile_file="$HOME/.profile"
+    elif [ -f "$HOME/.bash_profile" ]; then
+        profile_file="$HOME/.bash_profile"
+    fi
+
+    if [ -n "$profile_file" ]; then
+        if ! grep -q "minipanel" "$profile_file" 2>/dev/null; then
+            cat >> "$profile_file" <<EOF
+
+# Mini Panel
+export MINIPANEL_DIR="${INSTALL_DIR}"
+export MINIPANEL_DATA="${DATA_DIR}"
+export PATH="${INSTALL_DIR}:\$PATH"
+EOF
+            log_ok "Environment variables added to ${profile_file}"
+        fi
+    fi
+
+    # Export for current session
+    export PATH="${INSTALL_DIR}:${PATH}"
+    export MINIPANEL_DIR="${INSTALL_DIR}"
+    export MINIPANEL_DATA="${DATA_DIR}"
 
     log_ok "Environment setup complete"
 }
@@ -261,10 +312,22 @@ print_finish() {
     if [ "$IS_ANDROID" = true ]; then
         echo -e "${YELLOW}Android Chroot Tips:${NC}"
         echo "  - Run as root for full functionality"
-        echo "  - Install DockRoot for container support"
+        echo "  - DockRoot is now bundled and ready to use"
         echo "  - Use tmux/screen to keep running in background"
         echo ""
     fi
+
+    echo -e "${YELLOW}Environment Variables:${NC}"
+    echo "  MINIPANEL_DIR=${INSTALL_DIR}"
+    echo "  MINIPANEL_DATA=${DATA_DIR}"
+    echo "  PATH includes ${INSTALL_DIR}"
+    echo ""
+    local shell_profile="~/.bashrc"
+    if [ -f "$HOME/.profile" ]; then
+        shell_profile="~/.profile"
+    fi
+    echo "  Run 'source ${shell_profile}' to apply now"
+    echo ""
 }
 
 main() {

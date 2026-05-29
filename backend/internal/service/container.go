@@ -19,7 +19,7 @@ func NewContainerService() *ContainerService {
 
 func (s *ContainerService) List() ([]dto.ContainerListResponse, error) {
 	if s.client == nil {
-		return nil, fmt.Errorf("dockroot not available")
+		return []dto.ContainerListResponse{}, nil
 	}
 	states, err := s.client.ListAll()
 	if err != nil {
