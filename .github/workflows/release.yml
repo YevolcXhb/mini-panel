@@ -58,29 +58,44 @@ jobs:
             echo "OK: minipanel-${GOOS}-${GOARCH} built"
           done
 
-      - name: Download DockRoot pre-built binaries
+      - name: Build DockRoot from source
         run: |
-          mkdir -p build
-          DR_BASE="https://fw0.koolcenter.com/binary/DockRoot"
+          set -e
+          cd backend/cmd/dockroot
 
-          echo "=== Downloading DockRoot for amd64 ==="
-          curl -fsSL -o build/DockRoot-linux-amd64 "${DR_BASE}/DockRoot.linux.amd64" || echo "WARN: amd64 download failed"
-          chmod +x build/DockRoot-linux-amd64 2>/dev/null || true
+          echo "=== Go version ==="
+          go version
 
-          echo "=== Downloading DockRoot for arm64 ==="
-          curl -fsSL -o build/DockRoot-linux-arm64 "${DR_BASE}/DockRoot.linux.arm64" || echo "WARN: arm64 download failed"
-          chmod +x build/DockRoot-linux-arm64 2>/dev/null || true
+          echo "=== go.mod ==="
+          head -5 go.mod
 
-          echo "=== Downloading DockRoot for arm ==="
-          curl -fsSL -o build/DockRoot-linux-arm "${DR_BASE}/DockRoot.linux.arm" || echo "WARN: arm download failed"
-          chmod +x build/DockRoot-linux-arm 2>/dev/null || true
+          echo "=== Downloading dependencies ==="
+          go mod download 2>&1 | tail -5
 
-          for f in build/DockRoot-*; do
+          echo "=== Building for amd64 ==="
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -trimpath -ldflags "-s -w" \
+            -tags 'containers_image_openpgp exclude_graphdriver_btrfs' \
+            -o "../../../build/DockRoot-linux-amd64" . 2>&1
+
+          echo "=== Building for arm64 ==="
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+            go build -trimpath -ldflags "-s -w" \
+            -tags 'containers_image_openpgp exclude_graphdriver_btrfs' \
+            -o "../../../build/DockRoot-linux-arm64" . 2>&1
+
+          echo "=== Building for arm ==="
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm \
+            go build -trimpath -ldflags "-s -w" \
+            -tags 'containers_image_openpgp exclude_graphdriver_btrfs' \
+            -o "../../../build/DockRoot-linux-arm" . 2>&1
+
+          echo "=== Build results ==="
+          for f in ../../../build/DockRoot-*; do
             if [ -f "$f" ] && [ -s "$f" ]; then
               echo "OK: $(basename $f) ($(du -h $f | cut -f1))"
             else
-              echo "SKIP: $(basename $f) (empty or missing)"
-              rm -f "$f"
+              echo "FAIL: $(basename $f) (empty or missing)"
             fi
           done
 
