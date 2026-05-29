@@ -78,7 +78,7 @@
     <div class="info-grid" style="margin-bottom:24px">
       <div class="info-card">
         <div class="info-label">版本</div>
-        <div class="info-value">v1.0.1</div>
+        <div class="info-value">v1.0.2</div>
       </div>
       <div class="info-card">
         <div class="info-label">前端框架</div>

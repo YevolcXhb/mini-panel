@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="${VERSION:-1.0.0}"
+VERSION="${VERSION:-1.0.2}"
 BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S')
 GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
