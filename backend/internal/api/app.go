@@ -71,7 +71,7 @@ func (a *AppAPI) Install(c *gin.Context) {
 	}
 	inst, err := a.service.Install(req)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: err.Error(), Data: inst})
+		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error(), Data: inst})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: inst})

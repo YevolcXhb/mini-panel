@@ -1,7 +1,9 @@
 package service
 
 import (
+	"archive/tar"
 	"archive/zip"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -96,7 +98,9 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 	image := app.Key
 	version := "latest"
 	if detail != nil {
-		image = detail.Image
+		if detail.Image != "" {
+			image = detail.Image
+		}
 		version = detail.Version
 	}
 
@@ -510,31 +514,54 @@ func (s *AppService) extractImageFrom1Panel(downloadURL string) string {
 	if downloadURL == "" {
 		return ""
 	}
+	global.LOG.Infof("[Sync] downloading package from %s to extract image", downloadURL)
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Get(downloadURL)
 	if err != nil {
+		global.LOG.Warnf("[Sync] download failed: %v", err)
 		return ""
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		global.LOG.Warnf("[Sync] download status %d", resp.StatusCode)
 		return ""
 	}
 
 	tmpDir := filepath.Join(os.TempDir(), "minipanel-app-version")
 	os.MkdirAll(tmpDir, 0755)
-	zipPath := filepath.Join(tmpDir, fmt.Sprintf("app-%d.zip", time.Now().Unix()))
-	f, err := os.Create(zipPath)
+	tmpPath := filepath.Join(tmpDir, fmt.Sprintf("app-%d.pkg", time.Now().Unix()))
+	f, err := os.Create(tmpPath)
 	if err != nil {
 		return ""
 	}
 	_, err = io.Copy(f, resp.Body)
 	f.Close()
 	if err != nil {
+		global.LOG.Warnf("[Sync] save package failed: %v", err)
 		return ""
 	}
-	defer os.Remove(zipPath)
+	defer os.Remove(tmpPath)
 
-	zr, err := zip.OpenReader(zipPath)
+	// Try zip first
+	image := extractImageFromZip(tmpPath)
+	if image != "" {
+		global.LOG.Infof("[Sync] extracted image from zip: %s", image)
+		return image
+	}
+
+	// Try tar.gz
+	image = extractImageFromTarGz(tmpPath)
+	if image != "" {
+		global.LOG.Infof("[Sync] extracted image from tar.gz: %s", image)
+		return image
+	}
+
+	global.LOG.Warnf("[Sync] failed to extract image from package")
+	return ""
+}
+
+func extractImageFromZip(path string) string {
+	zr, err := zip.OpenReader(path)
 	if err != nil {
 		return ""
 	}
@@ -550,6 +577,52 @@ func (s *AppService) extractImageFrom1Panel(downloadURL string) string {
 		}
 		data, err := io.ReadAll(rc)
 		rc.Close()
+		if err != nil {
+			continue
+		}
+		var compose struct {
+			Services map[string]struct {
+				Image string `yaml:"image"`
+			} `yaml:"services"`
+		}
+		if err := yaml.Unmarshal(data, &compose); err == nil {
+			for _, svc := range compose.Services {
+				if svc.Image != "" {
+					return svc.Image
+				}
+			}
+		}
+		break
+	}
+	return ""
+}
+
+func extractImageFromTarGz(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	gr, err := gzip.NewReader(f)
+	if err != nil {
+		return ""
+	}
+	defer gr.Close()
+
+	tr := tar.NewReader(gr)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return ""
+		}
+		if !strings.HasSuffix(hdr.Name, "docker-compose.yml") {
+			continue
+		}
+		data, err := io.ReadAll(tr)
 		if err != nil {
 			continue
 		}
@@ -631,6 +704,7 @@ func extractHostPort(ports []string) int {
 
 // downloadAppPackage 下载 1Panel 版本包并解压到目标目录
 func downloadAppPackage(url, destDir string) error {
+	global.LOG.Infof("[Install] downloading package from %s", url)
 	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
@@ -642,8 +716,8 @@ func downloadAppPackage(url, destDir string) error {
 	}
 
 	os.MkdirAll(destDir, 0755)
-	zipPath := filepath.Join(destDir, "app.zip")
-	f, err := os.Create(zipPath)
+	tmpPath := filepath.Join(destDir, "app.pkg")
+	f, err := os.Create(tmpPath)
 	if err != nil {
 		return err
 	}
@@ -652,16 +726,34 @@ func downloadAppPackage(url, destDir string) error {
 	if err != nil {
 		return fmt.Errorf("save: %w", err)
 	}
-	defer os.Remove(zipPath)
+	defer os.Remove(tmpPath)
 
-	zr, err := zip.OpenReader(zipPath)
+	// Try zip first
+	if err := extractZip(tmpPath, destDir); err == nil {
+		global.LOG.Infof("[Install] extracted zip package")
+		return nil
+	}
+	global.LOG.Warnf("[Install] zip extract failed: %v", err)
+
+	// Try tar.gz
+	if err := extractTarGz(tmpPath, destDir); err == nil {
+		global.LOG.Infof("[Install] extracted tar.gz package")
+		return nil
+	}
+	global.LOG.Warnf("[Install] tar.gz extract failed: %v", err)
+
+	return fmt.Errorf("unsupported package format")
+}
+
+func extractZip(src, dest string) error {
+	zr, err := zip.OpenReader(src)
 	if err != nil {
-		return fmt.Errorf("open zip: %w", err)
+		return err
 	}
 	defer zr.Close()
 
 	for _, file := range zr.File {
-		fpath := filepath.Join(destDir, file.Name)
+		fpath := filepath.Join(dest, file.Name)
 		if file.FileInfo().IsDir() {
 			os.MkdirAll(fpath, file.Mode())
 			continue
@@ -679,6 +771,47 @@ func downloadAppPackage(url, destDir string) error {
 		io.Copy(outFile, rc)
 		rc.Close()
 		outFile.Close()
+	}
+	return nil
+}
+
+func extractTarGz(src, dest string) error {
+	f, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	gr, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer gr.Close()
+
+	tr := tar.NewReader(gr)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		fpath := filepath.Join(dest, hdr.Name)
+		if hdr.Typeflag == tar.TypeDir {
+			os.MkdirAll(fpath, os.FileMode(hdr.Mode))
+			continue
+		}
+		os.MkdirAll(filepath.Dir(fpath), 0755)
+		outFile, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(hdr.Mode))
+		if err != nil {
+			continue
+		}
+		_, err = io.Copy(outFile, tr)
+		outFile.Close()
+		if err != nil {
+			continue
+		}
 	}
 	return nil
 }
