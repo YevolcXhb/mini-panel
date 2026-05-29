@@ -31,9 +31,8 @@ jobs:
           npm install
           npm run build
           echo "=== Frontend build output ==="
-          ls -la dist/
-          ls -la dist/assets/ 2>/dev/null || echo "No assets dir"
-          cat dist/index.html | head -5 || echo "No index.html"
+          ls -la ../backend/static/
+          head -3 ../backend/static/index.html || echo "No index.html"
 
       - name: Build backend binaries
         run: |
