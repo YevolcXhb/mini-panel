@@ -139,7 +139,7 @@ download_with_fallback() {
 install_from_release() {
     log_info "Installing from pre-built release..."
 
-    local download_url="https://github.com/${GITHUB_REPO}/releases/download/v${VERSION}/minipanel-${OS}-${ARCH}.tar.gz"
+    local download_url="https://github.com/${GITHUB_REPO}/releases/download/v${VERSION}/minipanel-${VERSION}-${OS}-${ARCH}.tar.gz"
     local tmp_dir=$(mktemp -d)
 
     log_info "Downloading from ${download_url}"
