@@ -123,6 +123,16 @@ install_from_release() {
     if [ -f "${INSTALL_DIR}/DockRoot" ]; then
         chmod +x "${INSTALL_DIR}/DockRoot"
         log_ok "DockRoot binary installed"
+    else
+        log_warn "DockRoot not found in package, downloading..."
+        DR_BASE="https://fw0.koolcenter.com/binary/DockRoot"
+        DR_URL="${DR_BASE}/DockRoot.linux.${ARCH}"
+        if download_file "$DR_URL" "${INSTALL_DIR}/DockRoot"; then
+            chmod +x "${INSTALL_DIR}/DockRoot"
+            log_ok "DockRoot downloaded"
+        else
+            log_err "Failed to download DockRoot. You may need to install it manually."
+        fi
     fi
 
     chmod +x "${INSTALL_DIR}/minipanel"

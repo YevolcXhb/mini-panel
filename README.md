@@ -106,26 +106,38 @@ make build_android
 
 ```
 mini-panel/
-├── backend/          # Go 后端
-│   ├── cmd/server/   # 入口
-│   ├── internal/     # 内部模块
-│   │   ├── api/      # HTTP 处理器
-│   │   ├── service/  # 业务逻辑
-│   │   ├── model/    # 数据模型
-│   │   ├── repository/# 数据访问
-│   │   ├── router/   # 路由
-│   │   ├── middleware/# 中间件
-│   │   └── utils/    # 工具包
+├── backend/              # Go 后端
+│   ├── cmd/
+│   │   ├── server/       # mini-panel 入口
+│   │   └── dockroot/     # DockRoot 源码（独立模块）
+│   ├── internal/
+│   │   ├── api/          # HTTP 处理器
+│   │   ├── service/      # 业务逻辑
+│   │   ├── model/        # 数据模型
+│   │   ├── repository/   # 数据访问
+│   │   ├── router/       # 路由
+│   │   ├── middleware/    # 中间件（含安全入口）
+│   │   ├── dto/          # 数据传输对象
+│   │   ├── global/       # 全局变量
+│   │   ├── config/       # 配置管理
+│   │   └── utils/
+│   │       ├── dockroot/ # DockRoot 客户端
+│   │       ├── cmd/      # 命令执行
+│   │       └── psutil/   # 系统监控
+│   ├── config.yaml.example
 │   ├── go.mod
 │   └── Makefile
-├── frontend/         # Vue3 前端
+├── frontend/             # Vue3 + Element Plus 前端
 │   ├── src/
-│   │   ├── views/    # 页面组件
-│   │   ├── api/      # API 封装
-│   │   ├── router/   # 路由
-│   │   └── store/    # 状态管理
+│   │   ├── views/        # 页面组件
+│   │   ├── api/          # API 封装
+│   │   ├── router/       # 路由
+│   │   ├── store/        # Pinia 状态管理
+│   │   └── styles/       # 暗色主题
 │   ├── package.json
 │   └── vite.config.ts
+├── .github/workflows/    # CI/CD 自动构建
+├── install.sh            # 一键安装脚本
 └── README.md
 ```
 

@@ -38,27 +38,50 @@ jobs:
           GIT_COMMIT=$(git rev-parse --short HEAD)
           BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S')
           LDFLAGS="-X main.version=${VERSION} -X main.buildTime=${BUILD_TIME} -X main.gitCommit=${GIT_COMMIT} -s -w"
-          TAGS="osusergo netgo static_build"
-          DR_TAGS="containers_image_openpgp exclude_graphdriver_btrfs"
 
           mkdir -p ../build
 
           for platform in linux/amd64 linux/arm64 linux/arm; do
             GOOS=${platform%/*}
             GOARCH=${platform#*/}
-            output="../build/minipanel-${GOOS}-${GOARCH}"
-            echo "Building minipanel for ${GOOS}/${GOARCH}..."
-            CGO_ENABLED=0 GOOS=${GOOS} GOARCH=${GOARCH} \
-              go build -trimpath -ldflags "${LDFLAGS}" \
-              -tags "${TAGS}" -o "${output}" ./cmd/server
 
-            dr_output="../build/DockRoot-${GOOS}-${GOARCH}"
-            echo "Building DockRoot for ${GOOS}/${GOARCH}..."
-            cd cmd/dockroot
+            echo "=== Building minipanel for ${GOOS}/${GOARCH} ==="
             CGO_ENABLED=0 GOOS=${GOOS} GOARCH=${GOARCH} \
               go build -trimpath -ldflags "${LDFLAGS}" \
-              -tags "${DR_TAGS}" -o "../../../${dr_output}" .
-            cd ../..
+              -tags 'osusergo netgo static_build' \
+              -o "../build/minipanel-${GOOS}-${GOARCH}" ./cmd/server
+
+            if [ ! -f "../build/minipanel-${GOOS}-${GOARCH}" ]; then
+              echo "ERROR: minipanel-${GOOS}-${GOARCH} build failed!"
+              exit 1
+            fi
+            echo "OK: minipanel-${GOOS}-${GOARCH} built"
+          done
+
+      - name: Download DockRoot pre-built binaries
+        run: |
+          mkdir -p build
+          DR_BASE="https://fw0.koolcenter.com/binary/DockRoot"
+
+          echo "=== Downloading DockRoot for amd64 ==="
+          curl -fsSL -o build/DockRoot-linux-amd64 "${DR_BASE}/DockRoot.linux.amd64" || echo "WARN: amd64 download failed"
+          chmod +x build/DockRoot-linux-amd64 2>/dev/null || true
+
+          echo "=== Downloading DockRoot for arm64 ==="
+          curl -fsSL -o build/DockRoot-linux-arm64 "${DR_BASE}/DockRoot.linux.arm64" || echo "WARN: arm64 download failed"
+          chmod +x build/DockRoot-linux-arm64 2>/dev/null || true
+
+          echo "=== Downloading DockRoot for arm ==="
+          curl -fsSL -o build/DockRoot-linux-arm "${DR_BASE}/DockRoot.linux.arm" || echo "WARN: arm download failed"
+          chmod +x build/DockRoot-linux-arm 2>/dev/null || true
+
+          for f in build/DockRoot-*; do
+            if [ -f "$f" ] && [ -s "$f" ]; then
+              echo "OK: $(basename $f) ($(du -h $f | cut -f1))"
+            else
+              echo "SKIP: $(basename $f) (empty or missing)"
+              rm -f "$f"
+            fi
           done
 
       - name: Package releases
