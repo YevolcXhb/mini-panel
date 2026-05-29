@@ -1,9 +1,7 @@
 package model
 
-import "gorm.io/gorm"
-
 type App struct {
-	gorm.Model
+	BaseModel
 	Key         string `gorm:"uniqueIndex;not null" json:"key"`
 	Name        string `gorm:"not null" json:"name"`
 	Description string `json:"description"`
@@ -20,7 +18,7 @@ type App struct {
 }
 
 type AppDetail struct {
-	gorm.Model
+	BaseModel
 	AppID   uint   `gorm:"index;not null" json:"app_id"`
 	Version string `gorm:"not null" json:"version"`
 	Image   string `gorm:"not null" json:"image"`
@@ -32,7 +30,7 @@ type AppDetail struct {
 }
 
 type AppInstall struct {
-	gorm.Model
+	BaseModel
 	AppID       uint   `gorm:"index;not null" json:"app_id"`
 	AppDetailID uint   `gorm:"index;not null" json:"app_detail_id"`
 	Name        string `gorm:"uniqueIndex;not null" json:"name"`
@@ -47,7 +45,7 @@ type AppInstall struct {
 }
 
 type AppSource struct {
-	gorm.Model
+	BaseModel
 	Name    string `gorm:"not null" json:"name"`
 	URL     string `gorm:"not null" json:"url"`
 	Enabled bool   `gorm:"default:true" json:"enabled"`

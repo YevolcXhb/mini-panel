@@ -1,12 +1,14 @@
 package service
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/minipanel/minipanel/internal/dto"
@@ -16,20 +18,20 @@ import (
 )
 
 type AppService struct {
-	appRepo     *repository.AppRepository
-	detailRepo  *repository.AppDetailRepository
-	instRepo    *repository.AppInstallRepository
-	sourceRepo  *repository.AppSourceRepository
-	ctnService  *ContainerService
+	appRepo    *repository.AppRepository
+	detailRepo *repository.AppDetailRepository
+	instRepo   *repository.AppInstallRepository
+	sourceRepo *repository.AppSourceRepository
+	ctnService *ContainerService
 }
 
 func NewAppService() *AppService {
 	return &AppService{
-		appRepo:     repository.NewAppRepository(global.DB),
-		detailRepo:  repository.NewAppDetailRepository(global.DB),
-		instRepo:    repository.NewAppInstallRepository(global.DB),
-		sourceRepo:  repository.NewAppSourceRepository(global.DB),
-		ctnService:  NewContainerService(),
+		appRepo:    repository.NewAppRepository(global.DB),
+		detailRepo: repository.NewAppDetailRepository(global.DB),
+		instRepo:   repository.NewAppInstallRepository(global.DB),
+		sourceRepo: repository.NewAppSourceRepository(global.DB),
+		ctnService: NewContainerService(),
 	}
 }
 
@@ -180,6 +182,13 @@ func (s *AppService) SyncFromRemote(sourceID uint) error {
 		return fmt.Errorf("source not found: %w", err)
 	}
 
+	if strings.HasSuffix(source.URL, ".zip") {
+		return s.syncFrom1PanelZip(source)
+	}
+	return s.syncFromJSON(source)
+}
+
+func (s *AppService) syncFromJSON(source *model.AppSource) error {
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Get(source.URL)
 	if err != nil {
@@ -201,9 +210,11 @@ func (s *AppService) SyncFromRemote(sourceID uint) error {
 		return fmt.Errorf("parse apps json: %w", err)
 	}
 
-	_ = s.appRepo.Clear()
-
 	for _, ra := range remoteApps {
+		existing, _ := s.appRepo.GetByKey(ra.Key)
+		if existing != nil {
+			continue
+		}
 		app := &model.App{
 			Key:         ra.Key,
 			Name:        ra.Name,
@@ -244,6 +255,216 @@ func (s *AppService) SyncFromRemote(sourceID uint) error {
 	return nil
 }
 
+type panelAppList struct {
+	Valid        bool          `json:"valid"`
+	LastModified int           `json:"lastModified"`
+	Apps         []panelAppDef `json:"apps"`
+}
+
+type panelAppDef struct {
+	Icon         string            `json:"icon"`
+	Name         string            `json:"name"`
+	ReadMe       string            `json:"readMe"`
+	LastModified int               `json:"lastModified"`
+	AppProperty  panelAppProperty  `json:"additionalProperties"`
+	Versions     []panelAppVersion `json:"versions"`
+}
+
+type panelAppProperty struct {
+	Name        string   `json:"name"`
+	Type        string   `json:"type"`
+	Tags        []string `json:"tags"`
+	ShortDescZh string   `json:"shortDescZh"`
+	ShortDescEn string   `json:"shortDescEn"`
+	Description struct {
+		Zh string `json:"zh"`
+		En string `json:"en"`
+	} `json:"description"`
+	Key      string `json:"key"`
+	Website  string `json:"website"`
+	Github   string `json:"github"`
+	Document string `json:"document"`
+}
+
+type panelAppVersion struct {
+	Name         string `json:"name"`
+	LastModified int    `json:"lastModified"`
+	DownloadURL  string `json:"downloadUrl"`
+}
+
+func (s *AppService) syncFrom1PanelZip(source *model.AppSource) error {
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Get(source.URL)
+	if err != nil {
+		return fmt.Errorf("download zip: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("remote returned status %d", resp.StatusCode)
+	}
+
+	tmpDir := filepath.Join(os.TempDir(), "minipanel-apps")
+	os.MkdirAll(tmpDir, 0755)
+	zipPath := filepath.Join(tmpDir, "1panel.json.zip")
+	f, err := os.Create(zipPath)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(f, resp.Body)
+	f.Close()
+	if err != nil {
+		return fmt.Errorf("save zip: %w", err)
+	}
+
+	zr, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return fmt.Errorf("open zip: %w", err)
+	}
+	defer zr.Close()
+
+	var list panelAppList
+	for _, file := range zr.File {
+		if file.Name != "1panel.json" {
+			continue
+		}
+		rc, err := file.Open()
+		if err != nil {
+			return err
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			return err
+		}
+		if err := json.Unmarshal(data, &list); err != nil {
+			return fmt.Errorf("parse 1panel.json: %w", err)
+		}
+		break
+	}
+
+	for _, pa := range list.Apps {
+		key := pa.AppProperty.Key
+		if key == "" {
+			key = pa.Name
+		}
+		existing, _ := s.appRepo.GetByKey(key)
+		if existing != nil {
+			continue
+		}
+
+		desc := pa.AppProperty.Description.Zh
+		if desc == "" {
+			desc = pa.AppProperty.Description.En
+		}
+		shortDesc := pa.AppProperty.ShortDescZh
+		if shortDesc == "" {
+			shortDesc = pa.AppProperty.ShortDescEn
+		}
+		category := "other"
+		if len(pa.AppProperty.Tags) > 0 {
+			category = pa.AppProperty.Tags[0]
+		}
+
+		app := &model.App{
+			Key:         key,
+			Name:        pa.AppProperty.Name,
+			Description: desc,
+			ShortDesc:   shortDesc,
+			Category:    category,
+			Type:        pa.AppProperty.Type,
+			Status:      "active",
+			Website:     pa.AppProperty.Website,
+			Github:      pa.AppProperty.Github,
+			Document:    pa.AppProperty.Document,
+			Resource:    "remote",
+			SourceID:    source.ID,
+		}
+		if app.Type == "" {
+			app.Type = "container"
+		}
+		if err := s.appRepo.Create(app); err != nil {
+			continue
+		}
+
+		for _, pv := range pa.Versions {
+			image := s.extractImageFrom1Panel(pv.DownloadURL)
+			detail := &model.AppDetail{
+				AppID:   app.ID,
+				Version: pv.Name,
+				Image:   image,
+				Status:  "active",
+			}
+			_ = s.detailRepo.Create(detail)
+		}
+	}
+
+	return nil
+}
+
+func (s *AppService) extractImageFrom1Panel(downloadURL string) string {
+	if downloadURL == "" {
+		return ""
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(downloadURL)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+
+	tmpDir := filepath.Join(os.TempDir(), "minipanel-app-version")
+	os.MkdirAll(tmpDir, 0755)
+	zipPath := filepath.Join(tmpDir, fmt.Sprintf("app-%d.zip", time.Now().Unix()))
+	f, err := os.Create(zipPath)
+	if err != nil {
+		return ""
+	}
+	_, err = io.Copy(f, resp.Body)
+	f.Close()
+	if err != nil {
+		return ""
+	}
+	defer os.Remove(zipPath)
+
+	zr, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return ""
+	}
+	defer zr.Close()
+
+	for _, file := range zr.File {
+		if !strings.HasSuffix(file.Name, "docker-compose.yml") {
+			continue
+		}
+		rc, err := file.Open()
+		if err != nil {
+			continue
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			continue
+		}
+		var compose struct {
+			Services map[string]struct {
+				Image string `json:"image" yaml:"image"`
+			} `json:"services" yaml:"services"`
+		}
+		if err := json.Unmarshal(data, &compose); err == nil {
+			for _, svc := range compose.Services {
+				if svc.Image != "" {
+					return svc.Image
+				}
+			}
+		}
+		break
+	}
+	return ""
+}
+
 func (s *AppService) InitDefaultApps() error {
 	apps := []model.App{
 		{Key: "nginx", Name: "Nginx", Description: "High performance web server", Category: "web", Icon: "nginx"},
@@ -261,6 +482,20 @@ func (s *AppService) InitDefaultApps() error {
 		}
 	}
 	return nil
+}
+
+func (s *AppService) InitDefaultSource() error {
+	sources, _ := s.sourceRepo.List()
+	for _, src := range sources {
+		if src.Name == "1Panel官方商店" {
+			return nil
+		}
+	}
+	return s.sourceRepo.Create(&model.AppSource{
+		Name:    "1Panel官方商店",
+		URL:     "https://apps-assets.fit2cloud.com/stable/1panel.json.zip",
+		Enabled: true,
+	})
 }
 
 func (s *AppService) ListSources() ([]model.AppSource, error) {

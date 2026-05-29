@@ -97,6 +97,7 @@ func run() error {
 	_ = authService.InitAdmin("admin", "admin123")
 	appService := service.NewAppService()
 	_ = appService.InitDefaultApps()
+	_ = appService.InitDefaultSource()
 
 	r := router.NewRouter()
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)

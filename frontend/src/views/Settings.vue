@@ -120,7 +120,9 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { settingApi, authApiExt } from '../api'
+import { useAuthStore } from '../store'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const settings = ref<any>({})
@@ -143,15 +145,24 @@ async function saveSettings() {
   } catch (e) {}
 }
 
+const auth = useAuthStore()
+const router = useRouter()
+
 async function changePassword() {
   if (!pwdForm.value.old_password || !pwdForm.value.new_password) {
     ElMessage.warning('请填写完整')
     return
   }
+  if (pwdForm.value.new_password.length < 6) {
+    ElMessage.warning('新密码至少6位')
+    return
+  }
   try {
     await authApiExt.changePassword(pwdForm.value)
-    ElMessage.success('密码修改成功')
+    ElMessage.success('密码修改成功，请重新登录')
     pwdForm.value = { old_password: '', new_password: '' }
+    auth.clearAuth()
+    router.push('/login')
   } catch (e: any) {
     ElMessage.error(e?.message || '修改失败')
   }

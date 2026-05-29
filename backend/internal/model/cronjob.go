@@ -1,11 +1,7 @@
 package model
 
-import (
-	"gorm.io/gorm"
-)
-
 type Cronjob struct {
-	gorm.Model
+	BaseModel
 	Name     string `gorm:"not null" json:"name"`
 	Spec     string `gorm:"not null" json:"spec"`
 	Command  string `gorm:"not null" json:"command"`

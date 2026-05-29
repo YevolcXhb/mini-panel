@@ -102,7 +102,11 @@ func (c *Client) Stop(name string) error {
 }
 
 func (c *Client) Rm(name string) error {
-	return exec.Command(c.BinaryPath, "rm", name).Run()
+	if err := exec.Command(c.BinaryPath, "rm", name).Run(); err != nil {
+		return err
+	}
+	dir := filepath.Join(c.DataRoot, name)
+	return os.RemoveAll(dir)
 }
 
 func (c *Client) Ps(name string) ([]string, error) {
