@@ -126,6 +126,35 @@ install_from_release() {
     fi
 
     chmod +x "${INSTALL_DIR}/minipanel"
+
+    # Generate dockroot.json if not exists
+    if [ ! -f "${INSTALL_DIR}/dockroot.json" ]; then
+        cat > "${INSTALL_DIR}/dockroot.json" <<'DREOF'
+{
+  "registry-mirrors": [
+    "https://registry.istoreos.com",
+    "https://docker1.linkease.com:60005",
+    "https://kooldocker.openpop.cn",
+    "https://kooldocker.gvpu.cn",
+    "https://docker.1ms.run",
+    "https://docker.m.daocloud.io"
+  ],
+  "data-root": "DATA_ROOT_PLACEHOLDER",
+  "useKspeeder": true
+}
+DREOF
+        sed -i "s|DATA_ROOT_PLACEHOLDER|${INSTALL_DIR}/data/containers|g" "${INSTALL_DIR}/dockroot.json"
+        mkdir -p "${INSTALL_DIR}/data/containers"
+        log_ok "dockroot.json generated"
+    fi
+
+    # Download ruri and kspeeder
+    if [ -f "${INSTALL_DIR}/DockRoot" ]; then
+        log_info "Downloading DockRoot dependencies (ruri, kspeeder)..."
+        cd "${INSTALL_DIR}"
+        "${INSTALL_DIR}/DockRoot" ensuredeps 2>&1 || log_warn "ensuredeps failed, you may need to run it manually"
+    fi
+
     log_ok "Binary installed to ${INSTALL_DIR}"
 }
 
@@ -196,7 +225,34 @@ setup_environment() {
 
     # Create directories
     mkdir -p "${DATA_DIR}"
+    mkdir -p "${DATA_DIR}/containers"
     mkdir -p "${INSTALL_DIR}/logs"
+
+    # Generate dockroot.json if not exists
+    if [ ! -f "${INSTALL_DIR}/dockroot.json" ] && [ -f "${INSTALL_DIR}/DockRoot" ]; then
+        cat > "${INSTALL_DIR}/dockroot.json" <<DREOF
+{
+  "registry-mirrors": [
+    "https://registry.istoreos.com",
+    "https://docker1.linkease.com:60005",
+    "https://kooldocker.openpop.cn",
+    "https://kooldocker.gvpu.cn",
+    "https://docker.1ms.run",
+    "https://docker.m.daocloud.io"
+  ],
+  "data-root": "${DATA_DIR}/containers",
+  "useKspeeder": true
+}
+DREOF
+        log_ok "dockroot.json generated"
+    fi
+
+    # Download ruri and kspeeder
+    if [ -f "${INSTALL_DIR}/DockRoot" ]; then
+        log_info "Downloading DockRoot dependencies (ruri, kspeeder)..."
+        cd "${INSTALL_DIR}"
+        "${INSTALL_DIR}/DockRoot" ensuredeps 2>&1 || log_warn "ensuredeps failed, run 'DockRoot ensuredeps' manually later"
+    fi
 
     # Generate config if not exists
     if [ ! -f "${INSTALL_DIR}/config.yaml" ]; then
