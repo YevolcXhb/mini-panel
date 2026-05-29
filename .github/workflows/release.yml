@@ -30,6 +30,10 @@ jobs:
           cd frontend
           npm install
           npm run build
+          echo "=== Frontend build output ==="
+          ls -la dist/
+          ls -la dist/assets/ 2>/dev/null || echo "No assets dir"
+          cat dist/index.html | head -5 || echo "No index.html"
 
       - name: Build backend binaries
         run: |
@@ -117,7 +121,9 @@ jobs:
                 cp "${dr_binary}" "${tmpdir}/minipanel/DockRoot"
               fi
               mkdir -p "${tmpdir}/minipanel/static"
-              cp -r frontend/dist/* "${tmpdir}/minipanel/static/" 2>/dev/null || true
+              cp -r backend/static/* "${tmpdir}/minipanel/static/"
+              echo "=== Static files in package ==="
+              ls -la "${tmpdir}/minipanel/static/"
               cp install.sh "${tmpdir}/minipanel/"
               cp README.md "${tmpdir}/minipanel/"
               cp backend/config.yaml.example "${tmpdir}/minipanel/"
