@@ -45,10 +45,11 @@ curl -fsSL https://raw.githubusercontent.com/YevolcXhb/mini-panel/main/install.s
 > ```bash
 > curl -fsSL -x http://127.0.0.1:7890 https://raw.githubusercontent.com/YevolcXhb/mini-panel/main/install.sh | bash
 > ```
-> 或者手动下载 Release 包并解压运行：
+> 或者手动下载最新 Release 包并解压运行：
 > ```bash
-> wget https://github.com/YevolcXhb/mini-panel/releases/latest/download/minipanel-1.0.1-linux-arm64.tar.gz
-> tar -xzf minipanel-1.0.1-linux-arm64.tar.gz
+> VERSION=$(curl -s https://api.github.com/repos/YevolcXhb/mini-panel/releases/latest | grep tag_name | cut -d '"' -f 4 | sed 's/v//')
+> wget "https://github.com/YevolcXhb/mini-panel/releases/download/v${VERSION}/minipanel-${VERSION}-linux-arm64.tar.gz"
+> tar -xzf minipanel-${VERSION}-linux-arm64.tar.gz
 > cd minipanel
 > cp config.yaml.example config.yaml
 > ./minipanel
