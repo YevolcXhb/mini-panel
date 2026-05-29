@@ -1,6 +1,7 @@
 package global
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 
@@ -13,17 +14,19 @@ import (
 )
 
 var (
-	CONF           *config.Config
-	DB             *gorm.DB
-	LOG            *logrus.Logger
-	Cron           *cron.Cron
+	CONF            *config.Config
+	DB              *gorm.DB
+	LOG             *logrus.Logger
+	Cron            *cron.Cron
 	IsAndroidChroot bool
 	DockRootClient  *dockroot.Client
+	Version         = "dev"
+	BuildTime       = "unknown"
+	GitCommit       = "unknown"
 )
 
 func InitLogger(level string) error {
 	LOG = logrus.New()
-	LOG.SetOutput(os.Stdout)
 	LOG.SetFormatter(&logrus.TextFormatter{
 		FullTimestamp: true,
 	})
@@ -32,6 +35,16 @@ func InitLogger(level string) error {
 		lvl = logrus.InfoLevel
 	}
 	LOG.SetLevel(lvl)
+
+	logDir := filepath.Join(GetDataDir(), "logs")
+	os.MkdirAll(logDir, 0755)
+	logFile := filepath.Join(logDir, "panel.log")
+	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		LOG.SetOutput(os.Stdout)
+		return err
+	}
+	LOG.SetOutput(io.MultiWriter(os.Stdout, f))
 	return nil
 }
 

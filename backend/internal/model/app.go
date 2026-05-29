@@ -19,14 +19,15 @@ type App struct {
 
 type AppDetail struct {
 	BaseModel
-	AppID   uint   `gorm:"index;not null" json:"app_id"`
-	Version string `gorm:"not null" json:"version"`
-	Image   string `gorm:"not null" json:"image"`
-	EnvVars string `json:"env_vars"`
-	Volumes string `json:"volumes"`
-	Command string `json:"command"`
-	Params  string `json:"params"`
-	Status  string `gorm:"default:'active'" json:"status"`
+	AppID       uint   `gorm:"index;not null" json:"app_id"`
+	Version     string `gorm:"not null" json:"version"`
+	Image       string `gorm:"not null" json:"image"`
+	DownloadURL string `json:"download_url"`
+	EnvVars     string `json:"env_vars"`
+	Volumes     string `json:"volumes"`
+	Command     string `json:"command"`
+	Params      string `json:"params"`
+	Status      string `gorm:"default:'active'" json:"status"`
 }
 
 type AppInstall struct {

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/minipanel/minipanel/internal/global"
 	"github.com/minipanel/minipanel/internal/model"
 	"github.com/minipanel/minipanel/internal/repository"
+	"gopkg.in/yaml.v3"
 )
 
 type AppService struct {
@@ -63,21 +65,31 @@ func (s *AppService) Installed() ([]model.AppInstall, error) {
 }
 
 func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, error) {
+	global.LOG.Infof("[Install] start install app_id=%d detail_id=%d name=%s port=%d", req.AppID, req.AppDetailID, req.Name, req.Port)
+	defer global.LOG.Infof("[Install] finish install name=%s", req.Name)
+
 	app, err := s.appRepo.GetByID(req.AppID)
 	if err != nil {
+		global.LOG.Errorf("[Install] get app failed: %v", err)
 		return nil, fmt.Errorf("app not found: %w", err)
 	}
+	global.LOG.Infof("[Install] app found key=%s name=%s", app.Key, app.Name)
 
 	var detail *model.AppDetail
 	if req.AppDetailID > 0 {
 		detail, err = s.detailRepo.GetByID(req.AppDetailID)
 		if err != nil {
+			global.LOG.Errorf("[Install] get detail failed: %v", err)
 			return nil, fmt.Errorf("version not found: %w", err)
 		}
+		global.LOG.Infof("[Install] detail found image=%s version=%s", detail.Image, detail.Version)
 	} else {
 		details, _ := s.detailRepo.ListByAppID(req.AppID)
 		if len(details) > 0 {
 			detail = &details[0]
+			global.LOG.Infof("[Install] using first detail image=%s version=%s", detail.Image, detail.Version)
+		} else {
+			global.LOG.Warnf("[Install] no detail found for app_id=%d", req.AppID)
 		}
 	}
 
@@ -100,28 +112,105 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 		Path:        filepath.Join(global.GetDataDir(), "apps", req.Name),
 	}
 	if err := s.instRepo.Create(inst); err != nil {
+		global.LOG.Errorf("[Install] create install record failed: %v", err)
 		return nil, err
+	}
+	global.LOG.Infof("[Install] install record created id=%d path=%s", inst.ID, inst.Path)
+
+	// ========== 解析 docker-compose.yml ==========
+	var composeEnvs []string
+	var composeVolumes []string
+	var exposedPort int
+
+	composePath := filepath.Join(inst.Path, "docker-compose.yml")
+	if detail != nil && detail.DownloadURL != "" {
+		if err := downloadAppPackage(detail.DownloadURL, inst.Path); err != nil {
+			global.LOG.Warnf("[Install] download package failed: %v", err)
+		}
+	}
+
+	if data, err := os.ReadFile(composePath); err == nil {
+		var compose struct {
+			Services map[string]struct {
+				Image       string      `yaml:"image"`
+				Ports       []string    `yaml:"ports"`
+				Environment interface{} `yaml:"environment"`
+				Volumes     []string    `yaml:"volumes"`
+			} `yaml:"services"`
+		}
+		if err := yaml.Unmarshal(data, &compose); err == nil {
+			for _, svc := range compose.Services {
+				if svc.Image != "" {
+					image = svc.Image
+					inst.Image = image
+				}
+				if len(svc.Ports) > 0 {
+					exposedPort = extractHostPort(svc.Ports)
+				}
+				switch env := svc.Environment.(type) {
+				case map[string]interface{}:
+					for k, v := range env {
+						composeEnvs = append(composeEnvs, fmt.Sprintf("%s=%s", k, fmt.Sprintf("%v", v)))
+					}
+				}
+				for _, v := range svc.Volumes {
+					parts := strings.Split(v, ":")
+					if len(parts) >= 2 {
+						hostPath := filepath.Join(inst.Path, filepath.Base(parts[0]))
+						os.MkdirAll(hostPath, 0755)
+						composeVolumes = append(composeVolumes, fmt.Sprintf("%s:%s", hostPath, parts[1]))
+					}
+				}
+				break
+			}
+			global.LOG.Infof("[Install] compose parsed image=%s port=%d envs=%d volumes=%d", image, exposedPort, len(composeEnvs), len(composeVolumes))
+		} else {
+			global.LOG.Warnf("[Install] unmarshal compose failed: %v", err)
+		}
+	} else {
+		global.LOG.Infof("[Install] no docker-compose.yml found at %s", composePath)
+	}
+
+	// 端口优先级：用户指定 > compose 提取 > detail 默认值
+	if req.Port > 0 {
+		inst.Port = req.Port
+	} else if exposedPort > 0 {
+		inst.Port = exposedPort
 	}
 
 	var envs []string
+	envSet := make(map[string]string)
+	for _, e := range composeEnvs {
+		if idx := strings.Index(e, "="); idx >= 0 {
+			envSet[e[:idx]] = e[idx+1:]
+		}
+	}
 	if detail != nil && detail.EnvVars != "" {
 		var envMap map[string]string
 		if err := json.Unmarshal([]byte(detail.EnvVars), &envMap); err == nil {
 			for k, v := range envMap {
-				envs = append(envs, fmt.Sprintf("%s=%s", k, v))
+				envSet[k] = v
 			}
+			global.LOG.Infof("[Install] detail envVars loaded count=%d", len(envMap))
+		} else {
+			global.LOG.Warnf("[Install] unmarshal detail envVars failed: %v", err)
 		}
 	}
 	if req.Env != nil {
 		for k, v := range req.Env {
-			envs = append(envs, fmt.Sprintf("%s=%s", k, v))
+			envSet[k] = v
 		}
+		global.LOG.Infof("[Install] user env count=%d", len(req.Env))
 	}
-	if req.Port > 0 {
-		envs = append(envs, fmt.Sprintf("PORT=%d", req.Port))
+	for k, v := range envSet {
+		envs = append(envs, fmt.Sprintf("%s=%s", k, v))
+	}
+	if inst.Port > 0 {
+		envs = append(envs, fmt.Sprintf("PORT=%d", inst.Port))
 	}
 
 	var volumes []string
+	volumes = append(volumes, composeVolumes...)
 	if detail != nil && detail.Volumes != "" {
 		var volMap map[string]string
 		if err := json.Unmarshal([]byte(detail.Volumes), &volMap); err == nil {
@@ -130,6 +219,9 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 				os.MkdirAll(hostPath, 0755)
 				volumes = append(volumes, fmt.Sprintf("%s:%s", hostPath, v))
 			}
+			global.LOG.Infof("[Install] detail volumes loaded count=%d", len(volMap))
+		} else {
+			global.LOG.Warnf("[Install] unmarshal detail volumes failed: %v", err)
 		}
 	}
 	if req.Volumes != nil {
@@ -138,22 +230,33 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 			os.MkdirAll(hostPath, 0755)
 			volumes = append(volumes, fmt.Sprintf("%s:%s", hostPath, v))
 		}
+		global.LOG.Infof("[Install] user volumes count=%d", len(req.Volumes))
 	}
 
+	global.LOG.Infof("[Install] final params image=%s container=%s port=%d envs=%d volumes=%d", image, req.Name, req.Port, len(envs), len(volumes))
+
 	if s.ctnService.IsAvailable() {
+		global.LOG.Infof("[Install] pulling image %s ...", image)
 		if err := s.ctnService.client.Pull(image, req.Name); err != nil {
+			global.LOG.Errorf("[Install] pull image failed: %v", err)
 			inst.Status = "failed"
 			inst.Message = err.Error()
 			s.instRepo.Update(inst)
 			return inst, fmt.Errorf("pull image: %w", err)
 		}
+		global.LOG.Infof("[Install] pull image success")
+
+		global.LOG.Infof("[Install] running container %s ...", req.Name)
 		if err := s.ctnService.client.Run(req.Name, true, envs, volumes); err != nil {
+			global.LOG.Errorf("[Install] run container failed: %v", err)
 			inst.Status = "failed"
 			inst.Message = err.Error()
 			s.instRepo.Update(inst)
 			return inst, fmt.Errorf("run container: %w", err)
 		}
+		global.LOG.Infof("[Install] run container success")
 	} else {
+		global.LOG.Errorf("[Install] dockroot not available")
 		inst.Status = "not_supported"
 		s.instRepo.Update(inst)
 		return inst, fmt.Errorf("dockroot not available")
@@ -161,6 +264,7 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 
 	inst.Status = "running"
 	s.instRepo.Update(inst)
+	global.LOG.Infof("[Install] install success id=%d status=running", inst.ID)
 	return inst, nil
 }
 
@@ -389,10 +493,11 @@ func (s *AppService) syncFrom1PanelZip(source *model.AppSource) error {
 		for _, pv := range pa.Versions {
 			image := s.extractImageFrom1Panel(pv.DownloadURL)
 			detail := &model.AppDetail{
-				AppID:   app.ID,
-				Version: pv.Name,
-				Image:   image,
-				Status:  "active",
+				AppID:       app.ID,
+				Version:     pv.Name,
+				Image:       image,
+				DownloadURL: pv.DownloadURL,
+				Status:      "active",
 			}
 			_ = s.detailRepo.Create(detail)
 		}
@@ -450,10 +555,10 @@ func (s *AppService) extractImageFrom1Panel(downloadURL string) string {
 		}
 		var compose struct {
 			Services map[string]struct {
-				Image string `json:"image" yaml:"image"`
-			} `json:"services" yaml:"services"`
+				Image string `yaml:"image"`
+			} `yaml:"services"`
 		}
-		if err := json.Unmarshal(data, &compose); err == nil {
+		if err := yaml.Unmarshal(data, &compose); err == nil {
 			for _, svc := range compose.Services {
 				if svc.Image != "" {
 					return svc.Image
@@ -466,21 +571,6 @@ func (s *AppService) extractImageFrom1Panel(downloadURL string) string {
 }
 
 func (s *AppService) InitDefaultApps() error {
-	apps := []model.App{
-		{Key: "nginx", Name: "Nginx", Description: "High performance web server", Category: "web", Icon: "nginx"},
-		{Key: "mysql", Name: "MySQL", Description: "Popular open source database", Category: "database", Icon: "mysql"},
-		{Key: "redis", Name: "Redis", Description: "In-memory data store", Category: "database", Icon: "redis"},
-		{Key: "postgres", Name: "PostgreSQL", Description: "Advanced open source database", Category: "database", Icon: "postgres"},
-	}
-	for _, app := range apps {
-		app.Type = "container"
-		app.Status = "active"
-		app.Resource = "builtin"
-		existing, _ := s.appRepo.GetByKey(app.Key)
-		if existing == nil {
-			_ = s.appRepo.Create(&app)
-		}
-	}
 	return nil
 }
 
@@ -509,4 +599,86 @@ func (s *AppService) AddSource(name, url string) (*model.AppSource, error) {
 
 func (s *AppService) RemoveSource(id uint) error {
 	return s.sourceRepo.Delete(id)
+}
+
+// extractHostPort 从 compose ports 中提取可用端口。
+// 优先返回主机端口（如 "8080:80" 返回 8080）；
+// 若主机端口是变量（如 "${VAR}:3306"），则返回容器端口（3306）作为兜底。
+func extractHostPort(ports []string) int {
+	for _, p := range ports {
+		p = strings.TrimSpace(p)
+		idx := strings.LastIndex(p, ":")
+		if idx < 0 {
+			if port, err := strconv.Atoi(p); err == nil {
+				return port
+			}
+			continue
+		}
+		hostPart := strings.TrimSpace(p[:idx])
+		containerPart := strings.TrimSpace(p[idx+1:])
+
+		hostClean := strings.TrimPrefix(strings.TrimPrefix(hostPart, "$"), "{")
+		hostClean = strings.TrimSuffix(hostClean, "}")
+		if port, err := strconv.Atoi(hostClean); err == nil {
+			return port
+		}
+		if port, err := strconv.Atoi(containerPart); err == nil {
+			return port
+		}
+	}
+	return 0
+}
+
+// downloadAppPackage 下载 1Panel 版本包并解压到目标目录
+func downloadAppPackage(url, destDir string) error {
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return fmt.Errorf("download: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("status %d", resp.StatusCode)
+	}
+
+	os.MkdirAll(destDir, 0755)
+	zipPath := filepath.Join(destDir, "app.zip")
+	f, err := os.Create(zipPath)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(f, resp.Body)
+	f.Close()
+	if err != nil {
+		return fmt.Errorf("save: %w", err)
+	}
+	defer os.Remove(zipPath)
+
+	zr, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return fmt.Errorf("open zip: %w", err)
+	}
+	defer zr.Close()
+
+	for _, file := range zr.File {
+		fpath := filepath.Join(destDir, file.Name)
+		if file.FileInfo().IsDir() {
+			os.MkdirAll(fpath, file.Mode())
+			continue
+		}
+		os.MkdirAll(filepath.Dir(fpath), 0755)
+		outFile, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, file.Mode())
+		if err != nil {
+			continue
+		}
+		rc, err := file.Open()
+		if err != nil {
+			outFile.Close()
+			continue
+		}
+		io.Copy(outFile, rc)
+		rc.Close()
+		outFile.Close()
+	}
+	return nil
 }

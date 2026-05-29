@@ -70,7 +70,7 @@ get_latest_version() {
 
 VERSION=$(get_latest_version)
 if [ -z "$VERSION" ]; then
-    VERSION="2.0.1"
+    VERSION="2.1.0"
     log_warn "Failed to detect latest version, fallback to v${VERSION}"
 else
     log_info "Latest version detected: v${VERSION}"
@@ -294,7 +294,7 @@ setup_environment() {
     # Create directories
     mkdir -p "${DATA_DIR}"
     mkdir -p "${DATA_DIR}/containers"
-    mkdir -p "${INSTALL_DIR}/logs"
+    mkdir -p "${DATA_DIR}/logs"
 
     # Generate dockroot.json if not exists
     if [ ! -f "${INSTALL_DIR}/dockroot.json" ] && [ -f "${INSTALL_DIR}/DockRoot" ]; then

@@ -110,3 +110,13 @@ export const settingApi = {
   update: (data: any) => api.put('/settings', data),
   reset: () => api.post('/settings/reset')
 }
+
+export const logApi = {
+  list: (levels?: string[], lines?: number) => api.get('/logs', {
+    params: { levels: levels?.join(','), lines }
+  })
+}
+
+export const versionApi = {
+  get: () => api.get('/version')
+}

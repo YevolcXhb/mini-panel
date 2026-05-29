@@ -42,7 +42,10 @@ func main() {
 }
 
 func run() error {
-	logrus.Infof("Mini Panel %s (commit: %s, built: %s)", version, gitCommit, buildTime)
+	global.Version = version
+	global.BuildTime = buildTime
+	global.GitCommit = gitCommit
+	logrus.Infof("Mini Panel %s (commit: %s, built: %s)", global.Version, global.GitCommit, global.BuildTime)
 
 	exeDir := getExecutableDir()
 

@@ -33,6 +33,16 @@
     <div class="meter-grid">
       <div class="meter-card">
         <div class="meter-header">
+          <span>CPU 占用</span>
+          <span class="meter-pct" :style="{ color: pctColor(cpuPct) }">{{ cpuPct }}%</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" :style="{ width: cpuPct + '%', background: pctColor(cpuPct) }"></div>
+        </div>
+        <div class="meter-detail">使用率: {{ monitor.cpu_usage?.toFixed(1) || 0 }}%</div>
+      </div>
+      <div class="meter-card">
+        <div class="meter-header">
           <span>CPU 负载</span>
           <span class="meter-pct" :style="{ color: pctColor(loadPct) }">{{ loadPct }}%</span>
         </div>
@@ -92,6 +102,10 @@ const info = ref<any>({})
 const monitor = ref<any>({})
 let timer: any
 
+const cpuPct = computed(() => {
+  const v = monitor.value.cpu_usage || 0
+  return Math.min(Math.round(v), 100)
+})
 const loadPct = computed(() => {
   const l = monitor.value.load?.load1 || 0
   const cores = info.value.cpu?.length || 1

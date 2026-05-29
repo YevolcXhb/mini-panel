@@ -20,6 +20,7 @@ const routes = [
       { path: 'containers', name: 'Containers', component: () => import('../views/Container.vue') },
       { path: 'apps', name: 'Apps', component: () => import('../views/AppStore.vue') },
       { path: 'cronjobs', name: 'Cronjobs', component: () => import('../views/Cronjob.vue') },
+      { path: 'logs', name: 'Logs', component: () => import('../views/PanelLogs.vue') },
       { path: 'settings', name: 'Settings', component: () => import('../views/Settings.vue') }
     ]
   }

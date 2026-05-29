@@ -87,7 +87,7 @@
     <div class="info-grid" style="margin-bottom:24px">
       <div class="info-card">
         <div class="info-label">版本</div>
-        <div class="info-value">v1.0.2</div>
+        <div class="info-value">{{ versionInfo.version || '-' }}</div>
       </div>
       <div class="info-card">
         <div class="info-label">前端框架</div>
@@ -121,15 +121,20 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { settingApi, authApiExt } from '../api'
+import { settingApi, authApiExt, versionApi } from '../api'
 import { useAuthStore } from '../store'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const settings = ref<any>({})
 const pwdForm = ref({ old_password: '', new_password: '' })
+const versionInfo = ref({ version: '-', build_time: '-', git_commit: '-' })
 
 async function loadSettings() {
   try { const res: any = await settingApi.get(); settings.value = res.data || {} } catch (e) {}
+}
+
+async function loadVersion() {
+  try { const res: any = await versionApi.get(); versionInfo.value = res.data || {} } catch (e) {}
 }
 
 async function saveSettings() {
@@ -184,5 +189,8 @@ async function clearData() {
   } catch (e) {}
 }
 
-onMounted(loadSettings)
+onMounted(() => {
+  loadSettings()
+  loadVersion()
+})
 </script>

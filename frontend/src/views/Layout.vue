@@ -25,7 +25,7 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
 import {
-  Odometer, Folder, Monitor, Cpu, Box, Shop, Timer, Setting, SwitchButton
+  Odometer, Folder, Monitor, Cpu, Box, Shop, Timer, Document, Setting, SwitchButton
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '../store'
 import { authApi } from '../api'
@@ -41,6 +41,7 @@ const menus = [
   { path: '/containers', label: '容器管理', icon: Box },
   { path: '/apps', label: '应用商店', icon: Shop },
   { path: '/cronjobs', label: '计划任务', icon: Timer },
+  { path: '/logs', label: '系统日志', icon: Document },
   { path: '/settings', label: '设置', icon: Setting },
 ]
 

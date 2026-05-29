@@ -29,6 +29,9 @@ func NewRouter() *gin.Engine {
 	{
 		authGroup.POST("/login", auth.Login)
 		authGroup.POST("/logout", auth.Logout)
+
+		ver := api.NewVersionAPI()
+		authGroup.GET("/version", ver.Get)
 	}
 
 	apiV1 := r.Group("/api/v1")
@@ -93,6 +96,9 @@ func NewRouter() *gin.Engine {
 
 		audit := api.NewAuditAPI()
 		apiV1.GET("/audit-logs", audit.List)
+
+		logAPI := api.NewLogAPI()
+		apiV1.GET("/logs", logAPI.List)
 	}
 
 	return r
