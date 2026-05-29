@@ -94,10 +94,46 @@ download_file() {
     local output="$2"
 
     if [ "$HAS_CURL" = true ]; then
-        curl -fsSL -o "$output" "$url"
+        local proxy_args=""
+        if [ -n "${HTTPS_PROXY:-}" ]; then
+            proxy_args="-x ${HTTPS_PROXY}"
+        elif [ -n "${https_proxy:-}" ]; then
+            proxy_args="-x ${https_proxy}"
+        elif [ -n "${HTTP_PROXY:-}" ]; then
+            proxy_args="-x ${HTTP_PROXY}"
+        elif [ -n "${http_proxy:-}" ]; then
+            proxy_args="-x ${http_proxy}"
+        fi
+        curl -fsSL ${proxy_args} -o "$output" "$url"
     else
-        wget -qO "$output" "$url"
+        local proxy_args=""
+        if [ -n "${HTTPS_PROXY:-}" ]; then
+            proxy_args="-e https_proxy=${HTTPS_PROXY}"
+        fi
+        wget ${proxy_args} -qO "$output" "$url"
     fi
+}
+
+download_with_fallback() {
+    local url="$1"
+    local output="$2"
+    local mirrors=(
+        "$url"
+        "https://ghfast.top/${url#https://github.com/}"
+        "https://gh-proxy.com/${url#https://github.com/}"
+        "https://mirror.ghproxy.com/${url#https://github.com/}"
+    )
+
+    for mirror in "${mirrors[@]}"; do
+        log_info "Trying: ${mirror}"
+        if download_file "$mirror" "$output"; then
+            if [ -s "$output" ]; then
+                return 0
+            fi
+            rm -f "$output"
+        fi
+    done
+    return 1
 }
 
 install_from_release() {
@@ -107,10 +143,12 @@ install_from_release() {
     local tmp_dir=$(mktemp -d)
 
     log_info "Downloading from ${download_url}"
-    if ! download_file "$download_url" "${tmp_dir}/minipanel.tar.gz"; then
-        log_err "Failed to download release."
-        log_info "You can try installing from source instead."
-        log_info "Or manually download from: https://github.com/${GITHUB_REPO}/releases"
+    if ! download_with_fallback "$download_url" "${tmp_dir}/minipanel.tar.gz"; then
+        log_err "Failed to download release from all mirrors."
+        log_info "You can try with a proxy:"
+        log_info "  export HTTPS_PROXY=http://127.0.0.1:7890"
+        log_info "  curl -fsSL https://raw.githubusercontent.com/YevolcXhb/mini-panel/main/install.sh | bash"
+        log_info "Or manually download from: https://github.com/YevolcXhb/mini-panel/releases"
         rm -rf "${tmp_dir}"
         exit 1
     fi
