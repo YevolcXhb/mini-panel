@@ -116,7 +116,8 @@ jobs:
               if [ -f "${dr_binary}" ]; then
                 cp "${dr_binary}" "${tmpdir}/minipanel/DockRoot"
               fi
-              cp -r backend/static "${tmpdir}/minipanel/" 2>/dev/null || true
+              mkdir -p "${tmpdir}/minipanel/static"
+              cp -r frontend/dist/* "${tmpdir}/minipanel/static/" 2>/dev/null || true
               cp install.sh "${tmpdir}/minipanel/"
               cp README.md "${tmpdir}/minipanel/"
               cp backend/config.yaml.example "${tmpdir}/minipanel/"

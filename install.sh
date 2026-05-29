@@ -263,7 +263,8 @@ install_from_source() {
     fi
 
     # Copy static files
-    cp -r "${SCRIPT_DIR}/backend/static" "${INSTALL_DIR}/" 2>/dev/null || true
+    mkdir -p "${INSTALL_DIR}/static"
+    cp -r "${SCRIPT_DIR}/frontend/dist/"* "${INSTALL_DIR}/static/" 2>/dev/null || true
 
     log_ok "Build complete"
 }
