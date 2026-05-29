@@ -10,7 +10,6 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # Config
-VERSION="1.0.2"
 GITHUB_REPO="YevolcXhb/mini-panel"
 
 # Installation directory (can be overridden via env)
@@ -56,6 +55,26 @@ log_warn() {
 log_err() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
+
+# Auto-detect latest release version
+get_latest_version() {
+    local api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+    local ver=""
+    if command -v curl &>/dev/null; then
+        ver=$(curl -fsSL "$api_url" 2>/dev/null | grep '"tag_name":' | head -n 1 | sed -E 's/.*"v?([^"]+)".*/\1/')
+    elif command -v wget &>/dev/null; then
+        ver=$(wget -qO- "$api_url" 2>/dev/null | grep '"tag_name":' | head -n 1 | sed -E 's/.*"v?([^"]+)".*/\1/')
+    fi
+    echo "$ver"
+}
+
+VERSION=$(get_latest_version)
+if [ -z "$VERSION" ]; then
+    VERSION="2.0.1"
+    log_warn "Failed to detect latest version, fallback to v${VERSION}"
+else
+    log_info "Latest version detected: v${VERSION}"
+fi
 
 print_banner() {
     echo ""
