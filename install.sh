@@ -10,7 +10,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # Config
-VERSION="1.0.0"
+VERSION="1.0.2"
 GITHUB_REPO="YevolcXhb/mini-panel"
 
 # Installation directory (can be overridden via env)
