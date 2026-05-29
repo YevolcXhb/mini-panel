@@ -38,7 +38,7 @@ func (s *DashboardService) GetLoadAvg() (interface{}, error) {
 	return psutil.GetLoadAvg()
 }
 
-func (s *DashboardService) GetMonitor() (map[string]interface{}, error) {
+func (s *DashboardService) GetMonitor(mode string) (map[string]interface{}, error) {
 	cpu, _, err := psutil.GetCPUUsage()
 	if err != nil {
 		cpu = 0
@@ -63,5 +63,6 @@ func (s *DashboardService) GetMonitor() (map[string]interface{}, error) {
 		"disks":      disks,
 		"network":    net,
 		"load":       load,
+		"load_mode":  mode,
 	}, nil
 }

@@ -139,7 +139,9 @@ async function loadData() {
   try {
     const res: any = await dashboardApi.getInfo()
     info.value = res.data || {}
-    const mon: any = await dashboardApi.getMonitor()
+    const settingsRes: any = await (await import('../api')).settingApi.get()
+    const mode = settingsRes?.data?.load_host_mode || 'chroot'
+    const mon: any = await dashboardApi.getMonitor(mode)
     monitor.value = mon.data || {}
   } catch (e) {}
 }

@@ -64,3 +64,33 @@ func (r *AppInstallRepository) Update(item *model.AppInstall) error {
 func (r *AppInstallRepository) Delete(id uint) error {
 	return r.db.Delete(&model.AppInstall{}, id).Error
 }
+
+type AppSourceRepository struct {
+	db *gorm.DB
+}
+
+func NewAppSourceRepository(db *gorm.DB) *AppSourceRepository {
+	return &AppSourceRepository{db: db}
+}
+
+func (r *AppSourceRepository) List() ([]model.AppSource, error) {
+	var items []model.AppSource
+	err := r.db.Find(&items).Error
+	return items, err
+}
+
+func (r *AppSourceRepository) Create(item *model.AppSource) error {
+	return r.db.Create(item).Error
+}
+
+func (r *AppSourceRepository) Delete(id uint) error {
+	return r.db.Delete(&model.AppSource{}, id).Error
+}
+
+func (r *AppSourceRepository) GetByID(id uint) (*model.AppSource, error) {
+	var item model.AppSource
+	if err := r.db.First(&item, id).Error; err != nil {
+		return nil, err
+	}
+	return &item, nil
+}

@@ -72,14 +72,18 @@ export const containerApi = {
   start: (name: string) => api.post(`/containers/${name}/start`),
   stop: (name: string) => api.post(`/containers/${name}/stop`),
   remove: (name: string) => api.delete(`/containers/${name}`),
-  logs: (name: string, tail = 100) => api.get(`/containers/${name}/logs`, { params: { tail } })
+  logs: (name: string, tail = 100) => api.get(`/containers/${name}/logs`, { params: { tail } }),
+  pull: (image: string, name?: string) => api.post('/containers/pull', { image, name })
 }
 
 export const appApi = {
   list: () => api.get('/apps'),
   installed: () => api.get('/apps/installed'),
   install: (data: any) => api.post('/apps/install', data),
-  uninstall: (id: number) => api.post(`/apps/${id}/uninstall`)
+  uninstall: (id: number) => api.post(`/apps/${id}/uninstall`),
+  listSources: () => api.get('/apps/sources'),
+  addSource: (data: any) => api.post('/apps/sources', data),
+  removeSource: (id: number) => api.delete(`/apps/sources/${id}`)
 }
 
 export const cronjobApi = {

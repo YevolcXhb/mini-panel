@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"encoding/base64"
 	"net/http"
 	"strings"
 	"time"
@@ -8,13 +9,62 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/minipanel/minipanel/internal/global"
+	"github.com/minipanel/minipanel/internal/repository"
 )
+
+func SecurityEntranceMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		path := c.Request.URL.Path
+		if strings.HasPrefix(path, "/api/") {
+			c.Next()
+			return
+		}
+		entrance := getSecurityEntrance()
+		if entrance == "" {
+			c.Next()
+			return
+		}
+		trimmed := strings.TrimSuffix(path, "/")
+		if trimmed == "/"+entrance {
+			c.SetCookie("SecurityEntrance", base64.StdEncoding.EncodeToString([]byte(entrance)), 0, "/", "", false, true)
+			c.Redirect(http.StatusFound, "/dashboard")
+			c.Abort()
+			return
+		}
+		cookieVal, err := c.Cookie("SecurityEntrance")
+		if err != nil {
+			c.Data(http.StatusNotFound, "text/html; charset=utf-8", []byte(notFoundPage))
+			c.Abort()
+			return
+		}
+		decoded, err := base64.StdEncoding.DecodeString(cookieVal)
+		if err != nil || string(decoded) != entrance {
+			c.Data(http.StatusNotFound, "text/html; charset=utf-8", []byte(notFoundPage))
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
+func getSecurityEntrance() string {
+	if global.DB == nil {
+		return ""
+	}
+	repo := repository.NewSettingRepository(global.DB)
+	item, err := repo.Get("SecurityEntrance")
+	if err != nil || item.Value == "" {
+		return ""
+	}
+	return item.Value
+}
+
+const notFoundPage = `<!DOCTYPE html><html><head><title>404</title></head><body><h1>404 - Not Found</h1></body></html>`
 
 func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		auth := c.GetHeader("Authorization")
 		if auth == "" {
-			// WebSocket cannot set custom headers, fallback to query param
 			token := c.Query("token")
 			if token != "" {
 				auth = "Bearer " + token

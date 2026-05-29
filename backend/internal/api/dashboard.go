@@ -43,7 +43,8 @@ func (a *DashboardAPI) GetInfo(c *gin.Context) {
 }
 
 func (a *DashboardAPI) GetMonitor(c *gin.Context) {
-	data, err := a.service.GetMonitor()
+	mode := c.DefaultQuery("mode", "chroot")
+	data, err := a.service.GetMonitor(mode)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
 		return

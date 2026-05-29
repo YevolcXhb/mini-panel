@@ -13,8 +13,8 @@ func NewRouter() *gin.Engine {
 	r.Use(middleware.LoggerMiddleware())
 	r.Use(gin.Recovery())
 	r.Use(middleware.CORSMiddleware())
+	r.Use(middleware.SecurityEntranceMiddleware())
 
-	// Static files (exact match to avoid /*filepath wildcard conflict with API routes)
 	if _, err := os.Stat("static/index.html"); err == nil {
 		r.Static("/assets", "static/assets")
 		r.StaticFile("/favicon.ico", "static/favicon.ico")
@@ -34,12 +34,10 @@ func NewRouter() *gin.Engine {
 	apiV1 := r.Group("/api/v1")
 	apiV1.Use(middleware.AuthMiddleware())
 	{
-		// Dashboard
 		dash := api.NewDashboardAPI()
 		apiV1.GET("/dashboard", dash.GetInfo)
 		apiV1.GET("/dashboard/monitor", dash.GetMonitor)
 
-		// File Manager
 		file := api.NewFileAPI()
 		apiV1.GET("/files", file.List)
 		apiV1.GET("/files/content", file.GetContent)
@@ -49,16 +47,13 @@ func NewRouter() *gin.Engine {
 		apiV1.POST("/files/upload", file.Upload)
 		apiV1.GET("/files/download", file.Download)
 
-		// Terminal
 		term := api.NewTerminalAPI()
 		apiV1.GET("/terminal/ws", term.HandleWS)
 
-		// Process
 		proc := api.NewProcessAPI()
 		apiV1.GET("/processes", proc.List)
 		apiV1.POST("/processes/kill", proc.Kill)
 
-		// Container
 		ctn := api.NewContainerAPI()
 		apiV1.GET("/containers", ctn.List)
 		apiV1.GET("/containers/:name", ctn.Inspect)
@@ -68,15 +63,17 @@ func NewRouter() *gin.Engine {
 		apiV1.DELETE("/containers/:name", ctn.Remove)
 		apiV1.GET("/containers/:name/logs", ctn.Logs)
 		apiV1.GET("/containers/:name/files", ctn.ListFiles)
+		apiV1.POST("/containers/pull", ctn.Pull)
 
-		// App Store
 		app := api.NewAppAPI()
 		apiV1.GET("/apps", app.List)
 		apiV1.POST("/apps/install", app.Install)
 		apiV1.POST("/apps/:id/uninstall", app.Uninstall)
 		apiV1.GET("/apps/installed", app.Installed)
+		apiV1.GET("/apps/sources", app.ListSources)
+		apiV1.POST("/apps/sources", app.AddSource)
+		apiV1.DELETE("/apps/sources/:id", app.RemoveSource)
 
-		// Cronjob
 		cron := api.NewCronjobAPI()
 		apiV1.GET("/cronjobs", cron.List)
 		apiV1.POST("/cronjobs", cron.Create)
@@ -84,7 +81,6 @@ func NewRouter() *gin.Engine {
 		apiV1.DELETE("/cronjobs/:id", cron.Delete)
 		apiV1.POST("/cronjobs/:id/run", cron.Run)
 
-		// Settings
 		setting := api.NewSettingAPI()
 		apiV1.GET("/settings", setting.Get)
 		apiV1.PUT("/settings", setting.Update)

@@ -21,6 +21,7 @@ func Migrate(db *gorm.DB) error {
 		&model.User{},
 		&model.App{},
 		&model.AppInstall{},
+		&model.AppSource{},
 		&model.Cronjob{},
 		&model.Setting{},
 	)

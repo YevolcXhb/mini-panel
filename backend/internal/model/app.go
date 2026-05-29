@@ -15,6 +15,7 @@ type App struct {
 	EnvVars     string `json:"env_vars"`
 	Volumes     string `json:"volumes"`
 	Command     string `json:"command"`
+	SourceID    uint   `json:"source_id"`
 }
 
 type AppInstall struct {
@@ -26,4 +27,11 @@ type AppInstall struct {
 	Container string `json:"container"`
 	Port      int    `json:"port"`
 	Path      string `json:"path"`
+}
+
+type AppSource struct {
+	gorm.Model
+	Name    string `gorm:"not null" json:"name"`
+	URL     string `gorm:"not null" json:"url"`
+	Enabled bool   `gorm:"default:true" json:"enabled"`
 }

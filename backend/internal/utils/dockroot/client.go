@@ -206,3 +206,47 @@ func (c *Client) ListContainerFiles(name, path string) ([]os.FileInfo, error) {
 	}
 	return infos, nil
 }
+
+func (c *Client) GetRegistryInfo() (*RegistryInfo, error) {
+	binaryDir := filepath.Dir(c.BinaryPath)
+	return readRegistryInfo(binaryDir)
+}
+
+func (c *Client) AddRegistryMirror(mirror string) error {
+	binaryDir := filepath.Dir(c.BinaryPath)
+	info, err := readRegistryInfo(binaryDir)
+	if err != nil {
+		info = &RegistryInfo{Mirrors: []string{}}
+	}
+	for _, m := range info.Mirrors {
+		if m == mirror {
+			return nil
+		}
+	}
+	info.Mirrors = append(info.Mirrors, mirror)
+	data, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(binaryDir, "dockroot.json"), data, 0644)
+}
+
+func (c *Client) RemoveRegistryMirror(mirror string) error {
+	binaryDir := filepath.Dir(c.BinaryPath)
+	info, err := readRegistryInfo(binaryDir)
+	if err != nil {
+		return err
+	}
+	var newMirrors []string
+	for _, m := range info.Mirrors {
+		if m != mirror {
+			newMirrors = append(newMirrors, m)
+		}
+	}
+	info.Mirrors = newMirrors
+	data, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(binaryDir, "dockroot.json"), data, 0644)
+}

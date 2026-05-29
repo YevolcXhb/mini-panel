@@ -41,11 +41,13 @@ func (s *SettingService) List() (map[string]string, error) {
 
 func (s *SettingService) InitDefaults() error {
 	defaults := map[string]string{
-		"theme":           "dark",
-		"language":        "zh",
-		"timezone":        "Asia/Shanghai",
-		"container_mode":  "dockroot",
-		"file_manager_root": "/",
+		"theme":              "dark",
+		"language":           "zh",
+		"timezone":           "Asia/Shanghai",
+		"container_mode":     "dockroot",
+		"file_manager_root":  "/",
+		"SecurityEntrance":   "",
+		"load_host_mode":     "chroot",
 	}
 	for k, v := range defaults {
 		if _, err := s.repo.Get(k); err != nil {

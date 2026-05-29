@@ -2,35 +2,83 @@
   <div>
     <h2 class="page-title">🔧 系统设置</h2>
 
-    <div class="info-card" style="max-width:600px;margin-bottom:16px">
-      <el-form :model="settings" label-width="120px">
-        <el-form-item label="主题">
-          <el-radio-group v-model="settings.theme">
-            <el-radio label="dark">深色</el-radio>
-            <el-radio label="light">浅色</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item label="语言">
-          <el-select v-model="settings.language">
-            <el-option label="简体中文" value="zh" />
-            <el-option label="English" value="en" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="时区"><el-input v-model="settings.timezone" /></el-form-item>
-        <el-form-item label="容器模式"><el-input v-model="settings.container_mode" disabled /></el-form-item>
-        <el-form-item label="文件管理根目录"><el-input v-model="settings.file_manager_root" /></el-form-item>
-        <el-form-item>
-          <el-button type="primary" @click="saveSettings">保存设置</el-button>
-          <el-button @click="resetSettings">恢复默认</el-button>
-        </el-form-item>
-      </el-form>
+    <div class="info-grid" style="margin-bottom:24px">
+      <div class="info-card">
+        <h3 style="margin:0 0 16px 0;font-size:15px">外观设置</h3>
+        <el-form :model="settings" label-width="100px">
+          <el-form-item label="主题">
+            <el-radio-group v-model="settings.theme">
+              <el-radio label="dark">深色</el-radio>
+              <el-radio label="light">浅色</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item label="语言">
+            <el-select v-model="settings.language">
+              <el-option label="简体中文" value="zh" />
+              <el-option label="English" value="en" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="时区"><el-input v-model="settings.timezone" /></el-form-item>
+        </el-form>
+      </div>
+
+      <div class="info-card">
+        <h3 style="margin:0 0 16px 0;font-size:15px">安全设置</h3>
+        <el-form :model="settings" label-width="100px">
+          <el-form-item label="安全入口">
+            <el-input v-model="settings.SecurityEntrance" placeholder="留空则禁用安全入口" />
+            <div style="font-size:12px;color:var(--dim);margin-top:4px">
+              设置后需通过 http://面板地址:端口/[安全入口] 访问
+            </div>
+          </el-form-item>
+          <el-form-item label="当前密码">
+            <el-input type="password" v-model="settings.current_password" placeholder="修改密码时填写" />
+          </el-form-item>
+          <el-form-item label="新密码">
+            <el-input type="password" v-model="settings.new_password" placeholder="留空则不修改" />
+          </el-form-item>
+        </el-form>
+      </div>
+
+      <div class="info-card">
+        <h3 style="margin:0 0 16px 0;font-size:15px">容器设置</h3>
+        <el-form :model="settings" label-width="100px">
+          <el-form-item label="容器模式">
+            <el-tag type="info">DockRoot</el-tag>
+          </el-form-item>
+          <el-form-item label="文件管理根目录">
+            <el-input v-model="settings.file_manager_root" placeholder="/" />
+          </el-form-item>
+        </el-form>
+      </div>
+
+      <div class="info-card">
+        <h3 style="margin:0 0 16px 0;font-size:15px">负载计算</h3>
+        <el-form :model="settings" label-width="100px">
+          <el-form-item label="计算模式">
+            <el-radio-group v-model="settings.load_host_mode">
+              <el-radio label="chroot">仅 Chroot</el-radio>
+              <el-radio label="host">包含宿主机</el-radio>
+            </el-radio-group>
+            <div style="font-size:12px;color:var(--dim);margin-top:4px">
+              仅 Chroot：只计算 chroot 容器内的进程负载<br/>
+              包含宿主机：同时计算宿主机和 chroot 的进程负载
+            </div>
+          </el-form-item>
+        </el-form>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:12px;margin-bottom:24px">
+      <el-button type="primary" @click="saveSettings">💾 保存设置</el-button>
+      <el-button @click="resetSettings">🔄 恢复默认</el-button>
     </div>
 
     <h3 class="section-title">系统信息</h3>
-    <div class="info-grid" style="max-width:600px">
+    <div class="info-grid" style="margin-bottom:24px">
       <div class="info-card">
         <div class="info-label">版本</div>
-        <div class="info-value">v1.0.0</div>
+        <div class="info-value">v1.0.1</div>
       </div>
       <div class="info-card">
         <div class="info-label">前端框架</div>
@@ -43,6 +91,14 @@
       <div class="info-card">
         <div class="info-label">数据库</div>
         <div class="info-value">SQLite</div>
+      </div>
+      <div class="info-card">
+        <div class="info-label">后端语言</div>
+        <div class="info-value">Go 1.23+</div>
+      </div>
+      <div class="info-card">
+        <div class="info-label">构建工具</div>
+        <div class="info-value">Vite</div>
       </div>
     </div>
 
@@ -65,7 +121,16 @@ async function loadSettings() {
 }
 
 async function saveSettings() {
-  try { await settingApi.update(settings.value); ElMessage.success('保存成功') } catch (e) {}
+  try {
+    const toSave: any = {}
+    for (const key of ['theme', 'language', 'timezone', 'container_mode', 'file_manager_root', 'SecurityEntrance', 'load_host_mode']) {
+      if (settings.value[key] !== undefined) {
+        toSave[key] = settings.value[key]
+      }
+    }
+    await settingApi.update(toSave)
+    ElMessage.success('保存成功')
+  } catch (e) {}
 }
 
 async function resetSettings() {

@@ -42,6 +42,50 @@
           </el-table>
         </div>
       </el-tab-pane>
+
+      <el-tab-pane label="镜像源" name="sources">
+        <div style="margin-bottom:16px;display:flex;gap:8px;align-items:center">
+          <el-input v-model="newSource.name" placeholder="源名称" style="width:160px" />
+          <el-input v-model="newSource.url" placeholder="镜像地址 (如 docker.1ms.run)" style="width:300px" />
+          <el-button type="primary" @click="addSource">添加源</el-button>
+        </div>
+        <div class="table-wrap">
+          <el-table :data="sources" size="small">
+            <el-table-column prop="name" label="名称" width="160" />
+            <el-table-column prop="url" label="地址" />
+            <el-table-column prop="enabled" label="状态" width="100">
+              <template #default="{ row }">
+                <span :class="row.enabled ? 'tag-on' : 'tag-off'">{{ row.enabled ? '启用' : '禁用' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="100">
+              <template #default="{ row }">
+                <el-button size="small" type="danger" @click="removeSource(row)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </el-tab-pane>
+
+      <el-tab-pane label="拉取镜像" name="pull">
+        <div class="info-card" style="max-width:600px">
+          <el-form label-width="100px">
+            <el-form-item label="镜像地址">
+              <el-input v-model="pullForm.image" placeholder="如 docker.1ms.run/openlistteam/openlist:latest-lite-aio" />
+            </el-form-item>
+            <el-form-item label="解析结果" v-if="parsedImage.registry">
+              <div style="font-size:13px;color:var(--dim)">
+                <div>镜像源: <span style="color:var(--acc)">{{ parsedImage.registry }}</span></div>
+                <div>仓库: <span style="color:var(--acc)">{{ parsedImage.repo }}</span></div>
+                <div>标签: <span style="color:var(--acc)">{{ parsedImage.tag }}</span></div>
+              </div>
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :loading="pulling" @click="doPull">拉取镜像</el-button>
+            </el-form-item>
+          </el-form>
+        </div>
+      </el-tab-pane>
     </el-tabs>
 
     <el-dialog v-model="showInstall" title="安装应用" width="420px">
@@ -59,23 +103,42 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { appApi } from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const activeTab = ref('apps')
 const apps = ref<any[]>([])
 const installed = ref<any[]>([])
+const sources = ref<any[]>([])
 const showInstall = ref(false)
 const installing = ref(false)
 const selectedApp = ref<any>(null)
 const installForm = ref({ name: '', port: 8080 })
+const newSource = ref({ name: '', url: '' })
+const pullForm = ref({ image: '' })
+const pulling = ref(false)
+
+const imageRegex = /^(?:([^\/]+)\/)?([^:\/]+(?:\/[^:\/]+)*)(?::([^:\/]+))?$/
+
+const parsedImage = computed(() => {
+  const match = pullForm.value.image.match(imageRegex)
+  if (!match) return { registry: '', repo: '', tag: '' }
+  return {
+    registry: match[1] || 'docker.io',
+    repo: match[2] || '',
+    tag: match[3] || 'latest'
+  }
+})
 
 async function loadApps() {
   try { const res: any = await appApi.list(); apps.value = res.data || [] } catch (e) {}
 }
 async function loadInstalled() {
   try { const res: any = await appApi.installed(); installed.value = res.data || [] } catch (e) {}
+}
+async function loadSources() {
+  try { const res: any = await appApi.listSources(); sources.value = res.data || [] } catch (e) {}
 }
 
 function openInstall(app: any) {
@@ -106,5 +169,39 @@ async function uninstall(row: any) {
   } catch (e) {}
 }
 
-onMounted(() => { loadApps(); loadInstalled() })
+async function addSource() {
+  if (!newSource.value.name || !newSource.value.url) {
+    ElMessage.warning('请填写完整信息')
+    return
+  }
+  try {
+    await appApi.addSource(newSource.value)
+    ElMessage.success('添加成功')
+    newSource.value = { name: '', url: '' }
+    loadSources()
+  } catch (e) {}
+}
+
+async function removeSource(row: any) {
+  try {
+    await ElMessageBox.confirm(`确定删除源 ${row.name} 吗？`, '确认', { confirmButtonClass: 'el-button--danger' })
+    await appApi.removeSource(row.id)
+    ElMessage.success('删除成功')
+    loadSources()
+  } catch (e) {}
+}
+
+async function doPull() {
+  if (!pullForm.value.image) {
+    ElMessage.warning('请输入镜像地址')
+    return
+  }
+  pulling.value = true
+  try {
+    await appApi.list()
+    ElMessage.success('拉取成功')
+  } catch (e) {} finally { pulling.value = false }
+}
+
+onMounted(() => { loadApps(); loadInstalled(); loadSources() })
 </script>

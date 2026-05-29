@@ -15,6 +15,7 @@ import (
 type AppService struct {
 	appRepo    *repository.AppRepository
 	instRepo   *repository.AppInstallRepository
+	sourceRepo *repository.AppSourceRepository
 	ctnService *ContainerService
 }
 
@@ -22,6 +23,7 @@ func NewAppService() *AppService {
 	return &AppService{
 		appRepo:    repository.NewAppRepository(global.DB),
 		instRepo:   repository.NewAppInstallRepository(global.DB),
+		sourceRepo: repository.NewAppSourceRepository(global.DB),
 		ctnService: NewContainerService(),
 	}
 }
@@ -162,4 +164,21 @@ func (s *AppService) InitDefaultApps() error {
 		}
 	}
 	return nil
+}
+
+func (s *AppService) ListSources() ([]model.AppSource, error) {
+	return s.sourceRepo.List()
+}
+
+func (s *AppService) AddSource(name, url string) error {
+	source := &model.AppSource{
+		Name:    name,
+		URL:     url,
+		Enabled: true,
+	}
+	return s.sourceRepo.Create(source)
+}
+
+func (s *AppService) RemoveSource(id uint) error {
+	return s.sourceRepo.Delete(id)
 }

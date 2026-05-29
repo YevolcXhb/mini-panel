@@ -120,6 +120,13 @@ func (s *ContainerService) ListFiles(name, path string) ([]string, error) {
 	return names, nil
 }
 
+func (s *ContainerService) Pull(image, name string) error {
+	if s.client == nil {
+		return fmt.Errorf("dockroot not available")
+	}
+	return s.client.Pull(image, name)
+}
+
 func (s *ContainerService) IsAvailable() bool {
 	return s.client != nil
 }

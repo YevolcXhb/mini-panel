@@ -101,3 +101,19 @@ func (a *ContainerAPI) ListFiles(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: files})
 }
+
+func (a *ContainerAPI) Pull(c *gin.Context) {
+	var req struct {
+		Image string `json:"image" binding:"required"`
+		Name  string `json:"name"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: err.Error()})
+		return
+	}
+	if err := a.service.Pull(req.Image, req.Name); err != nil {
+		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "pulled"})
+}
