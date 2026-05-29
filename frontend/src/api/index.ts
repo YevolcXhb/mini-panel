@@ -77,13 +77,24 @@ export const containerApi = {
 }
 
 export const appApi = {
-  list: () => api.get('/apps'),
+  list: (category?: string) => api.get('/apps', { params: { category } }),
+  search: (q: string) => api.get('/apps/search', { params: { q } }),
+  detail: (id: number) => api.get(`/apps/${id}`),
   installed: () => api.get('/apps/installed'),
   install: (data: any) => api.post('/apps/install', data),
   uninstall: (id: number) => api.post(`/apps/${id}/uninstall`),
-  listSources: () => api.get('/apps/sources'),
+  sync: (source_id: number) => api.post('/apps/sync', { source_id }),
+  sources: () => api.get('/apps/sources'),
   addSource: (data: any) => api.post('/apps/sources', data),
   removeSource: (id: number) => api.delete(`/apps/sources/${id}`)
+}
+
+export const auditApi = {
+  list: (limit?: number) => api.get('/audit-logs', { params: { limit } })
+}
+
+export const authApiExt = {
+  changePassword: (data: any) => api.post('/auth/change-password', data)
 }
 
 export const cronjobApi = {

@@ -3,10 +3,13 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
+	"github.com/minipanel/minipanel/internal/global"
 	"github.com/minipanel/minipanel/internal/service"
 )
 
@@ -23,6 +26,25 @@ func NewTerminalAPI() *TerminalAPI {
 }
 
 func (a *TerminalAPI) HandleWS(c *gin.Context) {
+	auth := c.Query("token")
+	if auth == "" {
+		auth = c.GetHeader("Authorization")
+	}
+	if auth == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing token"})
+		c.Abort()
+		return
+	}
+	tokenStr := strings.TrimPrefix(auth, "Bearer ")
+	token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
+		return []byte(global.CONF.JwtSecret), nil
+	})
+	if err != nil || !token.Valid {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+		c.Abort()
+		return
+	}
+
 	id := c.Query("id")
 	if id == "" {
 		id = fmt.Sprintf("term_%d", c.Writer.Size())
@@ -46,7 +68,6 @@ func (a *TerminalAPI) HandleWS(c *gin.Context) {
 	}
 	defer sess.Close()
 
-	// Wait for session to end (writeLoop handles all reads)
 	for !sess.IsClosed() {
 		time.Sleep(100 * time.Millisecond)
 	}

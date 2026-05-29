@@ -67,10 +67,13 @@ func NewRouter() *gin.Engine {
 
 		app := api.NewAppAPI()
 		apiV1.GET("/apps", app.List)
+		apiV1.GET("/apps/search", app.Search)
+		apiV1.GET("/apps/:id", app.Detail)
 		apiV1.POST("/apps/install", app.Install)
 		apiV1.POST("/apps/:id/uninstall", app.Uninstall)
 		apiV1.GET("/apps/installed", app.Installed)
-		apiV1.GET("/apps/sources", app.ListSources)
+		apiV1.POST("/apps/sync", app.Sync)
+		apiV1.GET("/apps/sources", app.Sources)
 		apiV1.POST("/apps/sources", app.AddSource)
 		apiV1.DELETE("/apps/sources/:id", app.RemoveSource)
 
@@ -85,6 +88,11 @@ func NewRouter() *gin.Engine {
 		apiV1.GET("/settings", setting.Get)
 		apiV1.PUT("/settings", setting.Update)
 		apiV1.POST("/settings/reset", setting.Reset)
+
+		apiV1.POST("/auth/change-password", auth.ChangePassword)
+
+		audit := api.NewAuditAPI()
+		apiV1.GET("/audit-logs", audit.List)
 	}
 
 	return r

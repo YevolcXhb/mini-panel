@@ -31,11 +31,20 @@
               设置后需通过 http://面板地址:端口/[安全入口] 访问
             </div>
           </el-form-item>
+        </el-form>
+      </div>
+
+      <div class="info-card">
+        <h3 style="margin:0 0 16px 0;font-size:15px">修改密码</h3>
+        <el-form :model="pwdForm" label-width="100px">
           <el-form-item label="当前密码">
-            <el-input type="password" v-model="settings.current_password" placeholder="修改密码时填写" />
+            <el-input type="password" v-model="pwdForm.old_password" placeholder="当前密码" />
           </el-form-item>
           <el-form-item label="新密码">
-            <el-input type="password" v-model="settings.new_password" placeholder="留空则不修改" />
+            <el-input type="password" v-model="pwdForm.new_password" placeholder="至少6位" />
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" @click="changePassword">修改密码</el-button>
           </el-form-item>
         </el-form>
       </div>
@@ -111,10 +120,11 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { settingApi } from '../api'
+import { settingApi, authApiExt } from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const settings = ref<any>({})
+const pwdForm = ref({ old_password: '', new_password: '' })
 
 async function loadSettings() {
   try { const res: any = await settingApi.get(); settings.value = res.data || {} } catch (e) {}
@@ -131,6 +141,20 @@ async function saveSettings() {
     await settingApi.update(toSave)
     ElMessage.success('保存成功')
   } catch (e) {}
+}
+
+async function changePassword() {
+  if (!pwdForm.value.old_password || !pwdForm.value.new_password) {
+    ElMessage.warning('请填写完整')
+    return
+  }
+  try {
+    await authApiExt.changePassword(pwdForm.value)
+    ElMessage.success('密码修改成功')
+    pwdForm.value = { old_password: '', new_password: '' }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '修改失败')
+  }
 }
 
 async function resetSettings() {

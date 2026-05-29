@@ -24,3 +24,7 @@ func (r *UserRepository) GetByUsername(username string) (*model.User, error) {
 	}
 	return &user, nil
 }
+
+func (r *UserRepository) Update(user *model.User) error {
+	return r.db.Save(user).Error
+}

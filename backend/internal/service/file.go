@@ -27,8 +27,31 @@ func NewFileService() *FileService {
 	return &FileService{root: "/"}
 }
 
+func (s *FileService) resolvePath(path string) (string, error) {
+	cleaned := filepath.Clean(path)
+	if strings.Contains(cleaned, "..") {
+		return "", fmt.Errorf("invalid path")
+	}
+	fullPath := filepath.Join(s.root, cleaned)
+	absPath, err := filepath.Abs(fullPath)
+	if err != nil {
+		return "", fmt.Errorf("invalid path")
+	}
+	rootAbs, _ := filepath.Abs(s.root)
+	if !strings.HasPrefix(absPath, rootAbs) {
+		return "", fmt.Errorf("path traversal detected")
+	}
+	if s.isDangerousPath(absPath) {
+		return "", fmt.Errorf("access denied")
+	}
+	return absPath, nil
+}
+
 func (s *FileService) List(path string) ([]FileInfo, error) {
-	fullPath := filepath.Join(s.root, path)
+	fullPath, err := s.resolvePath(path)
+	if err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(fullPath)
 	if err != nil {
 		return nil, err
@@ -60,44 +83,48 @@ func (s *FileService) List(path string) ([]FileInfo, error) {
 }
 
 func (s *FileService) GetContent(path string) ([]byte, error) {
-	fullPath := filepath.Join(s.root, path)
-	if s.isDangerousPath(fullPath) {
-		return nil, fmt.Errorf("access denied")
+	fullPath, err := s.resolvePath(path)
+	if err != nil {
+		return nil, err
 	}
 	return os.ReadFile(fullPath)
 }
 
 func (s *FileService) Create(path string, isDir bool, content string) error {
-	fullPath := filepath.Join(s.root, path)
-	if s.isDangerousPath(fullPath) {
-		return fmt.Errorf("access denied")
+	fullPath, err := s.resolvePath(path)
+	if err != nil {
+		return err
 	}
 	if isDir {
 		return os.MkdirAll(fullPath, 0755)
+	}
+	dir := filepath.Dir(fullPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
 	}
 	return os.WriteFile(fullPath, []byte(content), 0644)
 }
 
 func (s *FileService) Update(path string, content string) error {
-	fullPath := filepath.Join(s.root, path)
-	if s.isDangerousPath(fullPath) {
-		return fmt.Errorf("access denied")
+	fullPath, err := s.resolvePath(path)
+	if err != nil {
+		return err
 	}
 	return os.WriteFile(fullPath, []byte(content), 0644)
 }
 
 func (s *FileService) Delete(path string) error {
-	fullPath := filepath.Join(s.root, path)
-	if s.isDangerousPath(fullPath) {
-		return fmt.Errorf("access denied")
+	fullPath, err := s.resolvePath(path)
+	if err != nil {
+		return err
 	}
 	return os.RemoveAll(fullPath)
 }
 
 func (s *FileService) Upload(path string, reader io.Reader) error {
-	fullPath := filepath.Join(s.root, path)
-	if s.isDangerousPath(fullPath) {
-		return fmt.Errorf("access denied")
+	fullPath, err := s.resolvePath(path)
+	if err != nil {
+		return err
 	}
 	f, err := os.Create(fullPath)
 	if err != nil {

@@ -55,25 +55,56 @@ func pullCmd(global *globalOptions) *cobra.Command {
 	return cmd
 }
 
+// splitImageRef 解析镜像引用，支持带端口的 registry
+// 格式: [docker://][registry_host[:port]/][namespace/]name[:tag|@digest]
+func splitImageRef(ref string) (name, tag string) {
+	ref = strings.TrimPrefix(ref, "docker://")
+
+	// 处理 digest
+	if at := strings.LastIndex(ref, "@"); at != -1 {
+		return ref[:at], ref[at+1:]
+	}
+
+	// 找最后一个 ':'，判断是否是 tag 分隔符（tag 中不含 '/'）
+	if colon := strings.LastIndex(ref, ":"); colon != -1 {
+		after := ref[colon+1:]
+		if !strings.Contains(after, "/") && after != "" {
+			return ref[:colon], after
+		}
+	}
+	return ref, "latest"
+}
+
 func (opts *pullOptions) run(args []string, stdout io.Writer) (retErr error) {
 	if len(args) != 2 {
 		return fmt.Errorf("Usage: %s pull IMAGE:TAG DESTINATION", os.Args[0])
 	}
-	arg0Arr := strings.Split(args[0], ":")
-	if len(arg0Arr) != 2 {
+
+	imageName, imageTag := splitImageRef(args[0])
+	if imageName == "" {
 		return fmt.Errorf("Invalid image format: %s", args[0])
 	}
-	imageTag := arg0Arr[1]
+
 	var imageURL string
-	if strings.HasPrefix(arg0Arr[0], "docker://") {
-		imageURL = arg0Arr[0]
+	if strings.HasPrefix(args[0], "docker://") {
+		imageURL = "docker://" + imageName
 	} else {
-		i := strings.Index(arg0Arr[0], "/")
-		if i > 0 && strings.Contains(arg0Arr[0], ".") {
-			imageURL = "docker://" + arg0Arr[0]
+		i := strings.Index(imageName, "/")
+		if i > 0 && strings.Contains(imageName, ".") {
+			imageURL = "docker://" + imageName
 		} else {
-			imageURL = fmt.Sprintf("docker://registry.linkease.net:5443/%s", args[0])
+			imageURL = fmt.Sprintf("docker://registry.linkease.net:5443/%s", imageName)
 		}
+	}
+
+	// 确保 imageURL 最后一个路径段包含 tag
+	lastSlash := strings.LastIndex(imageURL, "/")
+	lastPart := imageURL[lastSlash+1:]
+	if !strings.Contains(lastPart, ":") {
+		if imageTag == "" {
+			imageTag = "latest"
+		}
+		imageURL = imageURL + ":" + imageTag
 	}
 
 	binaryDir, err := getBinaryDir()

@@ -69,6 +69,10 @@ func readRegistryInfo(binaryDir string) (*RegistryInfo, error) {
 }
 
 func (c *Client) Pull(image, name string) error {
+	image = NormalizeImageRef(image)
+	if image == "" {
+		return fmt.Errorf("invalid image reference")
+	}
 	cmd := exec.Command(c.BinaryPath, "pull", image, name)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 
@@ -15,6 +17,12 @@ type Config struct {
 	JwtSecret string `mapstructure:"jwt_secret"`
 }
 
+func generateSecret() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
 func Load(path string) (*Config, error) {
 	viper.SetConfigFile(path)
 	viper.SetConfigType("yaml")
@@ -23,7 +31,6 @@ func Load(path string) (*Config, error) {
 	viper.SetDefault("log_level", "info")
 	viper.SetDefault("db_path", "./minipanel.db")
 	viper.SetDefault("data_dir", "./data")
-	viper.SetDefault("jwt_secret", "minipanel-secret-key")
 
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
@@ -36,9 +43,11 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
 
-	if cfg.JwtSecret == "" || cfg.JwtSecret == "minipanel-secret-key" {
+	if cfg.JwtSecret == "" {
 		if v := os.Getenv("MINIPANEL_JWT_SECRET"); v != "" {
 			cfg.JwtSecret = v
+		} else {
+			cfg.JwtSecret = generateSecret()
 		}
 	}
 

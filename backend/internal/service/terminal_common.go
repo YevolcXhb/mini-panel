@@ -7,8 +7,6 @@ import (
 	"os/exec"
 	"os/user"
 	"sync"
-	"syscall"
-	"unsafe"
 
 	"github.com/gorilla/websocket"
 )
@@ -37,78 +35,6 @@ func getHomeDir() string {
 		return u.HomeDir
 	}
 	return "/"
-}
-
-func NewTerminalSession(id string, conn *websocket.Conn, shell string) (*TerminalSession, error) {
-	if shell == "" {
-		shell = "/bin/bash"
-		if _, err := os.Stat(shell); err != nil {
-			shell = "/bin/sh"
-		}
-	}
-
-	// Try PTY first, fallback to direct exec if /dev/ptmx unavailable
-	if ptmx, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0); err == nil {
-		return newPTYSession(id, conn, shell, ptmx)
-	}
-	return newExecSession(id, conn, shell)
-}
-
-func newPTYSession(id string, conn *websocket.Conn, shell string, ptmx *os.File) (*TerminalSession, error) {
-	defer func() {
-		if ptmx != nil {
-			ptmx.Close()
-		}
-	}()
-
-	if err := unlockpt(ptmx); err != nil {
-		return nil, fmt.Errorf("unlockpt: %w", err)
-	}
-
-	ptsName, err := ptsname(ptmx)
-	if err != nil {
-		return nil, fmt.Errorf("ptsname: %w", err)
-	}
-
-	pts, err := os.OpenFile(ptsName, os.O_RDWR|syscall.O_NOCTTY, 0)
-	if err != nil {
-		return nil, fmt.Errorf("open pts: %w", err)
-	}
-	defer pts.Close()
-
-	cmd := exec.Command(shell)
-	cmd.Dir = getHomeDir()
-	cmd.Env = append(os.Environ(), "TERM=xterm")
-	cmd.Stdin = pts
-	cmd.Stdout = pts
-	cmd.Stderr = pts
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setsid:  true,
-		Setctty: true,
-	}
-
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start shell: %w", err)
-	}
-
-	ptmxFile := ptmx
-	ptmx = nil // prevent defer from closing
-
-	sess := &TerminalSession{
-		conn:   conn,
-		pty:    ptmxFile,
-		cmd:    cmd,
-		usePTY: true,
-	}
-
-	sessionsMu.Lock()
-	sessions[id] = sess
-	sessionsMu.Unlock()
-
-	go sess.readLoop()
-	go sess.writeLoop()
-
-	return sess, nil
 }
 
 func newExecSession(id string, conn *websocket.Conn, shell string) (*TerminalSession, error) {
@@ -231,22 +157,4 @@ func RemoveSession(id string) {
 		sess.Close()
 		delete(sessions, id)
 	}
-}
-
-func unlockpt(f *os.File) error {
-	var n uint32
-	_, _, err := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), syscall.TIOCSPTLCK, uintptr(unsafe.Pointer(&n)))
-	if err != 0 {
-		return err
-	}
-	return nil
-}
-
-func ptsname(f *os.File) (string, error) {
-	var n uint32
-	_, _, err := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), syscall.TIOCGPTN, uintptr(unsafe.Pointer(&n)))
-	if err != 0 {
-		return "", err
-	}
-	return fmt.Sprintf("/dev/pts/%d", n), nil
 }

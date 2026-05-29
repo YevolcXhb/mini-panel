@@ -20,9 +20,12 @@ func Migrate(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&model.User{},
 		&model.App{},
+		&model.AppDetail{},
 		&model.AppInstall{},
 		&model.AppSource{},
 		&model.Cronjob{},
 		&model.Setting{},
+		&model.LoginAttempt{},
+		&model.AuditLog{},
 	)
 }

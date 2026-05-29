@@ -61,6 +61,13 @@ func (s *ContainerService) Create(req dto.ContainerCreateRequest) error {
 	if s.client == nil {
 		return fmt.Errorf("dockroot not available")
 	}
+	// 自动命名：若用户未指定容器名，从镜像中提取
+	if strings.TrimSpace(req.Name) == "" {
+		req.Name = dockroot.ExtractContainerName(req.Image)
+		if req.Name == "" {
+			return fmt.Errorf("cannot extract container name from image %q", req.Image)
+		}
+	}
 	if err := s.client.Pull(req.Image, req.Name); err != nil {
 		return fmt.Errorf("pull image: %w", err)
 	}
