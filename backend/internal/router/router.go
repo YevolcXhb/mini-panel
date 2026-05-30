@@ -71,6 +71,7 @@ func NewRouter() *gin.Engine {
 		app := api.NewAppAPI()
 		apiV1.GET("/apps", app.List)
 		apiV1.GET("/apps/search", app.Search)
+		apiV1.GET("/apps/icon/:key", app.Icon)
 		apiV1.GET("/apps/:id", app.Detail)
 		apiV1.POST("/apps/install", app.Install)
 		apiV1.POST("/apps/:id/uninstall", app.Uninstall)

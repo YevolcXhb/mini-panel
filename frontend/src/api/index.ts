@@ -78,6 +78,7 @@ export const containerApi = {
 export const appApi = {
   list: (category?: string) => api.get('/apps', { params: { category } }),
   search: (q: string) => api.get('/apps/search', { params: { q } }),
+  icon: (key: string) => `${api.defaults.baseURL}/apps/icon/${key}`,
   detail: (id: number) => api.get(`/apps/${id}`),
   installed: () => api.get('/apps/installed'),
   install: (data: any) => api.post('/apps/install', data),

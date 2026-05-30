@@ -976,6 +976,14 @@ func (s *AppService) RemoveSource(id uint) error {
 	return s.sourceRepo.Delete(id)
 }
 
+func (s *AppService) GetIconURL(key string) (string, error) {
+	app, err := s.appRepo.GetByKey(key)
+	if err != nil {
+		return "", err
+	}
+	return app.Icon, nil
+}
+
 func flattenSingleSubdir(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil || len(entries) != 1 || !entries[0].IsDir() {

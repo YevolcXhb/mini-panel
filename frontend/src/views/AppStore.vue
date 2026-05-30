@@ -20,7 +20,8 @@
         <div class="info-grid" v-if="apps.length">
           <div class="info-card" v-for="app in apps" :key="app.id" style="display:flex;flex-direction:column;gap:10px">
             <div style="display:flex;align-items:center;gap:10px">
-              <el-icon size="32" color="#4f8cff"><Box /></el-icon>
+              <img v-if="app.icon" :src="appApi.icon(app.key)" :alt="app.name" @error="$event.target.style.display='none'" style="width:32px;height:32px;border-radius:6px;object-fit:cover" />
+              <el-icon v-else size="32" color="#4f8cff"><Box /></el-icon>
               <div style="flex:1">
                 <div style="font-weight:600;font-size:15px">{{ app.name }}</div>
                 <div style="font-size:12px;color:var(--dim)">{{ app.short_desc || app.description }}</div>
@@ -131,7 +132,8 @@
     <el-dialog v-model="showDetail" title="应用详情" width="520px">
       <div v-if="detailApp">
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-          <el-icon size="40" color="#4f8cff"><Box /></el-icon>
+          <img v-if="detailApp.icon" :src="appApi.icon(detailApp.key)" :alt="detailApp.name" @error="$event.target.style.display='none'" style="width:40px;height:40px;border-radius:8px;object-fit:cover" />
+          <el-icon v-else size="40" color="#4f8cff"><Box /></el-icon>
           <div>
             <div style="font-weight:700;font-size:18px">{{ detailApp.name }}</div>
             <div style="font-size:13px;color:var(--dim)">{{ detailApp.key }}</div>

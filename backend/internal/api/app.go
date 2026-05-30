@@ -1,12 +1,26 @@
 package api
 
 import (
+	"io"
 	"net/http"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/minipanel/minipanel/internal/dto"
 	"github.com/minipanel/minipanel/internal/service"
+)
+
+type iconCache struct {
+	data      []byte
+	etag      string
+	fetchedAt time.Time
+}
+
+var (
+	iconCacheMap = make(map[string]*iconCache)
+	iconCacheMu  sync.RWMutex
 )
 
 type AppAPI struct {
@@ -137,4 +151,70 @@ func (a *AppAPI) RemoveSource(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "removed"})
+}
+
+func (a *AppAPI) Icon(c *gin.Context) {
+	key := c.Param("key")
+	if key == "" {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+
+	iconURL, err := a.service.GetIconURL(key)
+	if err != nil || iconURL == "" {
+		c.Status(http.StatusNoContent)
+		return
+	}
+
+	iconCacheMu.RLock()
+	cached, ok := iconCacheMap[key]
+	iconCacheMu.RUnlock()
+
+	if ok && time.Since(cached.fetchedAt) < 24*time.Hour {
+		ifNoneMatch := c.GetHeader("If-None-Match")
+		if ifNoneMatch != "" && ifNoneMatch == cached.etag {
+			c.Status(http.StatusNotModified)
+			return
+		}
+		if cached.etag != "" {
+			c.Header("ETag", cached.etag)
+		}
+		c.Header("Cache-Control", "public, max-age=86400")
+		c.Data(http.StatusOK, "image/png", cached.data)
+		return
+	}
+
+	resp, err := http.Get(iconURL)
+	if err != nil {
+		c.Status(http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		c.Status(http.StatusBadGateway)
+		return
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil || len(data) == 0 {
+		c.Status(http.StatusBadGateway)
+		return
+	}
+
+	etag := resp.Header.Get("ETag")
+
+	iconCacheMu.Lock()
+	iconCacheMap[key] = &iconCache{
+		data:      data,
+		etag:      etag,
+		fetchedAt: time.Now(),
+	}
+	iconCacheMu.Unlock()
+
+	if etag != "" {
+		c.Header("ETag", etag)
+	}
+	c.Header("Cache-Control", "public, max-age=86400")
+	c.Data(http.StatusOK, "image/png", data)
 }
