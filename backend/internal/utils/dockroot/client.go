@@ -74,9 +74,11 @@ func (c *Client) Pull(image, name string) error {
 		return fmt.Errorf("invalid image reference")
 	}
 	cmd := exec.Command(c.BinaryPath, "pull", image, name)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("dockroot pull: %w, output: %s", err, string(output))
+	}
+	return nil
 }
 
 func (c *Client) Run(name string, detach bool, envs, volumes, ports []string) error {
@@ -84,7 +86,6 @@ func (c *Client) Run(name string, detach bool, envs, volumes, ports []string) er
 	if detach {
 		args = append(args, "-d")
 	}
-	// DockRoot requires --renew when specifying -v / -e / -p options
 	if len(volumes) > 0 || len(envs) > 0 || len(ports) > 0 {
 		args = append(args, "--renew")
 	}
@@ -99,9 +100,11 @@ func (c *Client) Run(name string, detach bool, envs, volumes, ports []string) er
 	}
 	args = append(args, name)
 	cmd := exec.Command(c.BinaryPath, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("dockroot run: %w, output: %s", err, string(output))
+	}
+	return nil
 }
 
 func (c *Client) Stop(name string) error {

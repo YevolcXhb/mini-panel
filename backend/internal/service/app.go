@@ -176,6 +176,12 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 		if err := yaml.Unmarshal(data, &compose); err == nil {
 			dotEnv := parseDotFile(filepath.Dir(composePath))
 			dataJSONImage := parseDataJSON(filepath.Dir(composePath))
+			scanEnv := scanAllEnvFiles(filepath.Dir(composePath))
+			for k, v := range scanEnv {
+				if _, exists := dotEnv[k]; !exists {
+					dotEnv[k] = v
+				}
+			}
 			for _, svc := range compose.Services {
 				if svc.Image != "" && strings.Contains(svc.Image, "$") {
 					varNames := extractVarNames(svc.Image)
@@ -187,7 +193,7 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 				}
 				break
 			}
-			global.LOG.Infof("[Install] env sources: dotEnv=%d, dataJSON=%s", len(dotEnv), dataJSONImage)
+			global.LOG.Infof("[Install] env sources: dotEnv=%d, dataJSON=%s, scanEnv=%d", len(dotEnv), dataJSONImage, len(scanEnv))
 			for _, svc := range compose.Services {
 				if svc.Image != "" {
 					image = resolveEnvVars(svc.Image, dotEnv)
@@ -620,6 +626,16 @@ func (s *AppService) extractImageFrom1Panel(downloadURL string) string {
 		return dataImage
 	}
 
+	// Scan all files in tar.gz for env-like content
+	allEnv := extractAllEnvFromTarGz(tmpPath)
+	if len(allEnv) > 0 && image != "" {
+		image = resolveEnvVars(image, allEnv)
+		if !strings.Contains(image, "$") {
+			global.LOG.Infof("[Sync] resolved image from scanned env: %s", image)
+			return image
+		}
+	}
+
 	if image != "" && strings.Contains(image, "$") {
 		global.LOG.Warnf("[Sync] image still contains variable: %s, using as-is", image)
 		return image
@@ -822,6 +838,64 @@ func extractEnvFromTarGz(path string) map[string]string {
 	return nil
 }
 
+func extractAllEnvFromTarGz(path string) map[string]string {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	gr, err := gzip.NewReader(f)
+	if err != nil {
+		return nil
+	}
+	defer gr.Close()
+
+	envMap := make(map[string]string)
+	tr := tar.NewReader(gr)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			break
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		name := strings.ToLower(filepath.Base(hdr.Name))
+		if name == "docker-compose.yml" || name == "docker-compose.yaml" || name == "readme.md" || name == "readme.txt" {
+			continue
+		}
+		data, err := io.ReadAll(tr)
+		if err != nil {
+			continue
+		}
+		content := string(data)
+		if !strings.Contains(content, "=") {
+			continue
+		}
+		for _, line := range strings.Split(content, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") || strings.HasPrefix(line, "{") || strings.HasPrefix(line, "}") || strings.HasPrefix(line, " ") {
+				continue
+			}
+			idx := strings.Index(line, "=")
+			if idx < 0 || idx == 0 {
+				continue
+			}
+			key := strings.TrimSpace(line[:idx])
+			val := strings.TrimSpace(line[idx+1:])
+			val = strings.Trim(val, `"'`)
+			if key != "" && val != "" && !strings.Contains(key, " ") {
+				envMap[key] = val
+			}
+		}
+	}
+	return envMap
+}
+
 func parseEnvFile(content string) map[string]string {
 	env := make(map[string]string)
 	for _, line := range strings.Split(content, "\n") {
@@ -989,6 +1063,52 @@ func parseDataJSON(dir string) string {
 		}
 	}
 	return ""
+}
+
+func scanAllEnvFiles(dir string) map[string]string {
+	envMap := make(map[string]string)
+	skipFiles := map[string]bool{
+		"docker-compose.yml": true, "docker-compose.yaml": true,
+		"readme.md": true, "readme.txt": true, "data.json": true,
+	}
+	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		name := strings.ToLower(info.Name())
+		if skipFiles[name] {
+			return nil
+		}
+		if info.Size() > 1024*1024 {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		content := string(data)
+		if !strings.Contains(content, "=") {
+			return nil
+		}
+		for _, line := range strings.Split(content, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") || strings.HasPrefix(line, "{") || strings.HasPrefix(line, "}") {
+				continue
+			}
+			idx := strings.Index(line, "=")
+			if idx < 0 || idx == 0 {
+				continue
+			}
+			key := strings.TrimSpace(line[:idx])
+			val := strings.TrimSpace(line[idx+1:])
+			val = strings.Trim(val, `"'`)
+			if key != "" && val != "" && !strings.Contains(key, " ") && len(key) < 64 {
+				envMap[key] = val
+			}
+		}
+		return nil
+	})
+	return envMap
 }
 
 // extractHostPort 从 compose ports 中提取可用端口。
