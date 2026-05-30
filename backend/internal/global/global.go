@@ -61,6 +61,15 @@ func MigrateDB() error {
 	return repository.Migrate(DB)
 }
 
+func CloseDB() {
+	if DB != nil {
+		sqlDB, err := DB.DB()
+		if err == nil {
+			sqlDB.Close()
+		}
+	}
+}
+
 func InitCron() error {
 	Cron = cron.New()
 	Cron.Start()

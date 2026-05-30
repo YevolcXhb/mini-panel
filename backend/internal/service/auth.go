@@ -114,3 +114,16 @@ func (s *AuthService) InitAdmin(username, password string) error {
 		Role:     "admin",
 	})
 }
+
+func (s *AuthService) ResetPassword(username, newPassword string) error {
+	user, err := s.userRepo.GetByUsername(username)
+	if err != nil {
+		return fmt.Errorf("user not found")
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	user.Password = string(hash)
+	return s.userRepo.Update(user)
+}
