@@ -170,9 +170,9 @@
     </el-dialog>
 
     <el-dialog v-model="showInstallProgress" title="正在安装" width="420px" :close-on-click-modal="false" :close-on-press-escape="false" :show-close="false">
-      <div style="text-align:center;padding:16px 0">
-        <el-progress :percentage="100" :indeterminate="true" :duration="2" :stroke-width="8" style="margin-bottom:16px" />
-        <p style="font-size:14px;color:var(--dim)">{{ installProgressText }}</p>
+      <div class="install-progress-box">
+        <el-progress :percentage="100" :indeterminate="true" :duration="2" :stroke-width="12" :color="['#409eff', '#67c23a']" style="margin-bottom:20px" />
+        <p class="install-progress-text">{{ installProgressText }}</p>
       </div>
     </el-dialog>
   </div>
@@ -362,3 +362,15 @@ async function doPull() {
 
 onMounted(() => { loadApps(); loadInstalled(); loadSources() })
 </script>
+
+<style scoped>
+.install-progress-box {
+  text-align: center;
+  padding: 24px 16px;
+}
+.install-progress-text {
+  font-size: 14px;
+  color: var(--el-text-color-regular);
+  margin-top: 8px;
+}
+</style>

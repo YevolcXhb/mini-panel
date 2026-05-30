@@ -95,9 +95,9 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 		}
 	}
 
-	// lazy extract image if empty
-	if detail != nil && detail.Image == "" && detail.DownloadURL != "" {
-		global.LOG.Infof("[Install] detail image empty, extracting from %s", detail.DownloadURL)
+	// lazy extract/resolve image if empty or contains variables
+	if detail != nil && detail.DownloadURL != "" && (detail.Image == "" || strings.Contains(detail.Image, "$")) {
+		global.LOG.Infof("[Install] detail image empty or contains vars, extracting from %s", detail.DownloadURL)
 		detail.Image = s.extractImageFrom1Panel(detail.DownloadURL)
 		if detail.Image != "" {
 			_ = s.detailRepo.Update(detail)
@@ -125,16 +125,32 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 		Port:        req.Port,
 		Path:        filepath.Join(global.GetDataDir(), "apps", req.Name),
 	}
-	if err := s.instRepo.Create(inst); err != nil {
-		global.LOG.Errorf("[Install] create install record failed: %v", err)
-		return nil, err
+
+	existing, _ := s.instRepo.GetByName(req.Name)
+	if existing != nil {
+		if existing.Status == "running" {
+			return nil, fmt.Errorf("应用 %s 已存在且正在运行，请更换实例名称", req.Name)
+		}
+		global.LOG.Infof("[Install] found existing install record id=%d status=%s, reusing", existing.ID, existing.Status)
+		inst.ID = existing.ID
+		inst.CreatedAt = existing.CreatedAt
+		if err := s.instRepo.Update(inst); err != nil {
+			global.LOG.Errorf("[Install] update existing install record failed: %v", err)
+			return nil, err
+		}
+	} else {
+		if err := s.instRepo.Create(inst); err != nil {
+			global.LOG.Errorf("[Install] create install record failed: %v", err)
+			return nil, err
+		}
+		global.LOG.Infof("[Install] install record created id=%d path=%s", inst.ID, inst.Path)
 	}
-	global.LOG.Infof("[Install] install record created id=%d path=%s", inst.ID, inst.Path)
 
 	// ========== 解析 docker-compose.yml ==========
 	var composeEnvs []string
 	var composeVolumes []string
 	var exposedPort int
+	var containerPort int
 
 	composePath := filepath.Join(inst.Path, "docker-compose.yml")
 	if detail != nil && detail.DownloadURL != "" {
@@ -160,6 +176,7 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 				}
 				if len(svc.Ports) > 0 {
 					exposedPort = extractHostPort(svc.Ports)
+					containerPort = extractContainerPort(svc.Ports)
 				}
 				switch env := svc.Environment.(type) {
 				case map[string]interface{}:
@@ -260,8 +277,12 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 		}
 		global.LOG.Infof("[Install] pull image success")
 
-		global.LOG.Infof("[Install] running container %s ...", req.Name)
-		if err := s.ctnService.client.Run(req.Name, true, envs, volumes); err != nil {
+		var ports []string
+		if inst.Port > 0 && containerPort > 0 {
+			ports = append(ports, fmt.Sprintf("%d:%d", inst.Port, containerPort))
+		}
+		global.LOG.Infof("[Install] running container %s ports=%v ...", req.Name, ports)
+		if err := s.ctnService.client.Run(req.Name, true, envs, volumes, ports); err != nil {
 			global.LOG.Errorf("[Install] run container failed: %v", err)
 			inst.Status = "failed"
 			inst.Message = err.Error()
@@ -554,6 +575,8 @@ func (s *AppService) extractImageFrom1Panel(downloadURL string) string {
 
 	// Try zip first
 	image := extractImageFromZip(tmpPath)
+	envMap := extractEnvFromZip(tmpPath)
+	image = resolveEnvVars(image, envMap)
 	if image != "" {
 		global.LOG.Infof("[Sync] extracted image from zip: %s", image)
 		return image
@@ -561,6 +584,8 @@ func (s *AppService) extractImageFrom1Panel(downloadURL string) string {
 
 	// Try tar.gz
 	image = extractImageFromTarGz(tmpPath)
+	envMap = extractEnvFromTarGz(tmpPath)
+	image = resolveEnvVars(image, envMap)
 	if image != "" {
 		global.LOG.Infof("[Sync] extracted image from tar.gz: %s", image)
 		return image
@@ -653,6 +678,95 @@ func extractImageFromTarGz(path string) string {
 	return ""
 }
 
+func extractEnvFromZip(path string) map[string]string {
+	zr, err := zip.OpenReader(path)
+	if err != nil {
+		return nil
+	}
+	defer zr.Close()
+
+	for _, file := range zr.File {
+		if filepath.Base(file.Name) != ".env" {
+			continue
+		}
+		rc, err := file.Open()
+		if err != nil {
+			continue
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			continue
+		}
+		return parseEnvFile(string(data))
+	}
+	return nil
+}
+
+func extractEnvFromTarGz(path string) map[string]string {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	gr, err := gzip.NewReader(f)
+	if err != nil {
+		return nil
+	}
+	defer gr.Close()
+
+	tr := tar.NewReader(gr)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil
+		}
+		if filepath.Base(hdr.Name) != ".env" {
+			continue
+		}
+		data, err := io.ReadAll(tr)
+		if err != nil {
+			continue
+		}
+		return parseEnvFile(string(data))
+	}
+	return nil
+}
+
+func parseEnvFile(content string) map[string]string {
+	env := make(map[string]string)
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		idx := strings.Index(line, "=")
+		if idx < 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:idx])
+		val := strings.TrimSpace(line[idx+1:])
+		val = strings.Trim(val, `"'`)
+		env[key] = val
+	}
+	return env
+}
+
+func resolveEnvVars(s string, env map[string]string) string {
+	if env == nil {
+		return s
+	}
+	for k, v := range env {
+		s = strings.ReplaceAll(s, "${"+k+"}", v)
+		s = strings.ReplaceAll(s, "$"+k, v)
+	}
+	return s
+}
+
 func (s *AppService) InitDefaultApps() error {
 	return nil
 }
@@ -684,6 +798,21 @@ func (s *AppService) RemoveSource(id uint) error {
 	return s.sourceRepo.Delete(id)
 }
 
+func flattenSingleSubdir(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 || !entries[0].IsDir() {
+		return
+	}
+	subDir := filepath.Join(dir, entries[0].Name())
+	files, _ := os.ReadDir(subDir)
+	for _, f := range files {
+		oldPath := filepath.Join(subDir, f.Name())
+		newPath := filepath.Join(dir, f.Name())
+		os.Rename(oldPath, newPath)
+	}
+	os.Remove(subDir)
+}
+
 // extractHostPort 从 compose ports 中提取可用端口。
 // 优先返回主机端口（如 "8080:80" 返回 8080）；
 // 若主机端口是变量（如 "${VAR}:3306"），则返回容器端口（3306）作为兜底。
@@ -705,6 +834,27 @@ func extractHostPort(ports []string) int {
 		if port, err := strconv.Atoi(hostClean); err == nil {
 			return port
 		}
+		if port, err := strconv.Atoi(containerPart); err == nil {
+			return port
+		}
+	}
+	return 0
+}
+
+// extractContainerPort 从 compose ports 中提取容器端口（如 "8080:80" 返回 80）。
+func extractContainerPort(ports []string) int {
+	for _, p := range ports {
+		p = strings.TrimSpace(p)
+		idx := strings.LastIndex(p, ":")
+		if idx < 0 {
+			if port, err := strconv.Atoi(p); err == nil {
+				return port
+			}
+			continue
+		}
+		containerPart := strings.TrimSpace(p[idx+1:])
+		containerPart = strings.TrimPrefix(strings.TrimPrefix(containerPart, "$"), "{")
+		containerPart = strings.TrimSuffix(containerPart, "}")
 		if port, err := strconv.Atoi(containerPart); err == nil {
 			return port
 		}
@@ -740,6 +890,7 @@ func downloadAppPackage(url, destDir string) error {
 
 	// Try zip first
 	if err := extractZip(tmpPath, destDir); err == nil {
+		flattenSingleSubdir(destDir)
 		global.LOG.Infof("[Install] extracted zip package")
 		return nil
 	}
@@ -747,6 +898,7 @@ func downloadAppPackage(url, destDir string) error {
 
 	// Try tar.gz
 	if err := extractTarGz(tmpPath, destDir); err == nil {
+		flattenSingleSubdir(destDir)
 		global.LOG.Infof("[Install] extracted tar.gz package")
 		return nil
 	}

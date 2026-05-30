@@ -79,14 +79,17 @@ func (c *Client) Pull(image, name string) error {
 	return cmd.Run()
 }
 
-func (c *Client) Run(name string, detach bool, envs, volumes []string) error {
+func (c *Client) Run(name string, detach bool, envs, volumes, ports []string) error {
 	args := []string{"run"}
 	if detach {
 		args = append(args, "-d")
 	}
-	// DockRoot requires --renew when specifying -v / -e options
-	if len(volumes) > 0 || len(envs) > 0 {
+	// DockRoot requires --renew when specifying -v / -e / -p options
+	if len(volumes) > 0 || len(envs) > 0 || len(ports) > 0 {
 		args = append(args, "--renew")
+	}
+	for _, p := range ports {
+		args = append(args, "-p", p)
 	}
 	for _, v := range volumes {
 		args = append(args, "-v", v)

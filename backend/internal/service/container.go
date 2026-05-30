@@ -74,7 +74,7 @@ func (s *ContainerService) Create(req dto.ContainerCreateRequest) error {
 	if req.Command != "" {
 		return fmt.Errorf("custom command not supported in dockroot mode")
 	}
-	return s.client.Run(req.Name, req.Detach, req.Env, req.Volumes)
+	return s.client.Run(req.Name, req.Detach, req.Env, req.Volumes, nil)
 }
 
 func (s *ContainerService) Start(name string) error {
@@ -88,7 +88,7 @@ func (s *ContainerService) Start(name string) error {
 	if st.Status == "running" {
 		return fmt.Errorf("container already running")
 	}
-	return s.client.Run(name, true, nil, nil)
+	return s.client.Run(name, true, nil, nil, nil)
 }
 
 func (s *ContainerService) Stop(name string) error {
