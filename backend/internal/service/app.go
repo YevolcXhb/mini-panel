@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -67,7 +68,7 @@ func (s *AppService) Installed() ([]model.AppInstall, error) {
 }
 
 func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, error) {
-	global.LOG.Infof("[Install] start install app_id=%d detail_id=%d name=%s port=%d", req.AppID, req.AppDetailID, req.Name, req.Port)
+	global.LOG.Infof("[Install] start install app_id=%d detail_id=%d name=%s", req.AppID, req.AppDetailID, req.Name)
 	defer global.LOG.Infof("[Install] finish install name=%s", req.Name)
 
 	app, err := s.appRepo.GetByID(req.AppID)
@@ -122,7 +123,6 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 		Image:       image,
 		Version:     version,
 		Container:   req.Name,
-		Port:        req.Port,
 		Path:        filepath.Join(global.GetDataDir(), "apps", req.Name),
 	}
 
@@ -149,7 +149,7 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 	// ========== 解析 docker-compose.yml ==========
 	var composeEnvs []string
 	var composeVolumes []string
-	var exposedPort int
+	var containerPort int
 
 	composePath := filepath.Join(inst.Path, "docker-compose.yml")
 	if detail != nil && detail.DownloadURL != "" {
@@ -201,8 +201,8 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 					}
 					inst.Image = image
 				}
-				if len(svc.Ports) > 0 {
-					exposedPort = extractHostPort(svc.Ports)
+				if containerPort == 0 {
+					containerPort = extractContainerPort(svc.Ports)
 				}
 				switch env := svc.Environment.(type) {
 				case map[string]interface{}:
@@ -220,7 +220,7 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 				}
 				break
 			}
-			global.LOG.Infof("[Install] compose parsed image=%s port=%d envs=%d volumes=%d", image, exposedPort, len(composeEnvs), len(composeVolumes))
+			global.LOG.Infof("[Install] compose parsed image=%s envs=%d volumes=%d", image, len(composeEnvs), len(composeVolumes))
 		} else {
 			global.LOG.Warnf("[Install] unmarshal compose failed: %v", err)
 		}
@@ -228,11 +228,8 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 		global.LOG.Infof("[Install] no docker-compose.yml found at %s", composePath)
 	}
 
-	// 端口优先级：用户指定 > compose 提取 > detail 默认值
-	if req.Port > 0 {
-		inst.Port = req.Port
-	} else if exposedPort > 0 {
-		inst.Port = exposedPort
+	if containerPort > 0 {
+		inst.Port = containerPort
 	}
 
 	var envs []string
@@ -262,9 +259,6 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 	for k, v := range envSet {
 		envs = append(envs, fmt.Sprintf("%s=%s", k, v))
 	}
-	if inst.Port > 0 {
-		envs = append(envs, fmt.Sprintf("PORT=%d", inst.Port))
-	}
 
 	var volumes []string
 	volumes = append(volumes, composeVolumes...)
@@ -290,7 +284,7 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 		global.LOG.Infof("[Install] user volumes count=%d", len(req.Volumes))
 	}
 
-	global.LOG.Infof("[Install] final params image=%s container=%s port=%d envs=%d volumes=%d", image, req.Name, req.Port, len(envs), len(volumes))
+	global.LOG.Infof("[Install] final params image=%s container=%s envs=%d volumes=%d", image, req.Name, len(envs), len(volumes))
 
 	if strings.Contains(image, "$") {
 		global.LOG.Errorf("[Install] image contains unresolved variables: %s", image)
@@ -312,7 +306,7 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 		global.LOG.Infof("[Install] pull image success")
 
 		global.LOG.Infof("[Install] running container %s ...", req.Name)
-		if err := s.ctnService.client.Run(req.Name, true, envs, volumes, nil); err != nil {
+		if err := s.ctnService.client.Run(req.Name, true, envs, volumes); err != nil {
 			global.LOG.Errorf("[Install] run container failed: %v", err)
 			inst.Status = "failed"
 			inst.Message = err.Error()
@@ -638,6 +632,13 @@ func (s *AppService) extractImageFrom1Panel(downloadURL string) string {
 		}
 	}
 
+	// Try extracting XXX_IMAGE= from init.sh / upgrade.sh
+	scriptImage := extractImageFromScripts(tmpPath)
+	if scriptImage != "" {
+		global.LOG.Infof("[Sync] extracted image from init script: %s", scriptImage)
+		return scriptImage
+	}
+
 	if image != "" && strings.Contains(image, "$") {
 		global.LOG.Warnf("[Sync] image contains unresolved variables: %s", image)
 		return ""
@@ -923,7 +924,8 @@ func resolveEnvVars(s string, env map[string]string) string {
 	}
 	for k, v := range env {
 		s = strings.ReplaceAll(s, "${"+k+"}", v)
-		s = strings.ReplaceAll(s, "$"+k, v)
+		re := regexp.MustCompile(`\$` + regexp.QuoteMeta(k) + `\b`)
+		s = re.ReplaceAllString(s, v)
 	}
 	return s
 }
@@ -1113,32 +1115,63 @@ func scanAllEnvFiles(dir string) map[string]string {
 	return envMap
 }
 
-// extractHostPort 从 compose ports 中提取可用端口。
-// 优先返回主机端口（如 "8080:80" 返回 8080）；
-// 若主机端口是变量（如 "${VAR}:3306"），则返回容器端口（3306）作为兜底。
-func extractHostPort(ports []string) int {
+func extractContainerPort(ports []string) int {
 	for _, p := range ports {
 		p = strings.TrimSpace(p)
 		idx := strings.LastIndex(p, ":")
 		if idx < 0 {
-			if port, err := strconv.Atoi(p); err == nil {
+			if port, err := strconv.Atoi(strings.TrimSpace(p)); err == nil {
 				return port
 			}
 			continue
 		}
-		hostPart := strings.TrimSpace(p[:idx])
-		containerPart := strings.TrimSpace(p[idx+1:])
-
-		hostClean := strings.TrimPrefix(strings.TrimPrefix(hostPart, "$"), "{")
-		hostClean = strings.TrimSuffix(hostClean, "}")
-		if port, err := strconv.Atoi(hostClean); err == nil {
-			return port
-		}
-		if port, err := strconv.Atoi(containerPart); err == nil {
+		right := strings.TrimSpace(p[idx+1:])
+		right = strings.Trim(right, "\"'")
+		if port, err := strconv.Atoi(right); err == nil {
 			return port
 		}
 	}
 	return 0
+}
+
+func extractImageFromScripts(tarGzPath string) string {
+	f, err := os.Open(tarGzPath)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	gzr, err := gzip.NewReader(f)
+	if err != nil {
+		return ""
+	}
+	defer gzr.Close()
+	tr := tar.NewReader(gzr)
+	for {
+		hdr, err := tr.Next()
+		if err != nil {
+			break
+		}
+		name := hdr.Name
+		base := filepath.Base(name)
+		if base != "init.sh" && base != "upgrade.sh" {
+			continue
+		}
+		data, err := io.ReadAll(tr)
+		if err != nil {
+			continue
+		}
+		content := string(data)
+		re := regexp.MustCompile(`(?m)^([A-Z_]+_IMAGE)=(.+)`)
+		matches := re.FindStringSubmatch(content)
+		if len(matches) >= 3 {
+			val := strings.TrimSpace(matches[2])
+			val = strings.Trim(val, "\"'")
+			if val != "" && !strings.Contains(val, "$") {
+				return val
+			}
+		}
+	}
+	return ""
 }
 
 // downloadAppPackage 下载 1Panel 版本包并解压到目标目录

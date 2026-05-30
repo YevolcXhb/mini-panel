@@ -73,6 +73,9 @@ func (c *Client) Pull(image, name string) error {
 	if image == "" {
 		return fmt.Errorf("invalid image reference")
 	}
+	if !strings.HasPrefix(image, "docker://") && !isExternalRegistry(image) {
+		image = "docker://docker.io/" + image
+	}
 	cmd := exec.Command(c.BinaryPath, "pull", image, name)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -81,7 +84,17 @@ func (c *Client) Pull(image, name string) error {
 	return nil
 }
 
-func (c *Client) Run(name string, detach bool, envs, volumes, ports []string) error {
+func isExternalRegistry(image string) bool {
+	ref := strings.TrimPrefix(image, "docker://")
+	slashIdx := strings.Index(ref, "/")
+	if slashIdx <= 0 {
+		return false
+	}
+	firstSegment := ref[:slashIdx]
+	return strings.Contains(firstSegment, ".") || strings.Contains(firstSegment, ":")
+}
+
+func (c *Client) Run(name string, detach bool, envs, volumes []string) error {
 	args := []string{"run"}
 	if detach {
 		args = append(args, "-d")

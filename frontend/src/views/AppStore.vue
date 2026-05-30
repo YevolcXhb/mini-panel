@@ -115,7 +115,6 @@
           </el-select>
         </el-form-item>
         <el-form-item label="实例名称"><el-input v-model="installForm.name" placeholder="如 nginx001" /></el-form-item>
-        <el-form-item label="端口"><el-input-number v-model="installForm.port" :min="1" :max="65535" style="width:100%" /></el-form-item>
         <el-form-item label="环境变量" v-if="envKeys.length">
           <div v-for="(k, idx) in envKeys" :key="idx" style="display:flex;gap:8px;margin-bottom:8px">
             <el-input :model-value="k" disabled style="width:120px" />
@@ -199,7 +198,7 @@ const syncing = ref(false)
 const selectedApp = ref<any>(null)
 const detailApp = ref<any>(null)
 const appDetails = ref<any[]>([])
-const installForm = ref<any>({ name: '', port: 8080, app_detail_id: undefined, env: {} })
+const installForm = ref<any>({ name: '', app_detail_id: undefined, env: {} })
 const newSource = ref({ name: '', url: '' })
 const pullForm = ref({ image: '' })
 const pulling = ref(false)
@@ -247,7 +246,7 @@ async function loadSources() {
 
 async function openInstall(app: any) {
   selectedApp.value = app
-  installForm.value = { name: app.key + '001', port: 8080, app_detail_id: undefined, env: {} }
+  installForm.value = { name: app.key + '001', app_detail_id: undefined, env: {} }
   try {
     const res: any = await appApi.detail(app.id)
     appDetails.value = res.data?.details || []
@@ -277,7 +276,6 @@ async function doInstall() {
       app_id: selectedApp.value.id,
       app_detail_id: installForm.value.app_detail_id,
       name: installForm.value.name,
-      port: installForm.value.port,
       env: installForm.value.env
     })
     ElMessage.success('安装成功')

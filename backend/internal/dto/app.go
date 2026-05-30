@@ -4,7 +4,6 @@ type AppInstallRequest struct {
 	AppID       uint              `json:"app_id" binding:"required"`
 	AppDetailID uint              `json:"app_detail_id"`
 	Name        string            `json:"name" binding:"required"`
-	Port        int               `json:"port"`
 	Env         map[string]string `json:"env"`
 	Volumes     map[string]string `json:"volumes"`
 }

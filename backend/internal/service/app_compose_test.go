@@ -1,6 +1,9 @@
 package service
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,40 +69,36 @@ type composeFile struct {
 
 func TestParseDockerComposeYAML(t *testing.T) {
 	tests := []struct {
-		name          string
-		yaml          string
-		wantImage     string
-		wantPorts     []string
-		wantVolumes   []string
-		wantEnvKeys   []string
-		wantFirstPort int
+		name        string
+		yaml        string
+		wantImage   string
+		wantPorts   []string
+		wantVolumes []string
+		wantEnvKeys []string
 	}{
 		{
-			name:          "mysql-compose",
-			yaml:          dockerComposeYaml,
-			wantImage:     "mysql:8.0.33",
-			wantPorts:     []string{"${PANEL_APP_PORT_HTTP}:3306"},
-			wantVolumes:   []string{"./data:/var/lib/mysql", "./conf/my.cnf:/etc/mysql/my.cnf"},
-			wantEnvKeys:   []string{"MYSQL_ROOT_PASSWORD", "MYSQL_DATABASE"},
-			wantFirstPort: 3306,
+			name:        "mysql-compose",
+			yaml:        dockerComposeYaml,
+			wantImage:   "mysql:8.0.33",
+			wantPorts:   []string{"${PANEL_APP_PORT_HTTP}:3306"},
+			wantVolumes: []string{"./data:/var/lib/mysql", "./conf/my.cnf:/etc/mysql/my.cnf"},
+			wantEnvKeys: []string{"MYSQL_ROOT_PASSWORD", "MYSQL_DATABASE"},
 		},
 		{
-			name:          "nginx-compose",
-			yaml:          dockerComposeSimple,
-			wantImage:     "nginx:1.27-alpine",
-			wantPorts:     []string{"80:80", "443:443"},
-			wantVolumes:   []string{"./html:/usr/share/nginx/html"},
-			wantEnvKeys:   nil,
-			wantFirstPort: 80,
+			name:        "nginx-compose",
+			yaml:        dockerComposeSimple,
+			wantImage:   "nginx:1.27-alpine",
+			wantPorts:   []string{"80:80", "443:443"},
+			wantVolumes: []string{"./html:/usr/share/nginx/html"},
+			wantEnvKeys: nil,
 		},
 		{
-			name:          "redis-no-ports",
-			yaml:          dockerComposeNoPorts,
-			wantImage:     "redis:7-alpine",
-			wantPorts:     nil,
-			wantVolumes:   []string{"./data:/data"},
-			wantEnvKeys:   nil,
-			wantFirstPort: 0,
+			name:        "redis-no-ports",
+			yaml:        dockerComposeNoPorts,
+			wantImage:   "redis:7-alpine",
+			wantPorts:   nil,
+			wantVolumes: []string{"./data:/data"},
+			wantEnvKeys: nil,
 		},
 	}
 
@@ -153,34 +152,7 @@ func TestParseDockerComposeYAML(t *testing.T) {
 			if len(gotEnvKeys) != len(tt.wantEnvKeys) {
 				t.Errorf("env keys count = %d, want %d", len(gotEnvKeys), len(tt.wantEnvKeys))
 			}
-
-			// 验证端口提取逻辑（提取主机端口）
-			firstPort := extractHostPort(svc.Ports)
-			if firstPort != tt.wantFirstPort {
-				t.Errorf("extractHostPort = %d, want %d", firstPort, tt.wantFirstPort)
-			}
 		})
-	}
-}
-
-func TestExtractHostPortEdgeCases(t *testing.T) {
-	tests := []struct {
-		input string
-		want  int
-	}{
-		{"8080:80", 8080},
-		{"${PANEL_APP_PORT_HTTP}:3306", 3306}, // 变量情况下返回容器端口兜底
-		{"80:80", 80},
-		{"3306", 3306}, // 无冒号时直接解析为端口
-		{"", 0},        // 空字符串
-		{"abc:80", 80}, // 主机端口非法，回退到容器端口
-		{"abc:def", 0}, // 两边都非法
-	}
-	for _, tt := range tests {
-		got := extractHostPort([]string{tt.input})
-		if got != tt.want {
-			t.Errorf("extractHostPort(%q) = %d, want %d", tt.input, got, tt.want)
-		}
 	}
 }
 
@@ -440,4 +412,90 @@ func TestFullResolveFlow(t *testing.T) {
 		t.Errorf("full resolve flow: got image %q, want %q", finalImage, "xiaoyaliu/alist:latest")
 	}
 	t.Logf("resolved image: %s", finalImage)
+}
+
+func TestExtractImageFromScripts(t *testing.T) {
+	tests := []struct {
+		name      string
+		content   string
+		wantImage string
+	}{
+		{
+			name: "openlist init.sh",
+			content: `#!/bin/bash
+OPENLIST_IMAGE=openlistteam/openlist:v4.2.2
+if [ -n "$PRE_INSTALLED" ]; then
+  OPENLIST_IMAGE=$OPENLIST_IMAGE-$PRE_INSTALLED
+fi
+echo "OPENLIST_IMAGE=${OPENLIST_IMAGE}"`,
+			wantImage: "openlistteam/openlist:v4.2.2",
+		},
+		{
+			name: "nginx init.sh",
+			content: `#!/bin/bash
+NGINX_IMAGE=nginx:1.27-alpine
+echo "done"`,
+			wantImage: "nginx:1.27-alpine",
+		},
+		{
+			name: "variable only",
+			content: `#!/bin/bash
+echo "no image here"`,
+			wantImage: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			scriptPath := filepath.Join(tmpDir, "init.sh")
+			if err := os.WriteFile(scriptPath, []byte(tt.content), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			var buf bytes.Buffer
+			gz := gzip.NewWriter(&buf)
+			tw := tar.NewWriter(gz)
+			data := []byte(tt.content)
+			tw.WriteHeader(&tar.Header{
+				Name: "openlist/4.2.2/scripts/init.sh",
+				Mode: 0644,
+				Size: int64(len(data)),
+			})
+			tw.Write(data)
+			tw.Close()
+			gz.Close()
+
+			tarPath := filepath.Join(tmpDir, "test.tar.gz")
+			os.WriteFile(tarPath, buf.Bytes(), 0644)
+
+			got := extractImageFromScripts(tarPath)
+			if got != tt.wantImage {
+				t.Errorf("extractImageFromScripts() = %q, want %q", got, tt.wantImage)
+			}
+		})
+	}
+}
+
+func TestExtractContainerPort(t *testing.T) {
+	tests := []struct {
+		name  string
+		input []string
+		want  int
+	}{
+		{"standard", []string{"8080:80"}, 80},
+		{"multiple", []string{"8080:80", "443:443"}, 80},
+		{"no colon", []string{"3306"}, 3306},
+		{"variable host", []string{"${PANEL_APP_PORT_HTTP}:3306"}, 3306},
+		{"empty", []string{}, 0},
+		{"quoted", []string{"8080:\"80\""}, 80},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractContainerPort(tt.input)
+			if got != tt.want {
+				t.Errorf("extractContainerPort(%v) = %d, want %d", tt.input, got, tt.want)
+			}
+		})
+	}
 }
