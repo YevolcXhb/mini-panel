@@ -228,3 +228,216 @@ func TestInstallWithComposeDir(t *testing.T) {
 		}
 	}
 }
+
+func TestParseDataJSON(t *testing.T) {
+	tests := []struct {
+		name      string
+		content   string
+		wantImage string
+	}{
+		{
+			name: "data-json-with-image",
+			content: `{
+				"key": "openlist",
+				"name": "OpenList",
+				"image": "xiaoyaliu/alist:latest"
+			}`,
+			wantImage: "xiaoyaliu/alist:latest",
+		},
+		{
+			name: "data-json-with-versions",
+			content: `{
+				"key": "openlist",
+				"versions": [
+					{"name": "4.2.2", "image": "xiaoyaliu/alist:4.2.2"},
+					{"name": "4.2.1", "image": "xiaoyaliu/alist:4.2.1"}
+				]
+			}`,
+			wantImage: "xiaoyaliu/alist:4.2.2",
+		},
+		{
+			name: "data-json-no-image",
+			content: `{
+				"key": "openlist",
+				"name": "OpenList"
+			}`,
+			wantImage: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(tmpDir, "data.json"), []byte(tt.content), 0644); err != nil {
+				t.Fatal(err)
+			}
+			got := parseDataJSON(tmpDir)
+			if got != tt.wantImage {
+				t.Errorf("parseDataJSON() = %q, want %q", got, tt.wantImage)
+			}
+		})
+	}
+}
+
+func TestParseDotFile(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    map[string]string
+	}{
+		{
+			name:    "standard-env",
+			content: "OPENLIST_IMAGE=xiaoyaliu/alist:latest\nPANEL_PORT=5244\n",
+			want:    map[string]string{"OPENLIST_IMAGE": "xiaoyaliu/alist:latest", "PANEL_PORT": "5244"},
+		},
+		{
+			name:    "quoted-values",
+			content: `OPENLIST_IMAGE="xiaoyaliu/alist:latest"` + "\n",
+			want:    map[string]string{"OPENLIST_IMAGE": "xiaoyaliu/alist:latest"},
+		},
+		{
+			name:    "with-comments",
+			content: "# this is a comment\nOPENLIST_IMAGE=xiaoyaliu/alist\n",
+			want:    map[string]string{"OPENLIST_IMAGE": "xiaoyaliu/alist"},
+		},
+		{
+			name:    "empty",
+			content: "",
+			want:    map[string]string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(tmpDir, ".env"), []byte(tt.content), 0644); err != nil {
+				t.Fatal(err)
+			}
+			got := parseDotFile(tmpDir)
+			if len(got) != len(tt.want) {
+				t.Errorf("parseDotFile() count = %d, want %d", len(got), len(tt.want))
+				return
+			}
+			for k, v := range tt.want {
+				if got[k] != v {
+					t.Errorf("parseDotFile()[%q] = %q, want %q", k, got[k], v)
+				}
+			}
+		})
+	}
+}
+
+func TestResolveEnvVars(t *testing.T) {
+	tests := []struct {
+		input string
+		env   map[string]string
+		want  string
+	}{
+		{
+			input: "${OPENLIST_IMAGE}",
+			env:   map[string]string{"OPENLIST_IMAGE": "xiaoyaliu/alist:latest"},
+			want:  "xiaoyaliu/alist:latest",
+		},
+		{
+			input: "${OPENLIST_IMAGE}:latest",
+			env:   map[string]string{"OPENLIST_IMAGE": "xiaoyaliu/alist"},
+			want:  "xiaoyaliu/alist:latest",
+		},
+		{
+			input: "mysql:8.0.33",
+			env:   map[string]string{"OPENLIST_IMAGE": "xiaoyaliu/alist:latest"},
+			want:  "mysql:8.0.33",
+		},
+		{
+			input: "${UNDEFINED_VAR}",
+			env:   map[string]string{"OTHER": "value"},
+			want:  "${UNDEFINED_VAR}",
+		},
+		{
+			input: "${OPENLIST_IMAGE}",
+			env:   nil,
+			want:  "${OPENLIST_IMAGE}",
+		},
+	}
+
+	for _, tt := range tests {
+		got := resolveEnvVars(tt.input, tt.env)
+		if got != tt.want {
+			t.Errorf("resolveEnvVars(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestFindComposeFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	subDir := filepath.Join(tmpDir, "openlist", "4.2.2")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	composeContent := "services:\n  app:\n    image: test:latest\n"
+	if err := os.WriteFile(filepath.Join(subDir, "docker-compose.yml"), []byte(composeContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, ".env"), []byte("IMAGE=test:latest\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	found := findComposeFile(tmpDir)
+	if found == "" {
+		t.Fatal("findComposeFile() returned empty")
+	}
+	if !strings.HasSuffix(found, "docker-compose.yml") {
+		t.Errorf("findComposeFile() = %q, want to end with docker-compose.yml", found)
+	}
+	t.Logf("found compose at: %s", found)
+
+	dotEnv := parseDotFile(filepath.Dir(found))
+	if dotEnv["IMAGE"] != "test:latest" {
+		t.Errorf("parseDotFile()[IMAGE] = %q, want %q", dotEnv["IMAGE"], "test:latest")
+	}
+}
+
+func TestFullResolveFlow(t *testing.T) {
+	tmpDir := t.TempDir()
+	composeContent := "services:\n  app:\n    image: ${OPENLIST_IMAGE}\n    ports:\n      - \"5244:80\"\n"
+	if err := os.WriteFile(filepath.Join(tmpDir, "docker-compose.yml"), []byte(composeContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+	dataJSON := `{"image": "xiaoyaliu/alist:latest"}`
+	if err := os.WriteFile(filepath.Join(tmpDir, "data.json"), []byte(dataJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(tmpDir, "docker-compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var compose composeFile
+	if err := yaml.Unmarshal(data, &compose); err != nil {
+		t.Fatal(err)
+	}
+
+	dotEnv := parseDotFile(tmpDir)
+	dataJSONImage := parseDataJSON(tmpDir)
+	if dataJSONImage != "" {
+		dotEnv["OPENLIST_IMAGE"] = dataJSONImage
+		dotEnv["IMAGE"] = dataJSONImage
+	}
+
+	var finalImage string
+	for _, svc := range compose.Services {
+		if img, ok := svc.Image.(string); ok {
+			finalImage = resolveEnvVars(img, dotEnv)
+			if finalImage == img && dataJSONImage != "" {
+				finalImage = dataJSONImage
+			}
+		}
+		break
+	}
+
+	if finalImage != "xiaoyaliu/alist:latest" {
+		t.Errorf("full resolve flow: got image %q, want %q", finalImage, "xiaoyaliu/alist:latest")
+	}
+	t.Logf("resolved image: %s", finalImage)
+}

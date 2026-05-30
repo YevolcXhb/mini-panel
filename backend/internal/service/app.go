@@ -175,9 +175,25 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 		}
 		if err := yaml.Unmarshal(data, &compose); err == nil {
 			dotEnv := parseDotFile(filepath.Dir(composePath))
+			dataJSONImage := parseDataJSON(filepath.Dir(composePath))
+			for _, svc := range compose.Services {
+				if svc.Image != "" && strings.Contains(svc.Image, "$") {
+					varNames := extractVarNames(svc.Image)
+					for _, vn := range varNames {
+						if dataJSONImage != "" {
+							dotEnv[vn] = dataJSONImage
+						}
+					}
+				}
+				break
+			}
+			global.LOG.Infof("[Install] env sources: dotEnv=%d, dataJSON=%s", len(dotEnv), dataJSONImage)
 			for _, svc := range compose.Services {
 				if svc.Image != "" {
 					image = resolveEnvVars(svc.Image, dotEnv)
+					if image == svc.Image && dataJSONImage != "" {
+						image = dataJSONImage
+					}
 					inst.Image = image
 				}
 				if len(svc.Ports) > 0 {
@@ -592,8 +608,20 @@ func (s *AppService) extractImageFrom1Panel(downloadURL string) string {
 	image = extractImageFromTarGz(tmpPath)
 	envMap = extractEnvFromTarGz(tmpPath)
 	image = resolveEnvVars(image, envMap)
-	if image != "" {
+	if image != "" && !strings.Contains(image, "$") {
 		global.LOG.Infof("[Sync] extracted image from tar.gz: %s", image)
+		return image
+	}
+
+	// Try data.json in tar.gz
+	dataImage := extractImageFromDataJSON(tmpPath)
+	if dataImage != "" {
+		global.LOG.Infof("[Sync] extracted image from data.json: %s", dataImage)
+		return dataImage
+	}
+
+	if image != "" && strings.Contains(image, "$") {
+		global.LOG.Warnf("[Sync] image still contains variable: %s, using as-is", image)
 		return image
 	}
 
@@ -676,6 +704,57 @@ func extractImageFromTarGz(path string) string {
 			for _, svc := range compose.Services {
 				if svc.Image != "" {
 					return svc.Image
+				}
+			}
+		}
+		break
+	}
+	return ""
+}
+
+func extractImageFromDataJSON(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	gr, err := gzip.NewReader(f)
+	if err != nil {
+		return ""
+	}
+	defer gr.Close()
+
+	tr := tar.NewReader(gr)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return ""
+		}
+		if !strings.HasSuffix(hdr.Name, "data.json") {
+			continue
+		}
+		data, err := io.ReadAll(tr)
+		if err != nil {
+			continue
+		}
+		var appData struct {
+			Image    string `json:"image"`
+			Versions []struct {
+				Name  string `json:"name"`
+				Image string `json:"image"`
+			} `json:"versions"`
+		}
+		if err := json.Unmarshal(data, &appData); err == nil {
+			if appData.Image != "" {
+				return appData.Image
+			}
+			for _, v := range appData.Versions {
+				if v.Image != "" {
+					return v.Image
 				}
 			}
 		}
@@ -857,9 +936,59 @@ func parseDotFile(dir string) map[string]string {
 			val = strings.Trim(val, `"'`)
 			envMap[key] = val
 		}
-		global.LOG.Infof("[Install] parsed env file %s, count=%d", name, len(envMap))
 	}
 	return envMap
+}
+
+func extractVarNames(s string) []string {
+	var names []string
+	seen := make(map[string]bool)
+	for {
+		start := strings.Index(s, "${")
+		if start < 0 {
+			break
+		}
+		end := strings.Index(s[start:], "}")
+		if end < 0 {
+			break
+		}
+		name := s[start+2 : start+end]
+		if !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+		s = s[start+end+1:]
+	}
+	return names
+}
+
+func parseDataJSON(dir string) string {
+	candidates := []string{"data.json"}
+	for _, name := range candidates {
+		envPath := filepath.Join(dir, name)
+		data, err := os.ReadFile(envPath)
+		if err != nil {
+			continue
+		}
+		var appData struct {
+			Image    string `json:"image"`
+			Versions []struct {
+				Name  string `json:"name"`
+				Image string `json:"image"`
+			} `json:"versions"`
+		}
+		if err := json.Unmarshal(data, &appData); err == nil {
+			if appData.Image != "" {
+				return appData.Image
+			}
+			for _, v := range appData.Versions {
+				if v.Image != "" {
+					return v.Image
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // extractHostPort 从 compose ports 中提取可用端口。
