@@ -127,7 +127,7 @@ download_file() {
         elif [ -n "${all_proxy:-}" ]; then
             proxy_args="-x ${all_proxy}"
         fi
-        curl --connect-timeout 15 --max-time 120 -fsSL ${proxy_args} -o "$output" "$url"
+        curl --connect-timeout 30 --max-time 300 -fsSL ${proxy_args} -o "$output" "$url"
     else
         local proxy_args=""
         if [ -n "${HTTPS_PROXY:-}" ]; then
@@ -143,7 +143,7 @@ download_file() {
         elif [ -n "${all_proxy:-}" ]; then
             proxy_args="-e all_proxy=${all_proxy}"
         fi
-        wget --timeout=15 --tries=1 ${proxy_args} -qO "$output" "$url"
+        wget --timeout=30 --tries=2 ${proxy_args} -qO "$output" "$url"
     fi
 }
 
