@@ -168,6 +168,13 @@
         <el-button type="primary" :loading="syncing" @click="doSync">同步</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="showInstallProgress" title="正在安装" width="420px" :close-on-click-modal="false" :close-on-press-escape="false" :show-close="false">
+      <div style="text-align:center;padding:16px 0">
+        <el-progress :percentage="100" :indeterminate="true" :duration="2" :stroke-width="8" style="margin-bottom:16px" />
+        <p style="font-size:14px;color:var(--dim)">{{ installProgressText }}</p>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -183,6 +190,8 @@ const sources = ref<any[]>([])
 const searchQuery = ref('')
 const selectedCategory = ref('all')
 const showInstall = ref(false)
+const showInstallProgress = ref(false)
+const installProgressText = ref('正在安装...')
 const showDetail = ref(false)
 const showSync = ref(false)
 const installing = ref(false)
@@ -260,7 +269,9 @@ async function openDetail(app: any) {
 
 async function doInstall() {
   if (!selectedApp.value) return
-  installing.value = true
+  showInstall.value = false
+  showInstallProgress.value = true
+  installProgressText.value = '正在提交安装任务，请耐心等待（下载镜像可能需要几分钟）...'
   try {
     await appApi.install({
       app_id: selectedApp.value.id,
@@ -269,13 +280,12 @@ async function doInstall() {
       port: installForm.value.port,
       env: installForm.value.env
     })
-    ElMessage.success('安装任务已提交')
-    showInstall.value = false
+    ElMessage.success('安装成功')
     activeTab.value = 'installed'
     loadInstalled()
   } catch (e: any) {
     ElMessage.error(e?.message || '安装失败')
-  } finally { installing.value = false }
+  } finally { showInstallProgress.value = false }
 }
 
 async function uninstall(row: any) {

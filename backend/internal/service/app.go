@@ -95,6 +95,16 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 		}
 	}
 
+	// lazy extract image if empty
+	if detail != nil && detail.Image == "" && detail.DownloadURL != "" {
+		global.LOG.Infof("[Install] detail image empty, extracting from %s", detail.DownloadURL)
+		detail.Image = s.extractImageFrom1Panel(detail.DownloadURL)
+		if detail.Image != "" {
+			_ = s.detailRepo.Update(detail)
+			global.LOG.Infof("[Install] extracted and saved image=%s", detail.Image)
+		}
+	}
+
 	image := app.Key
 	version := "latest"
 	if detail != nil {
@@ -401,7 +411,8 @@ type panelAppVersion struct {
 }
 
 func (s *AppService) syncFrom1PanelZip(source *model.AppSource) error {
-	client := &http.Client{Timeout: 60 * time.Second}
+	global.LOG.Infof("[Sync] downloading app list from %s", source.URL)
+	client := &http.Client{Timeout: 180 * time.Second}
 	resp, err := client.Get(source.URL)
 	if err != nil {
 		return fmt.Errorf("download zip: %w", err)
@@ -495,11 +506,10 @@ func (s *AppService) syncFrom1PanelZip(source *model.AppSource) error {
 		}
 
 		for _, pv := range pa.Versions {
-			image := s.extractImageFrom1Panel(pv.DownloadURL)
 			detail := &model.AppDetail{
 				AppID:       app.ID,
 				Version:     pv.Name,
-				Image:       image,
+				Image:       "", // lazy extract on install
 				DownloadURL: pv.DownloadURL,
 				Status:      "active",
 			}

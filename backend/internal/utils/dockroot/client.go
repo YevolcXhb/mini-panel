@@ -84,6 +84,10 @@ func (c *Client) Run(name string, detach bool, envs, volumes []string) error {
 	if detach {
 		args = append(args, "-d")
 	}
+	// DockRoot requires --renew when specifying -v / -e options
+	if len(volumes) > 0 || len(envs) > 0 {
+		args = append(args, "--renew")
+	}
 	for _, v := range volumes {
 		args = append(args, "-v", v)
 	}

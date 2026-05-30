@@ -3,8 +3,7 @@ import { useAuthStore } from '../store'
 import { ElMessage } from 'element-plus'
 
 const api = axios.create({
-  baseURL: '/api/v1',
-  timeout: 30000
+  baseURL: '/api/v1'
 })
 
 api.interceptors.request.use((config) => {

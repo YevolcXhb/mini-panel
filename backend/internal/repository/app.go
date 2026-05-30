@@ -93,6 +93,10 @@ func (r *AppDetailRepository) Create(d *model.AppDetail) error {
 	return r.db.Create(d).Error
 }
 
+func (r *AppDetailRepository) Update(d *model.AppDetail) error {
+	return r.db.Save(d).Error
+}
+
 func (r *AppDetailRepository) DeleteByAppID(appID uint) error {
 	return r.db.Where("app_id = ?", appID).Delete(&model.AppDetail{}).Error
 }
