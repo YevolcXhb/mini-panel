@@ -150,7 +150,6 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 	var composeEnvs []string
 	var composeVolumes []string
 	var exposedPort int
-	var containerPort int
 
 	composePath := filepath.Join(inst.Path, "docker-compose.yml")
 	if detail != nil && detail.DownloadURL != "" {
@@ -204,7 +203,6 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 				}
 				if len(svc.Ports) > 0 {
 					exposedPort = extractHostPort(svc.Ports)
-					containerPort = extractContainerPort(svc.Ports)
 				}
 				switch env := svc.Environment.(type) {
 				case map[string]interface{}:
@@ -313,12 +311,8 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 		}
 		global.LOG.Infof("[Install] pull image success")
 
-		var ports []string
-		if inst.Port > 0 && containerPort > 0 {
-			ports = append(ports, fmt.Sprintf("%d:%d", inst.Port, containerPort))
-		}
-		global.LOG.Infof("[Install] running container %s ports=%v ...", req.Name, ports)
-		if err := s.ctnService.client.Run(req.Name, true, envs, volumes, ports); err != nil {
+		global.LOG.Infof("[Install] running container %s ...", req.Name)
+		if err := s.ctnService.client.Run(req.Name, true, envs, volumes, nil); err != nil {
 			global.LOG.Errorf("[Install] run container failed: %v", err)
 			inst.Status = "failed"
 			inst.Message = err.Error()
@@ -1140,27 +1134,6 @@ func extractHostPort(ports []string) int {
 		if port, err := strconv.Atoi(hostClean); err == nil {
 			return port
 		}
-		if port, err := strconv.Atoi(containerPart); err == nil {
-			return port
-		}
-	}
-	return 0
-}
-
-// extractContainerPort 从 compose ports 中提取容器端口（如 "8080:80" 返回 80）。
-func extractContainerPort(ports []string) int {
-	for _, p := range ports {
-		p = strings.TrimSpace(p)
-		idx := strings.LastIndex(p, ":")
-		if idx < 0 {
-			if port, err := strconv.Atoi(p); err == nil {
-				return port
-			}
-			continue
-		}
-		containerPart := strings.TrimSpace(p[idx+1:])
-		containerPart = strings.TrimPrefix(strings.TrimPrefix(containerPart, "$"), "{")
-		containerPart = strings.TrimSuffix(containerPart, "}")
 		if port, err := strconv.Atoi(containerPart); err == nil {
 			return port
 		}

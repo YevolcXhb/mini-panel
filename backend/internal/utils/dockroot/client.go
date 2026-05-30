@@ -86,11 +86,8 @@ func (c *Client) Run(name string, detach bool, envs, volumes, ports []string) er
 	if detach {
 		args = append(args, "-d")
 	}
-	if len(volumes) > 0 || len(envs) > 0 || len(ports) > 0 {
+	if len(volumes) > 0 || len(envs) > 0 {
 		args = append(args, "--renew")
-	}
-	for _, p := range ports {
-		args = append(args, "-p", p)
 	}
 	for _, v := range volumes {
 		args = append(args, "-v", v)
