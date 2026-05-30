@@ -159,6 +159,11 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 		}
 	}
 
+	if _, err := os.Stat(composePath); os.IsNotExist(err) {
+		composePath = findComposeFile(inst.Path)
+		global.LOG.Infof("[Install] searching compose file, found: %s", composePath)
+	}
+
 	if data, err := os.ReadFile(composePath); err == nil {
 		var compose struct {
 			Services map[string]struct {
@@ -169,9 +174,10 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 			} `yaml:"services"`
 		}
 		if err := yaml.Unmarshal(data, &compose); err == nil {
+			dotEnv := parseDotFile(filepath.Dir(composePath))
 			for _, svc := range compose.Services {
 				if svc.Image != "" {
-					image = svc.Image
+					image = resolveEnvVars(svc.Image, dotEnv)
 					inst.Image = image
 				}
 				if len(svc.Ports) > 0 {
@@ -811,6 +817,49 @@ func flattenSingleSubdir(dir string) {
 		os.Rename(oldPath, newPath)
 	}
 	os.Remove(subDir)
+}
+
+func findComposeFile(dir string) string {
+	var found string
+	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		if info.Name() == "docker-compose.yml" || info.Name() == "docker-compose.yaml" {
+			found = path
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	return found
+}
+
+func parseDotFile(dir string) map[string]string {
+	envMap := make(map[string]string)
+	candidates := []string{".env", ".env.dev", ".env.prod", "env"}
+	for _, name := range candidates {
+		envPath := filepath.Join(dir, name)
+		data, err := os.ReadFile(envPath)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			idx := strings.Index(line, "=")
+			if idx < 0 {
+				continue
+			}
+			key := strings.TrimSpace(line[:idx])
+			val := strings.TrimSpace(line[idx+1:])
+			val = strings.Trim(val, `"'`)
+			envMap[key] = val
+		}
+		global.LOG.Infof("[Install] parsed env file %s, count=%d", name, len(envMap))
+	}
+	return envMap
 }
 
 // extractHostPort 从 compose ports 中提取可用端口。
