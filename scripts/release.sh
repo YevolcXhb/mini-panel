@@ -2,7 +2,8 @@
 
 set -e
 
-VERSION="${1:-2.1.0}"
+VERSION="${1:-$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')}"
+VERSION="${VERSION:-2.1.1}"
 DIST_DIR="dist"
 BUILD_DIR="build"
 
