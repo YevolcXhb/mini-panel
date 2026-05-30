@@ -20,10 +20,10 @@ const routes = [
       { path: 'databases', name: 'Databases', component: () => import('../views/Databases.vue') },
       { path: 'firewall', name: 'Firewall', component: () => import('../views/Firewall.vue') },
       { path: 'files', name: 'Files', component: () => import('../views/FileManager.vue') },
-      { path: 'terminal', name: 'Terminal', component: () => import('../views/Terminal.vue') },
       { path: 'processes', name: 'Processes', component: () => import('../views/Process.vue') },
       { path: 'cronjobs', name: 'Cronjobs', component: () => import('../views/Cronjob.vue') },
       { path: 'ssh', name: 'SSH', component: () => import('../views/SSH.vue') },
+      { path: 'agent', name: 'Agent', component: () => import('../views/MiniAgent.vue') },
       { path: 'logs', name: 'Logs', component: () => import('../views/PanelLogs.vue') },
       { path: 'settings', name: 'Settings', component: () => import('../views/Settings.vue') }
     ]

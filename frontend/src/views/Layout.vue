@@ -60,10 +60,10 @@ const menus = [
   { path: '/databases', label: '数据库', icon: Folder },
   { path: '/firewall', label: '防火墙', icon: Setting },
   { path: '/files', label: '文件管理', icon: Folder },
-  { path: '/terminal', label: '终端', icon: Monitor },
   { path: '/processes', label: '进程管理', icon: Cpu },
   { path: '/cronjobs', label: '计划任务', icon: Timer },
   { path: '/ssh', label: 'SSH管理', icon: Monitor },
+  { path: '/agent', label: 'Mini Agent', icon: Monitor },
   { path: '/logs', label: '系统日志', icon: Document },
   { path: '/settings', label: '设置', icon: Setting },
 ]

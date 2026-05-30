@@ -170,12 +170,26 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="showInstallProgress" title="正在安装" width="420px" :close-on-click-modal="false" :close-on-press-escape="false" :show-close="false">
-      <div class="install-progress-box">
-        <el-progress :percentage="100" :indeterminate="true" :duration="2" :stroke-width="12" :color="['#409eff', '#67c23a']" style="margin-bottom:20px" />
-        <p class="install-progress-text">{{ installProgressText }}</p>
+    <div v-if="bgTasks.length" class="bg-tasks">
+      <div class="bg-tasks-header" @click="bgExpanded = !bgExpanded">
+        <span>📦 安装任务 ({{ bgTasks.length }})</span>
+        <span style="cursor:pointer">{{ bgExpanded ? '▼' : '▲' }}</span>
       </div>
-    </el-dialog>
+      <div v-if="bgExpanded" class="bg-tasks-body">
+        <div v-for="t in bgTasks" :key="t.id" class="bg-task-item">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-weight:500">{{ t.name }}</span>
+            <el-tag size="small" :type="t.status === 'done' ? 'success' : t.status === 'error' ? 'danger' : 'info'">
+              {{ t.status === 'done' ? '完成' : t.status === 'error' ? '失败' : '安装中' }}
+            </el-tag>
+          </div>
+          <div v-if="t.status === 'installing'" style="margin-top:6px">
+            <el-progress :percentage="100" :indeterminate="true" :duration="2" :stroke-width="4" />
+          </div>
+          <div v-if="t.message" style="font-size:12px;color:var(--dim);margin-top:4px">{{ t.message }}</div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -191,8 +205,6 @@ const sources = ref<any[]>([])
 const searchQuery = ref('')
 const selectedCategory = ref('all')
 const showInstall = ref(false)
-const showInstallProgress = ref(false)
-const installProgressText = ref('正在安装...')
 const showDetail = ref(false)
 const showSync = ref(false)
 const installing = ref(false)
@@ -205,6 +217,9 @@ const newSource = ref({ name: '', url: '' })
 const pullForm = ref({ image: '' })
 const pulling = ref(false)
 const syncSourceId = ref<number | undefined>(undefined)
+const bgTasks = ref<any[]>([])
+const bgExpanded = ref(true)
+let bgTaskId = 0
 
 const imageRegex = /^(?:([^\/]+)\/)?([^:\/]+(?:\/[^:\/]+)*)(?::([^:\/]+))?$/
 
@@ -271,8 +286,10 @@ async function openDetail(app: any) {
 async function doInstall() {
   if (!selectedApp.value) return
   showInstall.value = false
-  showInstallProgress.value = true
-  installProgressText.value = '正在提交安装任务，请耐心等待（下载镜像可能需要几分钟）...'
+  const taskId = ++bgTaskId
+  const task = { id: taskId, name: installForm.value.name || selectedApp.value.name, status: 'installing', message: '' }
+  bgTasks.value.unshift(task)
+  bgExpanded.value = true
   try {
     await appApi.install({
       app_id: selectedApp.value.id,
@@ -280,12 +297,15 @@ async function doInstall() {
       name: installForm.value.name,
       env: installForm.value.env
     })
-    ElMessage.success('安装成功')
-    activeTab.value = 'installed'
+    task.status = 'done'
+    task.message = '安装完成'
+    ElMessage.success(`${task.name} 安装成功`)
     loadInstalled()
   } catch (e: any) {
+    task.status = 'error'
+    task.message = e?.message || '安装失败'
     ElMessage.error(e?.message || '安装失败')
-  } finally { showInstallProgress.value = false }
+  }
 }
 
 async function uninstall(row: any) {
@@ -364,13 +384,40 @@ onMounted(() => { loadApps(); loadInstalled(); loadSources() })
 </script>
 
 <style scoped>
-.install-progress-box {
-  text-align: center;
-  padding: 24px 16px;
+.bg-tasks {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  width: 320px;
+  background: var(--card);
+  border: 1px solid var(--bdr);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  z-index: 1000;
+  overflow: hidden;
 }
-.install-progress-text {
-  font-size: 14px;
-  color: var(--el-text-color-regular);
-  margin-top: 8px;
+.bg-tasks-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--txt);
+  cursor: pointer;
+  border-bottom: 1px solid var(--bdr);
+  background: var(--bg2);
+}
+.bg-tasks-body {
+  max-height: 300px;
+  overflow-y: auto;
+}
+.bg-task-item {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--bdr-light);
+  font-size: 13px;
+}
+.bg-task-item:last-child {
+  border-bottom: none;
 }
 </style>
