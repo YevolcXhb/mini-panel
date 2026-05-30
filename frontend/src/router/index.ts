@@ -22,7 +22,6 @@ const routes = [
       { path: 'files', name: 'Files', component: () => import('../views/FileManager.vue') },
       { path: 'terminal', name: 'Terminal', component: () => import('../views/Terminal.vue') },
       { path: 'processes', name: 'Processes', component: () => import('../views/Process.vue') },
-      { path: 'monitor', name: 'Monitor', component: () => import('../views/Monitor.vue') },
       { path: 'cronjobs', name: 'Cronjobs', component: () => import('../views/Cronjob.vue') },
       { path: 'ssh', name: 'SSH', component: () => import('../views/SSH.vue') },
       { path: 'logs', name: 'Logs', component: () => import('../views/PanelLogs.vue') },

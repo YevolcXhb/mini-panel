@@ -40,7 +40,7 @@ interface LogEntry {
 }
 
 const entries = ref<LogEntry[]>([])
-const selectedLevels = ref<string[]>(['info', 'warning', 'error', 'fatal'])
+const selectedLevels = ref<string[]>(JSON.parse(localStorage.getItem('logLevels') || '["info","warning","error","fatal"]'))
 const loading = ref(false)
 const logContainer = ref<HTMLDivElement>()
 let timer: ReturnType<typeof setInterval> | null = null
@@ -75,7 +75,8 @@ onUnmounted(() => {
   if (timer) clearInterval(timer)
 })
 
-watch(selectedLevels, () => {
+watch(selectedLevels, (v) => {
+  localStorage.setItem('logLevels', JSON.stringify(v))
   fetchLogs()
 })
 </script>

@@ -2,6 +2,11 @@
   <div>
     <h2 class="page-title">📦 容器管理</h2>
 
+    <div style="margin-bottom: 16px">
+      <el-button type="primary" @click="showCreate = true">+ 创建容器</el-button>
+      <el-button @click="loadContainers">🔄 刷新</el-button>
+    </div>
+
     <div class="ct-grid" v-if="containers.length">
       <div class="ct-card" v-for="c in containers" :key="c.name">
         <div class="ct-info">
@@ -20,11 +25,6 @@
       </div>
     </div>
     <div v-else class="empty-state">暂无容器，点击上方按钮创建</div>
-
-    <div style="margin-top: 20px">
-      <el-button type="primary" @click="showCreate = true">+ 创建容器</el-button>
-      <el-button @click="loadContainers">🔄 刷新</el-button>
-    </div>
 
     <el-dialog v-model="showCreate" title="创建容器" width="520px">
       <el-form :model="createForm" label-width="90px">

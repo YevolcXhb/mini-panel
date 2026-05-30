@@ -62,7 +62,6 @@ const menus = [
   { path: '/files', label: '文件管理', icon: Folder },
   { path: '/terminal', label: '终端', icon: Monitor },
   { path: '/processes', label: '进程管理', icon: Cpu },
-  { path: '/monitor', label: '监控', icon: Odometer },
   { path: '/cronjobs', label: '计划任务', icon: Timer },
   { path: '/ssh', label: 'SSH管理', icon: Monitor },
   { path: '/logs', label: '系统日志', icon: Document },

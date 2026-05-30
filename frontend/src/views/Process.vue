@@ -69,6 +69,6 @@ async function killProcess(pid: number, force: boolean) {
   } catch (e) {}
 }
 
-onMounted(() => { loadProcesses(true); timer = setInterval(() => loadProcesses(false), 5000) })
+onMounted(() => { loadProcesses(true); timer = setInterval(() => loadProcesses(false), 10000) })
 onUnmounted(() => clearInterval(timer))
 </script>
