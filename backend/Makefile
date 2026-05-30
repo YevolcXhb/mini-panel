@@ -8,7 +8,7 @@ BUILD_PATH = $(BASE_PATH)/../build
 DIST_PATH = $(BASE_PATH)/../dist
 MAIN=$(BASE_PATH)/cmd/server/main.go
 NAME=minipanel
-VERSION=1.0.0
+VERSION=3.2.1
 GIT_COMMIT=$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_TIME=$(shell date -u '+%Y-%m-%d_%H:%M:%S')
 

@@ -1,6 +1,6 @@
 {
   "name": "mini-panel-frontend",
-  "version": "2.1.1",
+  "version": "3.2.1",
   "type": "module",
   "scripts": {
     "dev": "vite",

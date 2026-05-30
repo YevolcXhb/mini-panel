@@ -41,6 +41,7 @@ func main() {
 		showVersion bool
 		doStart     bool
 		doStop      bool
+		doRestart   bool
 		doStatus    bool
 		doUninstall bool
 		doReset     bool
@@ -51,6 +52,7 @@ func main() {
 	flag.BoolVar(&showVersion, "v", false, "show version")
 	flag.BoolVar(&doStart, "start", false, "start Mini Panel in background")
 	flag.BoolVar(&doStop, "stop", false, "stop Mini Panel")
+	flag.BoolVar(&doRestart, "restart", false, "restart Mini Panel")
 	flag.BoolVar(&doStatus, "status", false, "check Mini Panel status")
 	flag.BoolVar(&doUninstall, "uninstall", false, "uninstall Mini Panel")
 	flag.BoolVar(&doReset, "reset", false, "reset admin password to admin123")
@@ -65,6 +67,8 @@ func main() {
 		handleStart()
 	case doStop:
 		handleStop()
+	case doRestart:
+		handleRestart()
 	case doStatus:
 		handleStatus()
 	case doUninstall:
@@ -166,6 +170,31 @@ func handleStop() {
 	}
 	os.Remove(pidPath())
 	fmt.Println("Mini Panel stopped")
+}
+
+func handleRestart() {
+	pid := readPID()
+	if isRunning(pid) {
+		process, err := os.FindProcess(pid)
+		if err != nil {
+			fmt.Printf("Failed to find process: %v\n", err)
+			return
+		}
+		if err := process.Signal(syscall.SIGTERM); err != nil {
+			fmt.Printf("Failed to stop Mini Panel: %v\n", err)
+			return
+		}
+		for i := 0; i < 30; i++ {
+			if !isRunning(pid) {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		os.Remove(pidPath())
+		fmt.Println("Mini Panel stopped")
+		time.Sleep(500 * time.Millisecond)
+	}
+	handleStart()
 }
 
 func handleStatus() {
@@ -279,6 +308,7 @@ func printHelp() {
 	fmt.Println("  minipanel              Start Mini Panel (foreground)")
 	fmt.Println("  minipanel --start      Start Mini Panel in background")
 	fmt.Println("  minipanel --stop       Stop Mini Panel")
+	fmt.Println("  minipanel --restart    Restart Mini Panel")
 	fmt.Println("  minipanel --status     Check Mini Panel status")
 	fmt.Println("  minipanel --reset      Reset admin password to admin123")
 	fmt.Println("  minipanel --setsafe    Set security entrance path")
@@ -288,6 +318,7 @@ func printHelp() {
 	fmt.Println("")
 	fmt.Println("Examples:")
 	fmt.Println("  minipanel --start")
+	fmt.Println("  minipanel --restart")
 	fmt.Println("  minipanel --setsafe /1q2w3e")
 	fmt.Println("")
 	fmt.Printf("Install dir: %s\n", exeDir())
