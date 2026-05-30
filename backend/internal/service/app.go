@@ -195,11 +195,15 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 			global.LOG.Infof("[Install] env sources: dotEnv=%d, dataJSON=%s, scanEnv=%d", len(dotEnv), dataJSONImage, len(scanEnv))
 			for _, svc := range compose.Services {
 				if svc.Image != "" {
-					image = resolveEnvVars(svc.Image, dotEnv)
-					if image == svc.Image && dataJSONImage != "" {
+					resolved := resolveEnvVars(svc.Image, dotEnv)
+					if resolved != svc.Image && !strings.Contains(resolved, "$") {
+						image = resolved
+					} else if dataJSONImage != "" && !strings.Contains(dataJSONImage, "$") {
 						image = dataJSONImage
 					}
-					inst.Image = image
+					if !strings.Contains(image, "$") {
+						inst.Image = image
+					}
 				}
 				if containerPort == 0 {
 					containerPort = extractContainerPort(svc.Ports)
