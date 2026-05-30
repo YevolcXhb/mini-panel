@@ -115,21 +115,26 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 		version = detail.Version
 	}
 
+	instName := strings.TrimSpace(req.Name)
+	if instName == "" {
+		instName = app.Key
+	}
+
 	inst := &model.AppInstall{
 		AppID:       req.AppID,
 		AppDetailID: req.AppDetailID,
-		Name:        req.Name,
+		Name:        instName,
 		Status:      "installing",
 		Image:       image,
 		Version:     version,
-		Container:   req.Name,
-		Path:        filepath.Join(global.GetDataDir(), "apps", req.Name),
+		Container:   instName,
+		Path:        filepath.Join(global.GetDataDir(), "apps", instName),
 	}
 
-	existing, _ := s.instRepo.GetByName(req.Name)
+	existing, _ := s.instRepo.GetByName(instName)
 	if existing != nil {
 		if existing.Status == "running" {
-			return nil, fmt.Errorf("应用 %s 已存在且正在运行，请更换实例名称", req.Name)
+			return nil, fmt.Errorf("应用 %s 已存在且正在运行，请更换实例名称", instName)
 		}
 		global.LOG.Infof("[Install] found existing install record id=%d status=%s, reusing", existing.ID, existing.Status)
 		inst.ID = existing.ID
@@ -294,7 +299,7 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 		global.LOG.Infof("[Install] user volumes count=%d", len(req.Volumes))
 	}
 
-	global.LOG.Infof("[Install] final params image=%s container=%s envs=%d volumes=%d", image, req.Name, len(envs), len(volumes))
+	global.LOG.Infof("[Install] final params image=%s container=%s envs=%d volumes=%d", image, instName, len(envs), len(volumes))
 
 	if strings.Contains(image, "$") {
 		global.LOG.Errorf("[Install] image contains unresolved variables: %s", image)
@@ -306,7 +311,7 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 
 	if s.ctnService.IsAvailable() {
 		global.LOG.Infof("[Install] pulling image %s ...", image)
-		if err := s.ctnService.client.Pull(image, req.Name); err != nil {
+		if err := s.ctnService.client.Pull(image, instName); err != nil {
 			global.LOG.Errorf("[Install] pull image failed: %v", err)
 			inst.Status = "failed"
 			inst.Message = err.Error()
@@ -315,8 +320,8 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 		}
 		global.LOG.Infof("[Install] pull image success")
 
-		global.LOG.Infof("[Install] running container %s ...", req.Name)
-		if err := s.ctnService.client.Run(req.Name, true, envs, volumes); err != nil {
+		global.LOG.Infof("[Install] running container %s ...", instName)
+		if err := s.ctnService.client.Run(instName, true, envs, volumes); err != nil {
 			global.LOG.Errorf("[Install] run container failed: %v", err)
 			inst.Status = "failed"
 			inst.Message = err.Error()

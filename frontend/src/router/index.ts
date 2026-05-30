@@ -14,12 +14,17 @@ const routes = [
     redirect: '/dashboard',
     children: [
       { path: 'dashboard', name: 'Dashboard', component: () => import('../views/Dashboard.vue') },
+      { path: 'containers', name: 'Containers', component: () => import('../views/Container.vue') },
+      { path: 'apps', name: 'Apps', component: () => import('../views/AppStore.vue') },
+      { path: 'websites', name: 'Websites', component: () => import('../views/Websites.vue') },
+      { path: 'databases', name: 'Databases', component: () => import('../views/Databases.vue') },
+      { path: 'firewall', name: 'Firewall', component: () => import('../views/Firewall.vue') },
       { path: 'files', name: 'Files', component: () => import('../views/FileManager.vue') },
       { path: 'terminal', name: 'Terminal', component: () => import('../views/Terminal.vue') },
       { path: 'processes', name: 'Processes', component: () => import('../views/Process.vue') },
-      { path: 'containers', name: 'Containers', component: () => import('../views/Container.vue') },
-      { path: 'apps', name: 'Apps', component: () => import('../views/AppStore.vue') },
+      { path: 'monitor', name: 'Monitor', component: () => import('../views/Monitor.vue') },
       { path: 'cronjobs', name: 'Cronjobs', component: () => import('../views/Cronjob.vue') },
+      { path: 'ssh', name: 'SSH', component: () => import('../views/SSH.vue') },
       { path: 'logs', name: 'Logs', component: () => import('../views/PanelLogs.vue') },
       { path: 'settings', name: 'Settings', component: () => import('../views/Settings.vue') }
     ]

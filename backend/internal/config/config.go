@@ -27,7 +27,7 @@ func Load(path string) (*Config, error) {
 	viper.SetConfigFile(path)
 	viper.SetConfigType("yaml")
 
-	viper.SetDefault("port", 8080)
+	viper.SetDefault("port", 8888)
 	viper.SetDefault("log_level", "info")
 	viper.SetDefault("db_path", "./minipanel.db")
 	viper.SetDefault("data_dir", "./data")

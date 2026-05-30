@@ -5,11 +5,12 @@
     <div class="info-grid" style="margin-bottom:24px">
       <div class="info-card">
         <h3 style="margin:0 0 16px 0;font-size:15px">外观设置</h3>
-        <el-form :model="settings" label-width="100px">
+        <el-form label-width="100px">
           <el-form-item label="主题">
-            <el-radio-group v-model="settings.theme">
-              <el-radio label="dark">深色</el-radio>
-              <el-radio label="light">浅色</el-radio>
+            <el-radio-group v-model="themeStore.mode" @change="themeStore.setTheme(themeStore.mode)">
+              <el-radio-button label="light">浅色</el-radio-button>
+              <el-radio-button label="dark">深色</el-radio-button>
+              <el-radio-button label="auto">跟随系统</el-radio-button>
             </el-radio-group>
           </el-form-item>
           <el-form-item label="语言">
@@ -122,9 +123,10 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { settingApi, authApiExt, versionApi } from '../api'
-import { useAuthStore } from '../store'
+import { useAuthStore, useThemeStore } from '../store'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
+const themeStore = useThemeStore()
 const settings = ref<any>({})
 const pwdForm = ref({ old_password: '', new_password: '' })
 const versionInfo = ref({ version: '-', build_time: '-', git_commit: '-' })

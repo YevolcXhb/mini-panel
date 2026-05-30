@@ -114,7 +114,7 @@
             <el-option v-for="d in appDetails" :key="d.id" :label="d.version" :value="d.id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="实例名称"><el-input v-model="installForm.name" placeholder="如 nginx001" /></el-form-item>
+        <el-form-item label="实例名称"><el-input v-model="installForm.name" placeholder="默认为应用名，可加编号如 openlist001" /></el-form-item>
         <el-form-item label="环境变量" v-if="envKeys.length">
           <div v-for="(k, idx) in envKeys" :key="idx" style="display:flex;gap:8px;margin-bottom:8px">
             <el-input :model-value="k" disabled style="width:120px" />
@@ -246,7 +246,7 @@ async function loadSources() {
 
 async function openInstall(app: any) {
   selectedApp.value = app
-  installForm.value = { name: app.key + '001', app_detail_id: undefined, env: {} }
+  installForm.value = { name: app.key, app_detail_id: undefined, env: {} }
   try {
     const res: any = await appApi.detail(app.id)
     appDetails.value = res.data?.details || []
