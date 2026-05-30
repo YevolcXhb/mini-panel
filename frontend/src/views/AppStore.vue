@@ -194,7 +194,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { appApi, containerApi } from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -217,9 +217,15 @@ const newSource = ref({ name: '', url: '' })
 const pullForm = ref({ image: '' })
 const pulling = ref(false)
 const syncSourceId = ref<number | undefined>(undefined)
-const bgTasks = ref<any[]>([])
+const bgTasks = ref<any[]>(JSON.parse(localStorage.getItem('minipanel_bg_tasks') || '[]'))
 const bgExpanded = ref(true)
-let bgTaskId = 0
+let bgTaskId = bgTasks.value.length > 0 ? Math.max(...bgTasks.value.map((t: any) => t.id)) : 0
+
+const BG_TASKS_KEY = 'minipanel_bg_tasks'
+
+function saveBgTasks() {
+  localStorage.setItem(BG_TASKS_KEY, JSON.stringify(bgTasks.value))
+}
 
 const imageRegex = /^(?:([^\/]+)\/)?([^:\/]+(?:\/[^:\/]+)*)(?::([^:\/]+))?$/
 
@@ -290,6 +296,7 @@ async function doInstall() {
   const task = { id: taskId, name: installForm.value.name || selectedApp.value.name, status: 'installing', message: '' }
   bgTasks.value.unshift(task)
   bgExpanded.value = true
+  saveBgTasks()
   try {
     await appApi.install({
       app_id: selectedApp.value.id,
@@ -299,11 +306,13 @@ async function doInstall() {
     })
     task.status = 'done'
     task.message = '安装完成'
+    saveBgTasks()
     ElMessage.success(`${task.name} 安装成功`)
     loadInstalled()
   } catch (e: any) {
     task.status = 'error'
     task.message = e?.message || '安装失败'
+    saveBgTasks()
     ElMessage.error(e?.message || '安装失败')
   }
 }
@@ -380,7 +389,37 @@ async function doPull() {
   } finally { pulling.value = false }
 }
 
-onMounted(() => { loadApps(); loadInstalled(); loadSources() })
+onMounted(async () => {
+  await loadApps()
+  await loadInstalled()
+  await loadSources()
+  reconcileTasks()
+})
+
+function reconcileTasks() {
+  let changed = false
+  for (const task of bgTasks.value) {
+    if (task.status === 'installing') {
+      const found = installed.value.find((i: any) => i.name === task.name)
+      if (found) {
+        if (found.status === 'running') {
+          task.status = 'done'
+          task.message = '安装完成'
+          changed = true
+        } else if (found.status === 'failed' || found.status === 'not_supported') {
+          task.status = 'error'
+          task.message = found.message || '安装失败'
+          changed = true
+        }
+      } else {
+        task.status = 'error'
+        task.message = '任务记录不存在，可能已被删除'
+        changed = true
+      }
+    }
+  }
+  if (changed) saveBgTasks()
+}
 </script>
 
 <style scoped>
