@@ -240,7 +240,13 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 	envSet := make(map[string]string)
 	for _, e := range composeEnvs {
 		if idx := strings.Index(e, "="); idx >= 0 {
-			envSet[e[:idx]] = e[idx+1:]
+			key := e[:idx]
+			val := e[idx+1:]
+			if strings.Contains(val, "${") || strings.Contains(val, "$") && strings.IndexByte(val, '$') == 0 {
+				global.LOG.Infof("[Install] skip env with unresolved var: %s", e)
+				continue
+			}
+			envSet[key] = val
 		}
 	}
 	if detail != nil && detail.EnvVars != "" {
