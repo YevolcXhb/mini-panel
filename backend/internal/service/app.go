@@ -294,6 +294,14 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 
 	global.LOG.Infof("[Install] final params image=%s container=%s port=%d envs=%d volumes=%d", image, req.Name, req.Port, len(envs), len(volumes))
 
+	if strings.Contains(image, "$") {
+		global.LOG.Errorf("[Install] image contains unresolved variables: %s", image)
+		inst.Status = "failed"
+		inst.Message = fmt.Sprintf("镜像名包含未解析的变量: %s，该应用可能需要在 1Panel 中安装", image)
+		s.instRepo.Update(inst)
+		return inst, fmt.Errorf("image contains unresolved variables: %s", image)
+	}
+
 	if s.ctnService.IsAvailable() {
 		global.LOG.Infof("[Install] pulling image %s ...", image)
 		if err := s.ctnService.client.Pull(image, req.Name); err != nil {
@@ -637,8 +645,8 @@ func (s *AppService) extractImageFrom1Panel(downloadURL string) string {
 	}
 
 	if image != "" && strings.Contains(image, "$") {
-		global.LOG.Warnf("[Sync] image still contains variable: %s, using as-is", image)
-		return image
+		global.LOG.Warnf("[Sync] image contains unresolved variables: %s", image)
+		return ""
 	}
 
 	global.LOG.Warnf("[Sync] failed to extract image from package")
