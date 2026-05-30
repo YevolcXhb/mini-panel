@@ -122,14 +122,28 @@ download_file() {
             proxy_args="-x ${HTTP_PROXY}"
         elif [ -n "${http_proxy:-}" ]; then
             proxy_args="-x ${http_proxy}"
+        elif [ -n "${ALL_PROXY:-}" ]; then
+            proxy_args="-x ${ALL_PROXY}"
+        elif [ -n "${all_proxy:-}" ]; then
+            proxy_args="-x ${all_proxy}"
         fi
-        curl -fsSL ${proxy_args} -o "$output" "$url"
+        curl --connect-timeout 15 --max-time 120 -fsSL ${proxy_args} -o "$output" "$url"
     else
         local proxy_args=""
         if [ -n "${HTTPS_PROXY:-}" ]; then
             proxy_args="-e https_proxy=${HTTPS_PROXY}"
+        elif [ -n "${https_proxy:-}" ]; then
+            proxy_args="-e https_proxy=${https_proxy}"
+        elif [ -n "${HTTP_PROXY:-}" ]; then
+            proxy_args="-e http_proxy=${HTTP_PROXY}"
+        elif [ -n "${http_proxy:-}" ]; then
+            proxy_args="-e http_proxy=${http_proxy}"
+        elif [ -n "${ALL_PROXY:-}" ]; then
+            proxy_args="-e all_proxy=${ALL_PROXY}"
+        elif [ -n "${all_proxy:-}" ]; then
+            proxy_args="-e all_proxy=${all_proxy}"
         fi
-        wget ${proxy_args} -qO "$output" "$url"
+        wget --timeout=15 --tries=1 ${proxy_args} -qO "$output" "$url"
     fi
 }
 
@@ -138,9 +152,9 @@ download_with_fallback() {
     local output="$2"
     local mirrors=(
         "$url"
-        "https://ghfast.top/${url#https://github.com/}"
         "https://gh-proxy.com/${url#https://github.com/}"
-        "https://mirror.ghproxy.com/${url#https://github.com/}"
+        "https://ghproxy.cn/${url#https://github.com/}"
+        "https://ghps.cc/${url#https://github.com/}"
     )
 
     for mirror in "${mirrors[@]}"; do
