@@ -56,5 +56,5 @@ export const useThemeStore = defineStore('theme', () => {
   watch(mode, applyTheme)
   applyTheme()
 
-  return { mode, isDark, setTheme, toggleTheme }
+  return { mode, isDark, applyTheme, setTheme, toggleTheme }
 })
