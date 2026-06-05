@@ -126,3 +126,12 @@ export const versionApi = {
 export const monitorApi = {
   history: (limit?: number) => api.get('/monitor/history', { params: { limit } })
 }
+
+export const websiteApi = {
+  list: () => api.get('/websites'),
+  create: (data: any) => api.post('/websites', data),
+  update: (id: number, data: any) => api.put(`/websites/${id}`, data),
+  delete: (id: number) => api.delete(`/websites/${id}`),
+  toggle: (id: number, enabled: boolean) => api.put(`/websites/${id}/toggle`, { enabled }),
+  reloadNginx: () => api.post('/websites/reload-nginx')
+}

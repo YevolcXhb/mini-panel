@@ -104,6 +104,15 @@ func NewRouter() *gin.Engine {
 
 		logAPI := api.NewLogAPI()
 		apiV1.GET("/logs", logAPI.List)
+
+		website := api.NewWebsiteAPI()
+		apiV1.GET("/websites", website.List)
+		apiV1.POST("/websites", website.Create)
+		apiV1.GET("/websites/:id", website.GetByID)
+		apiV1.PUT("/websites/:id", website.Update)
+		apiV1.DELETE("/websites/:id", website.Delete)
+		apiV1.PUT("/websites/:id/toggle", website.Toggle)
+		apiV1.POST("/websites/reload-nginx", website.ReloadNginx)
 	}
 
 	return r
