@@ -184,13 +184,13 @@ onUnmounted(() => {
   border: 1px solid var(--bdr);
   border-radius: var(--r);
   height: calc(100vh - 220px);
-  display: flex;
-  flex-direction: column;
   overflow: hidden;
+  position: relative;
 }
 .term-output {
-  flex: 1;
-  padding: 12px;
+  width: 100%;
+  height: 100%;
+  padding: 0;
 }
 .term-output :deep(.xterm) {
   height: 100%;
