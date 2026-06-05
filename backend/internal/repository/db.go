@@ -31,5 +31,7 @@ func Migrate(db *gorm.DB) error {
 		&model.Website{},
 		&model.DatabaseInstance{},
 		&model.FirewallRule{},
+		&model.BackupTask{},
+		&model.BackupRecord{},
 	)
 }

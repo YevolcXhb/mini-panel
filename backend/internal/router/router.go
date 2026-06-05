@@ -127,6 +127,16 @@ func NewRouter() *gin.Engine {
 		apiV1.PUT("/firewall/rules/:id", fw.Update)
 		apiV1.DELETE("/firewall/rules/:id", fw.Delete)
 		apiV1.POST("/firewall/apply", fw.Apply)
+
+		backup := api.NewBackupAPI()
+		apiV1.GET("/backups/tasks", backup.ListTasks)
+		apiV1.POST("/backups/tasks", backup.CreateTask)
+		apiV1.PUT("/backups/tasks/:id", backup.UpdateTask)
+		apiV1.DELETE("/backups/tasks/:id", backup.DeleteTask)
+		apiV1.POST("/backups/tasks/:id/run", backup.RunBackup)
+		apiV1.GET("/backups/records", backup.ListRecords)
+		apiV1.DELETE("/backups/records/:id", backup.DeleteRecord)
+		apiV1.POST("/backups/records/:id/restore", backup.RestoreBackup)
 	}
 
 	return r

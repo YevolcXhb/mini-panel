@@ -15,6 +15,7 @@ const routes = [
     children: [
       { path: 'dashboard', name: 'Dashboard', component: () => import('../views/Dashboard.vue') },
       { path: 'monitor', name: 'Monitor', component: () => import('../views/Monitor.vue') },
+      { path: 'backups', name: 'Backups', component: () => import('../views/Backup.vue') },
       { path: 'containers', name: 'Containers', component: () => import('../views/Container.vue') },
       { path: 'apps', name: 'Apps', component: () => import('../views/AppStore.vue') },
       { path: 'websites', name: 'Websites', component: () => import('../views/Websites.vue') },

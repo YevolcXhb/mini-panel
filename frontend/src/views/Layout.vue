@@ -59,6 +59,7 @@ const sidebarCollapsed = ref(false)
 const menus = [
   { path: '/dashboard', label: '仪表盘', icon: Odometer },
   { path: '/monitor', label: '监控中心', icon: Monitor },
+  { path: '/backups', label: '备份恢复', icon: Folder },
   { path: '/containers', label: '容器管理', icon: Box },
   { path: '/apps', label: '应用商店', icon: Shop },
   { path: '/websites', label: '网站管理', icon: Monitor },

@@ -151,3 +151,14 @@ export const firewallApi = {
   delete: (id: number) => api.delete(`/firewall/rules/${id}`),
   apply: () => api.post('/firewall/apply')
 }
+
+export const backupApi = {
+  listTasks: () => api.get('/backups/tasks'),
+  createTask: (data: any) => api.post('/backups/tasks', data),
+  updateTask: (id: number, data: any) => api.put(`/backups/tasks/${id}`, data),
+  deleteTask: (id: number) => api.delete(`/backups/tasks/${id}`),
+  runTask: (id: number) => api.post(`/backups/tasks/${id}/run`),
+  listRecords: (taskId?: number) => api.get('/backups/records', { params: { task_id: taskId } }),
+  deleteRecord: (id: number) => api.delete(`/backups/records/${id}`),
+  restoreRecord: (id: number) => api.post(`/backups/records/${id}/restore`)
+}
