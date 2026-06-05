@@ -393,6 +393,8 @@ func run() error {
 	_ = appService.InitDefaultApps()
 	_ = appService.InitDefaultSource()
 
+	service.StartMonitorCollector()
+
 	r := router.NewRouter()
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	global.LOG.Infof("mini-panel listening on http://%s", addr)

@@ -91,6 +91,22 @@
         <el-table-column prop="fs_type" label="类型" width="100" />
       </el-table>
     </div>
+
+    <h3 class="section-title">网络监控</h3>
+    <div class="table-wrap">
+      <el-table :data="monitor.network" size="small">
+        <el-table-column prop="name" label="接口" />
+        <el-table-column label="接收">
+          <template #default="{ row }">{{ formatBytes(row.bytes_recv) }}</template>
+        </el-table-column>
+        <el-table-column label="发送">
+          <template #default="{ row }">{{ formatBytes(row.bytes_sent) }}</template>
+        </el-table-column>
+        <el-table-column label="包数(收/发)">
+          <template #default="{ row }">{{ row.packets_recv }} / {{ row.packets_sent }}</template>
+        </el-table-column>
+      </el-table>
+    </div>
   </div>
 </template>
 

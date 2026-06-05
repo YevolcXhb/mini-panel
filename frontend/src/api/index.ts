@@ -122,3 +122,7 @@ export const logApi = {
 export const versionApi = {
   get: () => api.get('/version')
 }
+
+export const monitorApi = {
+  history: (limit?: number) => api.get('/monitor/history', { params: { limit } })
+}

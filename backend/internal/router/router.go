@@ -94,6 +94,9 @@ func NewRouter() *gin.Engine {
 		apiV1.POST("/settings/reset", setting.Reset)
 		apiV1.POST("/settings/clear-data", setting.ClearData)
 
+		monitor := api.NewMonitorAPI()
+		apiV1.GET("/monitor/history", monitor.List)
+
 		apiV1.POST("/auth/change-password", auth.ChangePassword)
 
 		audit := api.NewAuditAPI()
