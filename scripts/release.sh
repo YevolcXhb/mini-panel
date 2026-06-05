@@ -3,7 +3,7 @@
 set -e
 
 VERSION="${1:-$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')}"
-VERSION="${VERSION:-3.4.3}"
+VERSION="${VERSION:-3.4.4}"
 DIST_DIR="dist"
 BUILD_DIR="build"
 

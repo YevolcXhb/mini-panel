@@ -152,6 +152,14 @@ export const firewallApi = {
   apply: () => api.post('/firewall/apply')
 }
 
+export const userApi = {
+  list: () => api.get('/users'),
+  create: (data: any) => api.post('/users', data),
+  update: (id: number, data: any) => api.put(`/users/${id}`, data),
+  resetPassword: (id: number, data: any) => api.post(`/users/${id}/reset-password`, data),
+  deleteUser: (id: number) => api.delete(`/users/${id}`)
+}
+
 export const backupApi = {
   listTasks: () => api.get('/backups/tasks'),
   createTask: (data: any) => api.post('/backups/tasks', data),

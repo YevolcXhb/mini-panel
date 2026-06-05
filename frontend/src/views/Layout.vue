@@ -46,7 +46,7 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   Odometer, Folder, Monitor, Cpu, Box, Shop, Timer, Document, Setting,
-  SwitchButton, Sunny, Moon
+  SwitchButton, Sunny, Moon, User
 } from '@element-plus/icons-vue'
 import { useAuthStore, useThemeStore } from '../store'
 import { authApi } from '../api'
@@ -60,6 +60,7 @@ const menus = [
   { path: '/dashboard', label: '仪表盘', icon: Odometer },
   { path: '/monitor', label: '监控中心', icon: Monitor },
   { path: '/backups', label: '备份恢复', icon: Folder },
+  { path: '/users', label: '用户管理', icon: User },
   { path: '/containers', label: '容器管理', icon: Box },
   { path: '/apps', label: '应用商店', icon: Shop },
   { path: '/websites', label: '网站管理', icon: Monitor },

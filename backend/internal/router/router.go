@@ -137,6 +137,17 @@ func NewRouter() *gin.Engine {
 		apiV1.GET("/backups/records", backup.ListRecords)
 		apiV1.DELETE("/backups/records/:id", backup.DeleteRecord)
 		apiV1.POST("/backups/records/:id/restore", backup.RestoreBackup)
+
+		user := api.NewUserAPI()
+		adminV1 := apiV1.Group("/")
+		adminV1.Use(middleware.AdminMiddleware())
+		{
+			adminV1.GET("/users", user.List)
+			adminV1.POST("/users", user.Create)
+			adminV1.PUT("/users/:id", user.Update)
+			adminV1.POST("/users/:id/reset-password", user.ResetPassword)
+			adminV1.DELETE("/users/:id", user.Delete)
+		}
 	}
 
 	return r

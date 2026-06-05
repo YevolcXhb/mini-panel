@@ -16,6 +16,7 @@ const routes = [
       { path: 'dashboard', name: 'Dashboard', component: () => import('../views/Dashboard.vue') },
       { path: 'monitor', name: 'Monitor', component: () => import('../views/Monitor.vue') },
       { path: 'backups', name: 'Backups', component: () => import('../views/Backup.vue') },
+      { path: 'users', name: 'Users', component: () => import('../views/Users.vue') },
       { path: 'containers', name: 'Containers', component: () => import('../views/Container.vue') },
       { path: 'apps', name: 'Apps', component: () => import('../views/AppStore.vue') },
       { path: 'websites', name: 'Websites', component: () => import('../views/Websites.vue') },

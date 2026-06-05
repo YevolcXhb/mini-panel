@@ -86,17 +86,31 @@ func AuthMiddleware() gin.HandlerFunc {
 		}
 		if claims, ok := token.Claims.(jwt.MapClaims); ok {
 			c.Set("user", claims["user"])
+			c.Set("role", claims["role"])
 		}
 		c.Next()
 	}
 }
 
-func GenerateToken(username string) (string, error) {
+func GenerateToken(username, role string) (string, error) {
 	claims := jwt.MapClaims{
 		"user": username,
+		"role": role,
 		"exp":  time.Now().Add(24 * time.Hour).Unix(),
 		"iat":  time.Now().Unix(),
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString([]byte(global.CONF.JwtSecret))
+}
+
+func AdminMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		role, exists := c.Get("role")
+		if !exists || role != "admin" {
+			c.JSON(http.StatusForbidden, gin.H{"error": "admin access required"})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
 }
