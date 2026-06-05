@@ -47,3 +47,11 @@ func (a *SettingAPI) Reset(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "reset"})
 }
+
+func (a *SettingAPI) ClearData(c *gin.Context) {
+	if err := a.service.ClearData(); err != nil {
+		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "all data cleared, please re-login with admin/123456"})
+}

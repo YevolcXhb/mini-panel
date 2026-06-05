@@ -35,9 +35,10 @@
         <el-table-column label="修改时间" width="170">
           <template #default="{ row }">{{ new Date(row.mod_time * 1000).toLocaleString() }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column label="操作" width="210" fixed="right">
           <template #default="{ row }">
             <el-button size="small" v-if="!row.is_dir" @click.stop="editFile(row)">编辑</el-button>
+            <el-button size="small" v-if="!row.is_dir" @click.stop="downloadFile(row)">下载</el-button>
             <el-button size="small" type="danger" @click.stop="deleteFile(row)">删除</el-button>
           </template>
         </el-table-column>
@@ -154,6 +155,23 @@ async function deleteFile(row: any) {
     ElMessage.success('删除成功')
     loadFiles()
   } catch (e) {}
+}
+
+async function downloadFile(row: any) {
+  try {
+    const res = await fileApi.download(row.path)
+    const blob = new Blob([res.data])
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = row.name
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    window.URL.revokeObjectURL(url)
+  } catch (e) {
+    ElMessage.error('下载失败')
+  }
 }
 
 async function handleUpload(options: any) {

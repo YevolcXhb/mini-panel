@@ -132,7 +132,13 @@ const pwdForm = ref({ old_password: '', new_password: '' })
 const versionInfo = ref({ version: '-', build_time: '-', git_commit: '-' })
 
 async function loadSettings() {
-  try { const res: any = await settingApi.get(); settings.value = res.data || {} } catch (e) {}
+  try {
+    const res: any = await settingApi.get()
+    settings.value = res.data || {}
+    if (settings.value.theme) {
+      themeStore.setTheme(settings.value.theme)
+    }
+  } catch (e) {}
 }
 
 async function loadVersion() {
@@ -147,6 +153,7 @@ async function saveSettings() {
         toSave[key] = settings.value[key]
       }
     }
+    toSave.theme = themeStore.mode
     await settingApi.update(toSave)
     ElMessage.success('保存成功')
   } catch (e) {}
@@ -187,7 +194,10 @@ async function resetSettings() {
 async function clearData() {
   try {
     await ElMessageBox.confirm('确定要清除所有数据吗？此操作不可恢复！', '警告', { confirmButtonClass: 'el-button--danger' })
-    ElMessage.success('数据已清除')
+    await settingApi.clearData()
+    ElMessage.success('数据已清除，请使用 admin/123456 重新登录')
+    auth.clearAuth()
+    router.push('/login')
   } catch (e) {}
 }
 

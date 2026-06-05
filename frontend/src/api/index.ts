@@ -56,7 +56,8 @@ export const fileApi = {
     form.append('path', path)
     form.append('file', file)
     return api.post('/files/upload', form)
-  }
+  },
+  download: (path: string) => api.get('/files/download', { params: { path }, responseType: 'blob' })
 }
 
 export const processApi = {
@@ -108,7 +109,8 @@ export const cronjobApi = {
 export const settingApi = {
   get: () => api.get('/settings'),
   update: (data: any) => api.put('/settings', data),
-  reset: () => api.post('/settings/reset')
+  reset: () => api.post('/settings/reset'),
+  clearData: () => api.post('/settings/clear-data')
 }
 
 export const logApi = {

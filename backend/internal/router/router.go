@@ -92,6 +92,7 @@ func NewRouter() *gin.Engine {
 		apiV1.GET("/settings", setting.Get)
 		apiV1.PUT("/settings", setting.Update)
 		apiV1.POST("/settings/reset", setting.Reset)
+		apiV1.POST("/settings/clear-data", setting.ClearData)
 
 		apiV1.POST("/auth/change-password", auth.ChangePassword)
 

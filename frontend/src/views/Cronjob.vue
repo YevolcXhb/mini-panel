@@ -19,15 +19,20 @@
         <el-table-column label="上次执行" width="170">
           <template #default="{ row }">{{ row.last_run ? new Date(row.last_run * 1000).toLocaleString() : '-' }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="240" fixed="right">
           <template #default="{ row }">
             <el-button size="small" @click="runNow(row)">执行</el-button>
+            <el-button size="small" @click="viewLog(row)">日志</el-button>
             <el-button size="small" @click="editCronjob(row)">编辑</el-button>
             <el-button size="small" type="danger" @click="deleteCronjob(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
     </div>
+
+    <el-dialog v-model="showLog" title="执行日志" width="700px">
+      <div style="background:#0d1117;border-radius:8px;padding:12px;max-height:400px;overflow:auto;font-family:monospace;font-size:13px;line-height:1.6;color:#c9d1d9;white-space:pre-wrap">{{ logContent || '暂无日志' }}</div>
+    </el-dialog>
 
     <el-dialog v-model="showCreate" :title="editing ? '编辑任务' : '新建任务'" width="600px">
       <el-form :model="form" label-width="90px">
@@ -59,9 +64,16 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 const cronjobs = ref<any[]>([])
 const loading = ref(false)
 const showCreate = ref(false)
+const showLog = ref(false)
 const editing = ref(false)
+const logContent = ref('')
 
 const form = ref({ id: 0, name: '', spec: '', command: '', script: '' })
+
+function viewLog(row: any) {
+  logContent.value = row.last_log || ''
+  showLog.value = true
+}
 
 async function loadCronjobs() {
   loading.value = true
