@@ -87,17 +87,21 @@ func AuthMiddleware() gin.HandlerFunc {
 		if claims, ok := token.Claims.(jwt.MapClaims); ok {
 			c.Set("user", claims["user"])
 			c.Set("role", claims["role"])
+			if uid, ok := claims["user_id"]; ok {
+				c.Set("userID", uid)
+			}
 		}
 		c.Next()
 	}
 }
 
-func GenerateToken(username, role string) (string, error) {
+func GenerateToken(username, role string, userID uint) (string, error) {
 	claims := jwt.MapClaims{
-		"user": username,
-		"role": role,
-		"exp":  time.Now().Add(24 * time.Hour).Unix(),
-		"iat":  time.Now().Unix(),
+		"user":    username,
+		"role":    role,
+		"user_id": userID,
+		"exp":     time.Now().Add(24 * time.Hour).Unix(),
+		"iat":     time.Now().Unix(),
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString([]byte(global.CONF.JwtSecret))

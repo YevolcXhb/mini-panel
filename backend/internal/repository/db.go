@@ -33,5 +33,8 @@ func Migrate(db *gorm.DB) error {
 		&model.FirewallRule{},
 		&model.BackupTask{},
 		&model.BackupRecord{},
+		&model.AgentConfig{},
+		&model.AgentSession{},
+		&model.AgentMessage{},
 	)
 }

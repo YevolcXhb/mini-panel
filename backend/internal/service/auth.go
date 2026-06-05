@@ -58,7 +58,7 @@ func (s *AuthService) Login(username, password, ip string) (string, error) {
 	}
 
 	s.recordAttempt(username, ip, true, nil)
-	return middleware.GenerateToken(username, user.Role)
+	return middleware.GenerateToken(username, user.Role, user.ID)
 }
 
 func (s *AuthService) recordFailedAttempt(username, ip string) {

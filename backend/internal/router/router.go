@@ -138,6 +138,9 @@ func NewRouter() *gin.Engine {
 		apiV1.DELETE("/backups/records/:id", backup.DeleteRecord)
 		apiV1.POST("/backups/records/:id/restore", backup.RestoreBackup)
 
+		agentAPI := api.NewAgentAPI()
+		agentAPI.RegisterRoutes(apiV1)
+
 		user := api.NewUserAPI()
 		adminV1 := apiV1.Group("/")
 		adminV1.Use(middleware.AdminMiddleware())
