@@ -70,7 +70,7 @@ get_latest_version() {
 
 VERSION=$(get_latest_version)
 if [ -z "$VERSION" ]; then
-    VERSION="3.4.1"
+    VERSION="3.4.2"
     log_warn "Failed to detect latest version, fallback to v${VERSION}"
 else
     log_info "Latest version detected: v${VERSION}"
@@ -372,6 +372,21 @@ fi
 EOF
     chmod +x "${INSTALL_DIR}/stop.sh"
 
+    # Create restart script
+    cat > "${INSTALL_DIR}/restart.sh" <<'EOF'
+#!/bin/bash
+cd "$(dirname "$0")"
+if [ -f minipanel.pid ]; then
+    kill $(cat minipanel.pid) 2>/dev/null
+    rm -f minipanel.pid
+    sleep 1
+fi
+./minipanel &
+echo $! > minipanel.pid
+echo "Mini Panel restarted on http://0.0.0.0:8888"
+EOF
+    chmod +x "${INSTALL_DIR}/restart.sh"
+
     # Create status script
     cat > "${INSTALL_DIR}/status.sh" <<'EOF'
 #!/bin/bash
@@ -484,6 +499,19 @@ main() {
     fi
 
     setup_environment
+
+    # Auto-restart if minipanel is already running (update scenario)
+    if [ -f "${INSTALL_DIR}/minipanel.pid" ]; then
+        local old_pid=$(cat "${INSTALL_DIR}/minipanel.pid" 2>/dev/null)
+        if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+            log_info "Existing Mini Panel process detected (PID: $old_pid), restarting to apply updates..."
+            "${INSTALL_DIR}/stop.sh" >/dev/null 2>&1 || true
+            sleep 1
+            "${INSTALL_DIR}/start.sh" >/dev/null 2>&1
+            log_ok "Mini Panel restarted successfully"
+        fi
+    fi
+
     print_finish
 }
 

@@ -29,5 +29,7 @@ func Migrate(db *gorm.DB) error {
 		&model.AuditLog{},
 		&model.MonitorHistory{},
 		&model.Website{},
+		&model.DatabaseInstance{},
+		&model.FirewallRule{},
 	)
 }

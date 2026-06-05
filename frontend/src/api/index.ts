@@ -135,3 +135,19 @@ export const websiteApi = {
   toggle: (id: number, enabled: boolean) => api.put(`/websites/${id}/toggle`, { enabled }),
   reloadNginx: () => api.post('/websites/reload-nginx')
 }
+
+export const databaseApi = {
+  list: () => api.get('/databases'),
+  create: (data: any) => api.post('/databases', data),
+  update: (id: number, data: any) => api.put(`/databases/${id}`, data),
+  delete: (id: number) => api.delete(`/databases/${id}`),
+  test: (data: any) => api.post('/databases/test', data)
+}
+
+export const firewallApi = {
+  list: () => api.get('/firewall/rules'),
+  create: (data: any) => api.post('/firewall/rules', data),
+  update: (id: number, data: any) => api.put(`/firewall/rules/${id}`, data),
+  delete: (id: number) => api.delete(`/firewall/rules/${id}`),
+  apply: () => api.post('/firewall/apply')
+}

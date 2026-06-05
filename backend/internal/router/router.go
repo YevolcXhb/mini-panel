@@ -113,6 +113,20 @@ func NewRouter() *gin.Engine {
 		apiV1.DELETE("/websites/:id", website.Delete)
 		apiV1.PUT("/websites/:id/toggle", website.Toggle)
 		apiV1.POST("/websites/reload-nginx", website.ReloadNginx)
+
+		db := api.NewDatabaseAPI()
+		apiV1.GET("/databases", db.List)
+		apiV1.POST("/databases", db.Create)
+		apiV1.PUT("/databases/:id", db.Update)
+		apiV1.DELETE("/databases/:id", db.Delete)
+		apiV1.POST("/databases/test", db.TestConnection)
+
+		fw := api.NewFirewallAPI()
+		apiV1.GET("/firewall/rules", fw.List)
+		apiV1.POST("/firewall/rules", fw.Create)
+		apiV1.PUT("/firewall/rules/:id", fw.Update)
+		apiV1.DELETE("/firewall/rules/:id", fw.Delete)
+		apiV1.POST("/firewall/apply", fw.Apply)
 	}
 
 	return r
