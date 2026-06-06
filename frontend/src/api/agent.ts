@@ -8,6 +8,7 @@ export interface AgentConfig {
   max_tokens: number
   enabled: boolean
   system_prompt: string
+  skills?: string
 }
 
 export interface AgentSession {

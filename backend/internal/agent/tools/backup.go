@@ -12,6 +12,8 @@ import (
 // BackupListTool 列出备份任务和记录
 type BackupListTool struct{}
 
+func NewBackupListTool() *BackupListTool { return &BackupListTool{} }
+
 func (t *BackupListTool) Name() string        { return "list_backups" }
 func (t *BackupListTool) Description() string { return "列出备份任务和最近的备份记录。" }
 func (t *BackupListTool) Parameters() []provider.ToolParam {
@@ -65,6 +67,8 @@ func (t *BackupListTool) Execute(ctx context.Context, args map[string]interface{
 
 // BackupOpTool 备份操作
 type BackupOpTool struct{}
+
+func NewBackupOpTool() *BackupOpTool { return &BackupOpTool{} }
 
 func (t *BackupOpTool) Name() string { return "backup_op" }
 func (t *BackupOpTool) Description() string {

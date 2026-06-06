@@ -7,8 +7,8 @@ import (
 
 // AgentService Agent 业务层（仅配置和会话管理，不涉及 LLM 调用）
 type AgentService struct {
-	configRepo   *repository.ConfigRepo
-	sessionRepo  *repository.SessionManager
+	configRepo  *repository.ConfigRepo
+	sessionRepo *repository.SessionManager
 }
 
 func NewAgentService() *AgentService {
@@ -33,6 +33,7 @@ func (s *AgentService) UpdateConfig(userID uint, cfg *model.AgentConfig) error {
 		"max_tokens":    cfg.MaxTokens,
 		"enabled":       cfg.Enabled,
 		"system_prompt": cfg.SystemPrompt,
+		"skills":        cfg.Skills,
 	}
 	if cfg.APIKey != "" {
 		updates["api_key"] = cfg.APIKey

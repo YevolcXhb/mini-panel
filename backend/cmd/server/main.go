@@ -26,7 +26,7 @@ func init() {
 }
 
 var (
-	version   = "3.5.1"
+	version   = "3.5.3"
 	buildTime = "unknown"
 	gitCommit = "unknown"
 )

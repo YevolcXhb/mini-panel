@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
@@ -67,7 +68,9 @@ func (a *AgentAPI) GetConfig(c *gin.Context) {
 			"max_tokens":    cfg.MaxTokens,
 			"enabled":       cfg.Enabled,
 			"system_prompt": cfg.SystemPrompt,
+			"skills":        cfg.Skills,
 		},
+		"available_skills": agent.GetAllSkills(),
 	})
 }
 
@@ -192,7 +195,9 @@ func (a *AgentAPI) Chat(c *gin.Context) {
 			stream <- agent.StreamChunk{Type: "error", Error: "创建 Provider 失败: " + err.Error()}
 			return
 		}
-		engine := agent.NewEngineWithProvider(p)
+		var skillIDs []string
+		_ = json.Unmarshal([]byte(cfg.Skills), &skillIDs)
+		engine := agent.NewEngineWithProvider(p, skillIDs)
 		_ = engine.Run(ctx, req.SessionID, req.Message, stream)
 	}()
 
@@ -253,7 +258,9 @@ func (a *AgentAPI) Confirm(c *gin.Context) {
 			stream <- agent.StreamChunk{Type: "error", Error: "创建 Provider 失败: " + err.Error()}
 			return
 		}
-		engine := agent.NewEngineWithProvider(p)
+		var skillIDs []string
+		_ = json.Unmarshal([]byte(cfg.Skills), &skillIDs)
+		engine := agent.NewEngineWithProvider(p, skillIDs)
 		_ = engine.RunWithConfirm(ctx, req.SessionID, req.ToolCallID, req.Confirmed, stream)
 	}()
 

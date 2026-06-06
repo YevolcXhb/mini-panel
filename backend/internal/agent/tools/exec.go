@@ -20,8 +20,12 @@ var dangerousPatterns = []string{
 // ExecTool 命令执行（带安全检查）
 type ExecTool struct{}
 
-func (t *ExecTool) Name() string        { return "exec_command" }
-func (t *ExecTool) Description() string { return "执行 Shell 命令。支持查看系统状态、配置文件等。危险操作会被拦截。" }
+func NewExecTool() *ExecTool { return &ExecTool{} }
+
+func (t *ExecTool) Name() string { return "execute_command" }
+func (t *ExecTool) Description() string {
+	return "执行 Shell 命令。支持查看系统状态、配置文件等。危险操作会被拦截。"
+}
 func (t *ExecTool) Parameters() []provider.ToolParam {
 	return []provider.ToolParam{
 		{Name: "command", Type: "string", Description: "要执行的命令", Required: true},
@@ -70,8 +74,12 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (st
 // DashboardTool 获取面板概览
 type DashboardTool struct{}
 
-func (t *DashboardTool) Name() string        { return "get_dashboard" }
-func (t *DashboardTool) Description() string { return "获取 MiniPanel 面板概览信息，包括容器数、网站数、数据库数等。" }
+func NewDashboardTool() *DashboardTool { return &DashboardTool{} }
+
+func (t *DashboardTool) Name() string { return "dashboard_overview" }
+func (t *DashboardTool) Description() string {
+	return "获取 MiniPanel 面板概览信息，包括容器数、网站数、数据库数等。"
+}
 func (t *DashboardTool) Parameters() []provider.ToolParam { return nil }
 func (t *DashboardTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
 	// 通过 exec 获取一些基础统计

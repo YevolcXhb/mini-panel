@@ -12,6 +12,8 @@ import (
 // DatabaseListTool 列出数据库
 type DatabaseListTool struct{}
 
+func NewDatabaseListTool() *DatabaseListTool { return &DatabaseListTool{} }
+
 func (t *DatabaseListTool) Name() string                     { return "list_databases" }
 func (t *DatabaseListTool) Description() string              { return "列出所有数据库实例。" }
 func (t *DatabaseListTool) Parameters() []provider.ToolParam { return nil }
@@ -39,7 +41,9 @@ func (t *DatabaseListTool) Execute(ctx context.Context, args map[string]interfac
 // DatabaseOpTool 数据库操作
 type DatabaseOpTool struct{}
 
-func (t *DatabaseOpTool) Name() string { return "database_op" }
+func NewDatabaseOpTool() *DatabaseOpTool { return &DatabaseOpTool{} }
+
+func (t *DatabaseOpTool) Name() string        { return "database_operation" }
 func (t *DatabaseOpTool) Description() string {
 	return "对数据库执行操作: test(测试连接)/delete(删除实例)。"
 }

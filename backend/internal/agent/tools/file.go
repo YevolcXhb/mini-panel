@@ -13,6 +13,8 @@ import (
 // FileReadTool 读取文件
 type FileReadTool struct{}
 
+func NewFileReadTool() *FileReadTool { return &FileReadTool{} }
+
 func (t *FileReadTool) Name() string        { return "read_file" }
 func (t *FileReadTool) Description() string { return "读取指定文件的内容。" }
 func (t *FileReadTool) Parameters() []provider.ToolParam {
@@ -43,6 +45,8 @@ func (t *FileReadTool) Execute(ctx context.Context, args map[string]interface{})
 
 // FileListTool 列出目录
 type FileListTool struct{}
+
+func NewFileListTool() *FileListTool { return &FileListTool{} }
 
 func (t *FileListTool) Name() string        { return "list_files" }
 func (t *FileListTool) Description() string { return "列出指定目录下的文件和子目录。" }
@@ -78,6 +82,8 @@ func (t *FileListTool) Execute(ctx context.Context, args map[string]interface{})
 
 // FileWriteTool 写入文件
 type FileWriteTool struct{}
+
+func NewFileWriteTool() *FileWriteTool { return &FileWriteTool{} }
 
 func (t *FileWriteTool) Name() string        { return "write_file" }
 func (t *FileWriteTool) Description() string { return "创建新文件或覆盖写入文件内容。" }

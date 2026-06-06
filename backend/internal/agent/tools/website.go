@@ -12,6 +12,8 @@ import (
 // WebsiteListTool 列出网站
 type WebsiteListTool struct{}
 
+func NewWebsiteListTool() *WebsiteListTool { return &WebsiteListTool{} }
+
 func (t *WebsiteListTool) Name() string                     { return "list_websites" }
 func (t *WebsiteListTool) Description() string              { return "列出所有网站配置及状态。" }
 func (t *WebsiteListTool) Parameters() []provider.ToolParam { return nil }
@@ -42,6 +44,8 @@ func (t *WebsiteListTool) Execute(ctx context.Context, args map[string]interface
 
 // WebsiteOpTool 网站操作
 type WebsiteOpTool struct{}
+
+func NewWebsiteOpTool() *WebsiteOpTool { return &WebsiteOpTool{} }
 
 func (t *WebsiteOpTool) Name() string { return "website_op" }
 func (t *WebsiteOpTool) Description() string {
@@ -74,7 +78,9 @@ func (t *WebsiteOpTool) Execute(ctx context.Context, args map[string]interface{}
 // NginxLogTool 读取 Nginx 日志
 type NginxLogTool struct{}
 
-func (t *NginxLogTool) Name() string        { return "read_nginx_log" }
+func NewNginxLogTool() *NginxLogTool { return &NginxLogTool{} }
+
+func (t *NginxLogTool) Name() string        { return "get_nginx_logs" }
 func (t *NginxLogTool) Description() string { return "读取 Nginx 访问日志或错误日志。" }
 func (t *NginxLogTool) Parameters() []provider.ToolParam {
 	return []provider.ToolParam{

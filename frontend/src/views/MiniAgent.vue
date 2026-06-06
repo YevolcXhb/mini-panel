@@ -42,6 +42,7 @@
           <div class="message-avatar">🤖</div>
           <div class="message-body">
             <div v-if="msg.content" class="message-text" v-html="renderMarkdown(msg.content)"></div>
+            <span v-if="streaming && idx === messages.length - 1 && streamBuffer.length > 0" class="typing-cursor">▌</span>
             <!-- 工具调用展示 -->
             <div v-if="msg.toolCalls && msg.toolCalls.length > 0" class="tool-calls">
               <div v-for="tc in msg.toolCalls" :key="tc.id" class="tool-call-card">
@@ -64,14 +65,6 @@
             </div>
             <pre class="tool-result-content">{{ msg.content }}</pre>
           </div>
-        </div>
-      </div>
-
-      <!-- 流式消息 -->
-      <div v-if="currentStream.length > 0" class="message assistant-message">
-        <div class="message-avatar">🤖</div>
-        <div class="message-body">
-          <div class="message-text" v-html="renderMarkdown(currentStream.join(''))"></div>
         </div>
       </div>
 
@@ -143,6 +136,13 @@
         <el-form-item label="System Prompt">
           <el-input v-model="config.system_prompt" type="textarea" :rows="6" />
         </el-form-item>
+        <el-form-item label="启用技能">
+          <el-checkbox-group v-model="config.skills">
+            <el-checkbox v-for="skill in availableSkills" :key="skill.id" :label="skill.id">
+              {{ skill.name }}
+            </el-checkbox>
+          </el-checkbox-group>
+        </el-form-item>
         <el-form-item>
           <el-button type="primary" @click="saveConfig">保存设置</el-button>
           <el-button @click="loadConfig">重置</el-button>
@@ -175,6 +175,43 @@ const pendingConfirm = ref<{ toolCallId: string; command: string; message: strin
 const currentSessionId = ref(0)
 let currentController: AbortController | null = null
 
+// 打字机效果状态
+const streamBuffer = ref('')
+let typewriterTimer: number | null = null
+
+function startTypewriter() {
+  if (typewriterTimer) return
+  typewriterTimer = window.setInterval(() => {
+    if (streamBuffer.value.length === 0) {
+      stopTypewriter()
+      return
+    }
+    let charsToAdd = 1
+    if (streamBuffer.value.length > 80) charsToAdd = 4
+    else if (streamBuffer.value.length > 40) charsToAdd = 2
+    const lastMsg = messages.value[messages.value.length - 1]
+    if (lastMsg && lastMsg.role === 'assistant') {
+      lastMsg.content += streamBuffer.value.substring(0, charsToAdd)
+    }
+    streamBuffer.value = streamBuffer.value.substring(charsToAdd)
+    scrollToBottom()
+  }, 20)
+}
+
+function stopTypewriter() {
+  if (typewriterTimer) {
+    clearInterval(typewriterTimer)
+    typewriterTimer = null
+  }
+  if (streamBuffer.value.length > 0) {
+    const lastMsg = messages.value[messages.value.length - 1]
+    if (lastMsg && lastMsg.role === 'assistant') {
+      lastMsg.content += streamBuffer.value
+    }
+    streamBuffer.value = ''
+  }
+}
+
 const examples = [
   '查看系统状态',
   '列出所有容器',
@@ -184,7 +221,7 @@ const examples = [
   '重启 MySQL 容器',
 ]
 
-const config = ref<AgentConfig & { apiKey: string }>({
+const config = ref<AgentConfig & { apiKey: string; skills: string[] }>({
   provider: 'openai',
   base_url: '',
   model: 'gpt-4o-mini',
@@ -192,19 +229,36 @@ const config = ref<AgentConfig & { apiKey: string }>({
   max_tokens: 4096,
   enabled: true,
   system_prompt: '',
-  apiKey: ''
+  apiKey: '',
+  skills: ['system', 'container', 'website', 'database', 'firewall', 'file', 'backup', 'web']
 })
+
+const availableSkills = ref<{ id: string; name: string; description: string; icon: string }[]>([])
 
 onMounted(() => {
   loadConfig()
   createSession()
 })
 
+const defaultSkills = ['system', 'container', 'website', 'database', 'firewall', 'file', 'backup', 'web']
+
 async function loadConfig() {
   try {
     const res: any = await agentApi.getConfig()
     if (res.code === 200) {
       Object.assign(config.value, res.data)
+      if (res.data.skills && typeof res.data.skills === 'string' && res.data.skills.trim()) {
+        try {
+          config.value.skills = JSON.parse(res.data.skills)
+        } catch {
+          config.value.skills = [...defaultSkills]
+        }
+      } else {
+        config.value.skills = [...defaultSkills]
+      }
+      if (res.available_skills && Array.isArray(res.available_skills)) {
+        availableSkills.value = res.available_skills
+      }
     }
   } catch {
     // ignore
@@ -213,8 +267,9 @@ async function loadConfig() {
 
 async function saveConfig() {
   try {
-    const payload = { ...config.value }
-    const res: any = await agentApi.updateConfig(payload as any)
+    const payload: any = { ...config.value }
+    payload.skills = JSON.stringify(config.value.skills)
+    const res: any = await agentApi.updateConfig(payload)
     if (res.code === 200) {
       ElMessage.success('设置已保存')
       showSettings.value = false
@@ -245,9 +300,12 @@ function handleSend() {
   if (!text || streaming.value) return
 
   messages.value.push({ role: 'user', content: text })
+  messages.value.push({ role: 'assistant', content: '' })
   inputMessage.value = ''
   streaming.value = true
   currentStream.value = []
+  streamBuffer.value = ''
+  stopTypewriter()
   scrollToBottom()
 
   const chunks: StreamChunk[] = []
@@ -275,8 +333,9 @@ function handleChunk(chunk: StreamChunk) {
     case 'message':
       if (chunk.content) {
         currentStream.value.push(chunk.content)
+        streamBuffer.value += chunk.content
+        startTypewriter()
       }
-      scrollToBottom()
       break
     case 'tool_call':
       // 工具调用会在 finalize 时统一添加
@@ -291,21 +350,26 @@ function handleChunk(chunk: StreamChunk) {
         message: chunk.message || '需要确认此操作'
       }
       streaming.value = false
+      stopTypewriter()
       break
     case 'error':
       streaming.value = false
+      stopTypewriter()
       messages.value.push({ role: 'assistant', content: `❌ 错误: ${chunk.error}` })
       scrollToBottom()
       break
     case 'done':
       streaming.value = false
+      stopTypewriter()
       break
   }
 }
 
 function finalizeStream(chunks: StreamChunk[]) {
   streaming.value = false
+  stopTypewriter()
   currentStream.value = []
+  streamBuffer.value = ''
 
   let assistantContent = ''
   const toolCalls: any[] = []
@@ -328,7 +392,13 @@ function finalizeStream(chunks: StreamChunk[]) {
     }
   }
 
-  if (assistantContent || toolCalls.length > 0) {
+  const lastMsg = messages.value[messages.value.length - 1]
+  if (lastMsg && lastMsg.role === 'assistant') {
+    lastMsg.content = assistantContent || lastMsg.content
+    if (toolCalls.length > 0) {
+      lastMsg.toolCalls = toolCalls
+    }
+  } else if (assistantContent || toolCalls.length > 0) {
     messages.value.push({ role: 'assistant', content: assistantContent, toolCalls })
   }
   for (const tr of toolResults) {
@@ -342,6 +412,8 @@ function handleConfirm(confirmed: boolean) {
   if (!pendingConfirm.value) return
   const { toolCallId } = pendingConfirm.value
   pendingConfirm.value = null
+  streamBuffer.value = ''
+  stopTypewriter()
 
   if (confirmed) {
     messages.value.push({ role: 'assistant', content: '✅ 已确认执行' })
@@ -367,6 +439,8 @@ function handleConfirm(confirmed: boolean) {
 function clearChat() {
   messages.value = []
   currentStream.value = []
+  streamBuffer.value = ''
+  stopTypewriter()
   pendingConfirm.value = null
   if (currentController) {
     currentController.abort()
@@ -658,5 +732,17 @@ function formatJson(str: string): string {
 .send-btn {
   align-self: flex-end;
   height: 52px;
+}
+
+.typing-cursor {
+  display: inline-block;
+  color: #409eff;
+  animation: blink 1s step-end infinite;
+  margin-left: 2px;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 }
 </style>

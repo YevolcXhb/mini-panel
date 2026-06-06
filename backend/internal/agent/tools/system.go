@@ -13,6 +13,8 @@ import (
 // SystemInfoTool 获取系统信息
 type SystemInfoTool struct{}
 
+func NewSystemInfoTool() *SystemInfoTool { return &SystemInfoTool{} }
+
 func (t *SystemInfoTool) Name() string { return "get_system_info" }
 func (t *SystemInfoTool) Description() string {
 	return "获取服务器系统信息，包括 CPU、内存、磁盘、负载等。"
@@ -61,7 +63,9 @@ func (t *SystemInfoTool) Execute(ctx context.Context, args map[string]interface{
 // ProcessListTool 获取进程列表
 type ProcessListTool struct{}
 
-func (t *ProcessListTool) Name() string { return "list_processes" }
+func NewProcessListTool() *ProcessListTool { return &ProcessListTool{} }
+
+func (t *ProcessListTool) Name() string        { return "list_processes" }
 func (t *ProcessListTool) Description() string {
 	return "获取当前运行的进程列表，可按名称或 PID 过滤。"
 }

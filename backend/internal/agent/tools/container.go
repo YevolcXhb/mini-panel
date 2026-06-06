@@ -12,6 +12,8 @@ import (
 // ContainerListTool 列出容器
 type ContainerListTool struct{}
 
+func NewContainerListTool() *ContainerListTool { return &ContainerListTool{} }
+
 func (t *ContainerListTool) Name() string        { return "list_containers" }
 func (t *ContainerListTool) Description() string { return "列出所有 Docker 容器及其状态。" }
 func (t *ContainerListTool) Parameters() []provider.ToolParam {
@@ -44,6 +46,8 @@ func (t *ContainerListTool) Execute(ctx context.Context, args map[string]interfa
 
 // ContainerOpTool 容器操作
 type ContainerOpTool struct{}
+
+func NewContainerOpTool() *ContainerOpTool { return &ContainerOpTool{} }
 
 func (t *ContainerOpTool) Name() string { return "container_op" }
 func (t *ContainerOpTool) Description() string {
@@ -82,7 +86,9 @@ func (t *ContainerOpTool) Execute(ctx context.Context, args map[string]interface
 // ContainerLogsTool 容器日志
 type ContainerLogsTool struct{}
 
-func (t *ContainerLogsTool) Name() string        { return "container_logs" }
+func NewContainerLogsTool() *ContainerLogsTool { return &ContainerLogsTool{} }
+
+func (t *ContainerLogsTool) Name() string        { return "get_container_logs" }
 func (t *ContainerLogsTool) Description() string { return "获取指定容器的最近日志。" }
 func (t *ContainerLogsTool) Parameters() []provider.ToolParam {
 	return []provider.ToolParam{

@@ -12,6 +12,7 @@ type AgentConfig struct {
 	MaxTokens    int     `json:"max_tokens" gorm:"default:4096"`
 	Enabled      bool    `json:"enabled" gorm:"default:true"`
 	SystemPrompt string  `json:"system_prompt" gorm:"type:text"`
+	Skills       string  `json:"skills" gorm:"type:text;default:'[\"system\",\"container\",\"website\",\"database\",\"firewall\",\"file\",\"backup\",\"web\"]'"` // JSON 数组
 }
 
 // AgentSession 会话

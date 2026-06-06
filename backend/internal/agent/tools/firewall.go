@@ -12,7 +12,9 @@ import (
 // FirewallListTool 列出防火墙规则
 type FirewallListTool struct{}
 
-func (t *FirewallListTool) Name() string                     { return "list_firewall_rules" }
+func NewFirewallListTool() *FirewallListTool { return &FirewallListTool{} }
+
+func (t *FirewallListTool) Name() string        { return "list_firewall_rules" }
 func (t *FirewallListTool) Description() string              { return "列出所有防火墙规则。" }
 func (t *FirewallListTool) Parameters() []provider.ToolParam { return nil }
 func (t *FirewallListTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
@@ -39,7 +41,9 @@ func (t *FirewallListTool) Execute(ctx context.Context, args map[string]interfac
 // FirewallOpTool 防火墙操作
 type FirewallOpTool struct{}
 
-func (t *FirewallOpTool) Name() string { return "firewall_op" }
+func NewFirewallOpTool() *FirewallOpTool { return &FirewallOpTool{} }
+
+func (t *FirewallOpTool) Name() string        { return "firewall_operation" }
 func (t *FirewallOpTool) Description() string {
 	return "防火墙操作: apply(应用规则)/delete(删除规则)。新增规则建议通过面板操作。"
 }
