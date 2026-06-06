@@ -133,9 +133,6 @@
         <el-form-item label="Max Tokens">
           <el-input-number v-model="config.max_tokens" :min="512" :max="8192" :step="512" />
         </el-form-item>
-        <el-form-item label="System Prompt">
-          <el-input v-model="config.system_prompt" type="textarea" :rows="6" />
-        </el-form-item>
         <el-form-item label="启用技能">
           <el-checkbox-group v-model="config.skills">
             <el-checkbox v-for="skill in availableSkills" :key="skill.id" :label="skill.id">
@@ -360,25 +357,21 @@ function handleChunk(chunk: StreamChunk) {
       break
     case 'done':
       streaming.value = false
-      stopTypewriter()
+      // 不停止打字机，让缓冲区内容继续逐字显示完毕
       break
   }
 }
 
 function finalizeStream(chunks: StreamChunk[]) {
   streaming.value = false
-  stopTypewriter()
+  // 不清空 streamBuffer，让打字机继续逐字显示直到 buffer 为空
   currentStream.value = []
-  streamBuffer.value = ''
 
-  let assistantContent = ''
   const toolCalls: any[] = []
   const toolResults: ChatMessage[] = []
 
   for (const chunk of chunks) {
-    if (chunk.type === 'message') {
-      assistantContent += chunk.content || ''
-    } else if (chunk.type === 'tool_call') {
+    if (chunk.type === 'tool_call') {
       toolCalls.push({
         id: chunk.tool_call_id,
         function: { name: chunk.tool_name, arguments: chunk.content }
@@ -394,12 +387,9 @@ function finalizeStream(chunks: StreamChunk[]) {
 
   const lastMsg = messages.value[messages.value.length - 1]
   if (lastMsg && lastMsg.role === 'assistant') {
-    lastMsg.content = assistantContent || lastMsg.content
     if (toolCalls.length > 0) {
       lastMsg.toolCalls = toolCalls
     }
-  } else if (assistantContent || toolCalls.length > 0) {
-    messages.value.push({ role: 'assistant', content: assistantContent, toolCalls })
   }
   for (const tr of toolResults) {
     messages.value.push(tr)
@@ -488,7 +478,7 @@ function formatJson(str: string): string {
   display: flex;
   flex-direction: column;
   height: calc(100vh - 60px);
-  background: #f5f7fa;
+  background: var(--bg);
 }
 
 .agent-header {
@@ -496,8 +486,8 @@ function formatJson(str: string): string {
   justify-content: space-between;
   align-items: center;
   padding: 12px 20px;
-  background: #fff;
-  border-bottom: 1px solid #e4e7ed;
+  background: var(--card);
+  border-bottom: 1px solid var(--bdr);
 }
 
 .header-left {
@@ -508,13 +498,13 @@ function formatJson(str: string): string {
 
 .agent-icon {
   font-size: 24px;
-  color: #409eff;
+  color: var(--acc);
 }
 
 .agent-title {
   font-size: 18px;
   font-weight: 600;
-  color: #303133;
+  color: var(--txt);
 }
 
 .header-right {
@@ -534,12 +524,12 @@ function formatJson(str: string): string {
 .empty-state {
   text-align: center;
   margin-top: 80px;
-  color: #606266;
+  color: var(--txt2);
 }
 
 .empty-icon {
   font-size: 64px;
-  color: #c0c4cc;
+  color: var(--dim);
   margin-bottom: 20px;
 }
 
@@ -557,7 +547,7 @@ function formatJson(str: string): string {
 }
 
 .example-tag:hover {
-  background: #409eff;
+  background: var(--acc);
   color: #fff;
 }
 
@@ -575,7 +565,7 @@ function formatJson(str: string): string {
 
 .user-message {
   align-self: flex-end;
-  background: #409eff;
+  background: var(--acc);
   color: #fff;
 }
 
@@ -592,7 +582,7 @@ function formatJson(str: string): string {
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  background: #e6f2ff;
+  background: var(--acc-bg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -601,15 +591,15 @@ function formatJson(str: string): string {
 }
 
 .message-body {
-  background: #fff;
+  background: var(--card);
   padding: 12px 16px;
   border-radius: 12px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  box-shadow: var(--shadow);
   flex: 1;
 }
 
 .message-text {
-  color: #303133;
+  color: var(--txt);
   word-break: break-word;
 }
 
@@ -623,11 +613,11 @@ function formatJson(str: string): string {
 }
 
 .message-text :deep(code) {
-  background: #f4f4f5;
+  background: var(--bg2);
   padding: 2px 6px;
   border-radius: 4px;
   font-family: monospace;
-  color: #e83e8c;
+  color: var(--red);
 }
 
 .tool-message {
@@ -644,8 +634,8 @@ function formatJson(str: string): string {
 }
 
 .tool-call-card {
-  background: #f0f9ff;
-  border: 1px solid #b3e0ff;
+  background: var(--acc-bg);
+  border: 1px solid var(--acc);
   border-radius: 8px;
   padding: 10px;
 }
@@ -654,7 +644,7 @@ function formatJson(str: string): string {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: #0969da;
+  color: var(--acc);
   font-size: 13px;
   margin-bottom: 6px;
 }
@@ -662,15 +652,15 @@ function formatJson(str: string): string {
 .tool-args {
   margin: 0;
   padding: 8px;
-  background: #f6f8fa;
+  background: var(--bg2);
   border-radius: 4px;
   font-size: 12px;
   overflow-x: auto;
 }
 
 .tool-result-card {
-  background: #f6ffed;
-  border: 1px solid #b7eb8f;
+  background: rgba(52, 211, 153, 0.08);
+  border: 1px solid var(--grn);
   border-radius: 8px;
   padding: 10px;
   margin-left: 46px;
@@ -680,7 +670,7 @@ function formatJson(str: string): string {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: #52c41a;
+  color: var(--grn);
   font-size: 13px;
   margin-bottom: 6px;
 }
@@ -688,7 +678,7 @@ function formatJson(str: string): string {
 .tool-result-content {
   margin: 0;
   padding: 8px;
-  background: #fff;
+  background: var(--card);
   border-radius: 4px;
   font-size: 12px;
   overflow-x: auto;
@@ -704,15 +694,17 @@ function formatJson(str: string): string {
 
 .confirm-content {
   margin: 10px 0;
+  color: var(--txt);
 }
 
 .confirm-command {
-  background: #fff2f0;
-  border: 1px solid #ffccc7;
+  background: rgba(240, 101, 112, 0.08);
+  border: 1px solid var(--red);
   padding: 8px;
   border-radius: 4px;
   margin-top: 8px;
   font-family: monospace;
+  color: var(--txt);
 }
 
 .confirm-actions {
@@ -725,8 +717,8 @@ function formatJson(str: string): string {
   display: flex;
   gap: 10px;
   padding: 16px 20px;
-  background: #fff;
-  border-top: 1px solid #e4e7ed;
+  background: var(--card);
+  border-top: 1px solid var(--bdr);
 }
 
 .send-btn {
@@ -736,7 +728,7 @@ function formatJson(str: string): string {
 
 .typing-cursor {
   display: inline-block;
-  color: #409eff;
+  color: var(--acc);
   animation: blink 1s step-end infinite;
   margin-left: 2px;
 }

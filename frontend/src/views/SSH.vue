@@ -53,6 +53,7 @@ const terminalRef = ref<HTMLElement>()
 let term: Terminal
 let ws: WebSocket
 let fitAddon: FitAddon
+let themeObserver: MutationObserver | null = null
 
 const SSH_CONFIG_KEY = 'minipanel_ssh_config'
 
@@ -93,6 +94,24 @@ function testConnection() {
   ElMessage.info('测试连接功能开发中，请先使用 Web 终端')
 }
 
+function getTerminalTheme() {
+  const isDark = document.documentElement.classList.contains('dark')
+  if (isDark) {
+    return {
+      background: '#000000',
+      foreground: '#00ff00',
+      cursor: '#00ff00',
+      selectionBackground: 'rgba(0, 255, 0, 0.3)'
+    }
+  }
+  return {
+    background: '#f0f2f5',
+    foreground: '#1a1d2e',
+    cursor: '#1a1d2e',
+    selectionBackground: 'rgba(26, 29, 46, 0.2)'
+  }
+}
+
 function initTerminal() {
   if (term) {
     term.dispose()
@@ -104,12 +123,7 @@ function initTerminal() {
     cursorBlink: true,
     fontSize: 13,
     fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-    theme: {
-      background: '#000000',
-      foreground: '#00ff00',
-      cursor: '#00ff00',
-      selectionBackground: 'rgba(0, 255, 0, 0.3)'
-    },
+    theme: getTerminalTheme(),
     convertEol: true
   })
 
@@ -170,17 +184,24 @@ onMounted(() => {
     initTerminal()
   }
   window.addEventListener('resize', () => fitAddon?.fit())
+
+  themeObserver = new MutationObserver(() => {
+    const newTheme = getTerminalTheme()
+    term.options.theme = newTheme
+  })
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
 })
 
 onUnmounted(() => {
   if (ws) ws.close()
   if (term) term.dispose()
+  themeObserver?.disconnect()
 })
 </script>
 
 <style scoped>
 .terminal-wrap {
-  background: #000;
+  background: var(--bg);
   border: 1px solid var(--bdr);
   border-radius: var(--r);
   height: calc(100vh - 220px);
