@@ -23,7 +23,7 @@ func GetAllSkills() []*skills.Skill {
 }
 
 // NewEngineWithProvider 使用 Provider 创建完整引擎
-func NewEngineWithProvider(p provider.Provider, skillIDs []string) *Engine {
+func NewEngineWithProvider(p provider.Provider, skillIDs []string, systemPrompt string) *Engine {
 	registry := BuildToolRegistryBySkills(skillIDs)
-	return NewEngine(p, registry, 20)
+	return NewEngine(p, registry, systemPrompt, 20)
 }

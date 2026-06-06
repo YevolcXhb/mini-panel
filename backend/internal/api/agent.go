@@ -197,7 +197,7 @@ func (a *AgentAPI) Chat(c *gin.Context) {
 		}
 		var skillIDs []string
 		_ = json.Unmarshal([]byte(cfg.Skills), &skillIDs)
-		engine := agent.NewEngineWithProvider(p, skillIDs)
+		engine := agent.NewEngineWithProvider(p, skillIDs, cfg.SystemPrompt)
 		_ = engine.Run(ctx, req.SessionID, req.Message, stream)
 	}()
 
@@ -260,7 +260,7 @@ func (a *AgentAPI) Confirm(c *gin.Context) {
 		}
 		var skillIDs []string
 		_ = json.Unmarshal([]byte(cfg.Skills), &skillIDs)
-		engine := agent.NewEngineWithProvider(p, skillIDs)
+		engine := agent.NewEngineWithProvider(p, skillIDs, cfg.SystemPrompt)
 		_ = engine.RunWithConfirm(ctx, req.SessionID, req.ToolCallID, req.Confirmed, stream)
 	}()
 
