@@ -216,6 +216,20 @@ func (e *Engine) continueAfterTool(ctx context.Context, sessionID uint, stream c
 		return err
 	}
 
+	// 注入系统提示词
+	if e.systemPrompt != "" {
+		hasSystem := false
+		for _, m := range messages {
+			if m.Role == "system" {
+				hasSystem = true
+				break
+			}
+		}
+		if !hasSystem {
+			messages = append([]provider.LLMMessage{{Role: "system", Content: e.systemPrompt}}, messages...)
+		}
+	}
+
 	toolDefs := e.registry.ToDefinitions()
 	resp, err := e.provider.Chat(ctx, messages, toolDefs)
 	if err != nil {
@@ -224,16 +238,66 @@ func (e *Engine) continueAfterTool(ctx context.Context, sessionID uint, stream c
 	}
 
 	if len(resp.ToolCalls) == 0 {
-		stream <- StreamChunk{Type: "message", Content: resp.Content}
-		_ = e.sessionMgr.SaveAssistantMessage(sessionID, resp.Content, nil)
+		content := resp.Content
+		if strings.TrimSpace(content) == "" {
+			content = "操作已完成。"
+		}
+		stream <- StreamChunk{Type: "message", Content: content}
+		_ = e.sessionMgr.SaveAssistantMessage(sessionID, content, nil)
 		stream <- StreamChunk{Type: "done", Success: true}
 		return nil
 	}
 
-	stream <- StreamChunk{Type: "message", Content: resp.Content}
+	// LLM 再次返回工具调用，继续执行
+	messages = append(messages, provider.LLMMessage{
+		Role:      "assistant",
+		Content:   resp.Content,
+		ToolCalls: resp.ToolCalls,
+	})
 	_ = e.sessionMgr.SaveAssistantMessage(sessionID, resp.Content, resp.ToolCalls)
-	stream <- StreamChunk{Type: "done", Success: true}
-	return nil
+
+	var toolResults []provider.LLMMessage
+	for _, tc := range resp.ToolCalls {
+		stream <- StreamChunk{
+			Type:       "tool_call",
+			ToolCallID: tc.ID,
+			ToolName:   tc.Function.Name,
+			Content:    tc.Function.Arguments,
+		}
+
+		result, err := e.executor.Execute(ctx, tc)
+		if err != nil {
+			if confirmErr, ok := err.(*ConfirmRequiredError); ok {
+				stream <- StreamChunk{
+					Type:       "confirm_required",
+					ToolCallID: tc.ID,
+					Command:    confirmErr.Command,
+					Message:    confirmErr.Message,
+				}
+				stream <- StreamChunk{Type: "done", Success: false, Error: "等待用户确认"}
+				return nil
+			}
+			result = fmt.Sprintf("Error: %v", err)
+		}
+
+		stream <- StreamChunk{
+			Type:       "tool_result",
+			ToolCallID: tc.ID,
+			ToolName:   tc.Function.Name,
+			Content:    result,
+		}
+
+		toolResults = append(toolResults, provider.LLMMessage{
+			Role:       "tool",
+			ToolCallID: tc.ID,
+			Content:    result,
+		})
+		_ = e.sessionMgr.SaveToolResult(sessionID, tc.ID, tc.Function.Name, result)
+	}
+
+	messages = append(messages, toolResults...)
+	messages = e.sessionMgr.CompressIfNeeded(messages)
+	return e.continueAfterTool(ctx, sessionID, stream)
 }
 
 // IsDestructiveCommand 判断是否为破坏性命令

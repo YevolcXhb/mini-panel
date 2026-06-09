@@ -4,6 +4,11 @@
 
 ## 特性
 
+- **Mini Agent AI 智能体**: 基于 ReAct 循环的自然语言运维助手，支持工具调用与执行
+  - 多 LLM Provider 支持（OpenAI、Anthropic、DeepSeek、Ollama）
+  - Skill 技能插件系统（系统监控、容器管理、网站管理、数据库、防火墙、文件、备份、网络搜索）
+  - SSE 流式响应 + 打字机逐字显示效果
+  - 破坏性操作安全确认机制
 - **系统监控**: CPU、内存、磁盘、网络实时监控
 - **文件管理**: Web 文件管理器，支持上传下载
 - **Web 终端**: 基于 WebSocket 的交互式终端
@@ -22,6 +27,8 @@
 - GORM + SQLite
 - DockRoot (容器运行时)
 - WebSocket (终端)
+- ReAct Agent 引擎（SSE 流式响应、工具调用、上下文压缩）
+- 多 LLM Provider 抽象层（OpenAI 兼容协议）
 
 ### 前端
 
@@ -30,6 +37,8 @@
 - Vite 构建工具
 - Axios HTTP 客户端
 - xterm.js (终端组件)
+- SSE ReadableStream 流式消费
+- 打字机逐字显示效果
 
 ## 快速开始
 
@@ -111,12 +120,19 @@ mini-panel/
 │   │   ├── server/       # mini-panel 入口
 │   │   └── dockroot/     # DockRoot 源码（独立模块）
 │   ├── internal/
+│   │   ├── agent/        # Mini Agent AI 智能体
+│   │   │   ├── provider/ # LLM Provider 抽象（OpenAI/Anthropic/Ollama）
+│   │   │   ├── tools/    # 工具实现（容器、网站、数据库、防火墙等）
+│   │   │   ├── skills/   # Skill 技能插件系统
+│   │   │   ├── repository/ # Agent 会话与配置仓库
+│   │   │   ├── engine.go # ReAct 引擎核心
+│   │   │   └── factory.go # 引擎工厂
 │   │   ├── api/          # HTTP 处理器
 │   │   ├── service/      # 业务逻辑
 │   │   ├── model/        # 数据模型
 │   │   ├── repository/   # 数据访问
 │   │   ├── router/       # 路由
-│   │   ├── middleware/    # 中间件（含安全入口）
+│   │   ├── middleware/   # 中间件（含安全入口）
 │   │   ├── dto/          # 数据传输对象
 │   │   ├── global/       # 全局变量
 │   │   ├── config/       # 配置管理
@@ -130,6 +146,9 @@ mini-panel/
 ├── frontend/             # Vue3 + Element Plus 前端
 │   ├── src/
 │   │   ├── views/        # 页面组件
+│   │   │   ├── MiniAgent.vue   # AI 智能体对话界面
+│   │   │   ├── Terminal.vue    # Web 终端
+│   │   │   └── SSH.vue         # SSH 管理
 │   │   ├── api/          # API 封装
 │   │   ├── router/       # 路由
 │   │   ├── store/        # Pinia 状态管理
@@ -140,6 +159,18 @@ mini-panel/
 ├── install.sh            # 一键安装脚本
 └── README.md
 ```
+
+## Agent 智能体说明
+
+Mini Agent 是集成在 Mini Panel 中的 AI 运维助手，基于 ReAct 循环实现自然语言控制服务器：
+
+- **多模型支持**: OpenAI、Anthropic (Claude)、DeepSeek、Ollama（本地模型）
+- **Skill 技能系统**: 按需启用系统监控、容器、网站、数据库、防火墙、文件、备份、网络搜索等技能
+- **安全确认**: 对删除、停止、重启、kill 等破坏性操作会自动要求用户确认
+- **上下文管理**: 自动会话历史保存与压缩，支持长对话
+- **流式交互**: SSE 实时流式响应 + 打字机逐字显示效果
+
+使用方式：进入面板左侧菜单「Mini Agent」，配置 LLM Provider 后即可通过自然语言进行运维操作。
 
 ## 容器管理说明
 
