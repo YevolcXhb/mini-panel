@@ -58,6 +58,9 @@ func (a *LogAPI) List(c *gin.Context) {
 
 	var entries []LogEntry
 	scanner := bufio.NewScanner(file)
+	// 防止单条日志过长（如包含命令输出）导致 scanner token too long
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	global.LOG.Infof("[Logs] reading log file %s with max token size 1MB", logFile)
 	for scanner.Scan() {
 		line := scanner.Text()
 		entry := parseLogLine(line)

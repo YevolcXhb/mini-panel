@@ -375,26 +375,26 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 		global.LOG.Infof("[Install] pulling image %s for container %s ...", image, instName)
 		pullOut, err := s.ctnService.client.Pull(image, instName)
 		if err != nil {
-			global.LOG.Errorf("[Install] pull image failed: %v\noutput:\n%s", err, pullOut)
+			global.LOG.Errorf("[Install] pull image failed: %v, output length=%d", err, len(pullOut))
 			inst.Status = "failed"
 			inst.Message = fmt.Sprintf("拉取镜像失败: %v\n%s", err, pullOut)
 			s.instRepo.Update(inst)
 			return inst, fmt.Errorf("pull image: %w", err)
 		}
-		global.LOG.Infof("[Install] pull image success\noutput:\n%s", pullOut)
+		global.LOG.Infof("[Install] pull image success, output length=%d", len(pullOut))
 
 		global.LOG.Infof("[Install] running container %s with envs=%d volumes=%d ...", instName, len(envs), len(volumes))
 		global.LOG.Infof("[Install] envs=%v", envs)
 		global.LOG.Infof("[Install] volumes=%v", volumes)
 		runOut, err := s.ctnService.client.Run(instName, true, envs, volumes)
 		if err != nil {
-			global.LOG.Errorf("[Install] run container failed: %v\noutput:\n%s", err, runOut)
+			global.LOG.Errorf("[Install] run container failed: %v, output length=%d", err, len(runOut))
 			inst.Status = "failed"
 			inst.Message = fmt.Sprintf("启动容器失败: %v\n%s", err, runOut)
 			s.instRepo.Update(inst)
 			return inst, fmt.Errorf("run container: %w", err)
 		}
-		global.LOG.Infof("[Install] run container success\noutput:\n%s", runOut)
+		global.LOG.Infof("[Install] run container success, output length=%d", len(runOut))
 	} else {
 		global.LOG.Errorf("[Install] dockroot not available")
 		inst.Status = "not_supported"
