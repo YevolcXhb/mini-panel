@@ -190,7 +190,7 @@ func (a *AgentAPI) Chat(c *gin.Context) {
 			}
 			close(stream)
 		}()
-		p, err := provider.NewProvider(cfg.Provider, cfg.BaseURL, cfg.APIKey, cfg.Model)
+		p, err := provider.NewProvider(cfg.Provider, cfg.BaseURL, cfg.APIKey, cfg.Model, float32(cfg.Temperature), cfg.MaxTokens)
 		if err != nil {
 			stream <- agent.StreamChunk{Type: "error", Error: "创建 Provider 失败: " + err.Error()}
 			return
@@ -253,7 +253,7 @@ func (a *AgentAPI) Confirm(c *gin.Context) {
 			}
 			close(stream)
 		}()
-		p, err := provider.NewProvider(cfg.Provider, cfg.BaseURL, cfg.APIKey, cfg.Model)
+		p, err := provider.NewProvider(cfg.Provider, cfg.BaseURL, cfg.APIKey, cfg.Model, float32(cfg.Temperature), cfg.MaxTokens)
 		if err != nil {
 			stream <- agent.StreamChunk{Type: "error", Error: "创建 Provider 失败: " + err.Error()}
 			return

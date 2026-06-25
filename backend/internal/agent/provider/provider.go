@@ -7,17 +7,17 @@ import (
 
 // LLMMessage 统一消息格式
 type LLMMessage struct {
-	Role       string      `json:"role"`
-	Content    string      `json:"content"`
-	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
-	ToolCallID string      `json:"tool_call_id,omitempty"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
 // ToolCall 工具调用
 type ToolCall struct {
-	ID        string `json:"id"`
-	Type      string `json:"type"`
-	Function  struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
 		Name      string `json:"name"`
 		Arguments string `json:"arguments"`
 	} `json:"function"`
@@ -59,19 +59,20 @@ type Provider interface {
 }
 
 // NewProvider 根据配置创建 Provider
-func NewProvider(provider, baseURL, apiKey, model string) (Provider, error) {
-	switch provider {
+func NewProvider(providerType, baseURL, apiKey, model string, temperature float32, maxTokens int) (Provider, error) {
+	switch providerType {
 	case "anthropic":
-		return NewAnthropicProvider(baseURL, apiKey, model), nil
+		return NewAnthropicProvider(baseURL, apiKey, model, temperature, maxTokens), nil
 	case "ollama":
-		return NewOpenAIProvider(baseURL, apiKey, model), nil // Ollama 兼容 OpenAI 格式
-	default: // openai, deepseek, custom, and any openai-compatible
-		return NewOpenAIProvider(baseURL, apiKey, model), nil
+		return NewOpenAIProvider(baseURL, apiKey, model, temperature, maxTokens), nil
+	default:
+		return NewOpenAIProvider(baseURL, apiKey, model, temperature, maxTokens), nil
 	}
 }
 
 // BuildToolDefinitions 将工具列表转为 LLM 可用的定义
-func BuildToolDefinitions(tools []interface{ /* 具体类型在 tools 包定义 */ }) []ToolDefinition {
+func BuildToolDefinitions(tools []interface { /* 具体类型在 tools 包定义 */
+}) []ToolDefinition {
 	// 由 tools 包调用
 	return nil
 }

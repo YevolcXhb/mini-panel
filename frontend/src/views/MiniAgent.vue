@@ -132,7 +132,7 @@
           <el-slider v-model="config.temperature" :min="0" :max="2" :step="0.1" />
         </el-form-item>
         <el-form-item label="Max Tokens">
-          <el-input-number v-model="config.max_tokens" :min="512" :max="8192" :step="512" />
+          <el-input-number v-model="config.max_tokens" :min="512" :max="131072" :step="1024" />
         </el-form-item>
         <el-form-item label="启用技能">
           <el-checkbox-group v-model="config.skills">

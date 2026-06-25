@@ -12,21 +12,28 @@ import (
 
 // OpenAIProvider 支持 OpenAI / DeepSeek / Ollama 等兼容格式
 type OpenAIProvider struct {
-	client  *http.Client
-	baseURL string
-	apiKey  string
-	model   string
+	client      *http.Client
+	baseURL     string
+	apiKey      string
+	model       string
+	temperature float32
+	maxTokens   int
 }
 
-func NewOpenAIProvider(baseURL, apiKey, model string) *OpenAIProvider {
+func NewOpenAIProvider(baseURL, apiKey, model string, temperature float32, maxTokens int) *OpenAIProvider {
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
 	}
+	if maxTokens <= 0 {
+		maxTokens = 4096
+	}
 	return &OpenAIProvider{
-		client:  &http.Client{Timeout: 120 * time.Second},
-		baseURL: baseURL,
-		apiKey:  apiKey,
-		model:   model,
+		client:      &http.Client{Timeout: 120 * time.Second},
+		baseURL:     baseURL,
+		apiKey:      apiKey,
+		model:       model,
+		temperature: temperature,
+		maxTokens:   maxTokens,
 	}
 }
 
@@ -36,8 +43,8 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []LLMMessage, tools 
 	reqBody := map[string]interface{}{
 		"model":       p.model,
 		"messages":    messages,
-		"temperature": 0.3,
-		"max_tokens":  4096,
+		"temperature": p.temperature,
+		"max_tokens":  p.maxTokens,
 	}
 	if len(tools) > 0 {
 		reqBody["tools"] = tools
@@ -72,8 +79,8 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []LLMMessage, tools 
 	var result struct {
 		Choices []struct {
 			Message struct {
-				Role      string     `json:"role"`
-				Content   string     `json:"content"`
+				Role      string `json:"role"`
+				Content   string `json:"content"`
 				ToolCalls []struct {
 					ID       string `json:"id"`
 					Type     string `json:"type"`

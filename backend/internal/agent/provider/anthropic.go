@@ -12,21 +12,28 @@ import (
 
 // AnthropicProvider Claude API
 type AnthropicProvider struct {
-	client  *http.Client
-	baseURL string
-	apiKey  string
-	model   string
+	client      *http.Client
+	baseURL     string
+	apiKey      string
+	model       string
+	temperature float32
+	maxTokens   int
 }
 
-func NewAnthropicProvider(baseURL, apiKey, model string) *AnthropicProvider {
+func NewAnthropicProvider(baseURL, apiKey, model string, temperature float32, maxTokens int) *AnthropicProvider {
 	if baseURL == "" {
 		baseURL = "https://api.anthropic.com/v1"
 	}
+	if maxTokens <= 0 {
+		maxTokens = 4096
+	}
 	return &AnthropicProvider{
-		client:  &http.Client{Timeout: 120 * time.Second},
-		baseURL: baseURL,
-		apiKey:  apiKey,
-		model:   model,
+		client:      &http.Client{Timeout: 120 * time.Second},
+		baseURL:     baseURL,
+		apiKey:      apiKey,
+		model:       model,
+		temperature: temperature,
+		maxTokens:   maxTokens,
 	}
 }
 
@@ -56,10 +63,10 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []LLMMessage, too
 	}
 
 	reqBody := map[string]interface{}{
-		"model":      p.model,
-		"max_tokens": 4096,
-		"messages":   claudeMessages,
-		"temperature": 0.3,
+		"model":       p.model,
+		"max_tokens":  p.maxTokens,
+		"messages":    claudeMessages,
+		"temperature": p.temperature,
 	}
 	if systemPrompt != "" {
 		reqBody["system"] = systemPrompt
@@ -102,10 +109,10 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []LLMMessage, too
 
 	var result struct {
 		Content []struct {
-			Type  string `json:"type"`
-			Text  string `json:"text"`
-			Name  string `json:"name"`
-			ID    string `json:"id"`
+			Type  string          `json:"type"`
+			Text  string          `json:"text"`
+			Name  string          `json:"name"`
+			ID    string          `json:"id"`
 			Input json.RawMessage `json:"input"`
 		} `json:"content"`
 		Usage struct {
