@@ -21,14 +21,14 @@ func (t *ContainerListTool) Parameters() []provider.ToolParam {
 		{Name: "status", Type: "string", Description: "过滤状态: running/stopped/all", Required: false},
 	}
 }
-func (t *ContainerListTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *ContainerListTool) Execute(ctx context.Context, args map[string]interface{}) ToolExecResult {
 	svc := service.NewContainerService()
 	containers, err := svc.List()
 	if err != nil {
-		return "", err
+		return ErrorErr(err)
 	}
 	if len(containers) == 0 {
-		return "没有容器", nil
+		return SuccessResult("没有容器")
 	}
 	statusFilter := GetString(args, "status")
 	var sb strings.Builder
@@ -41,7 +41,7 @@ func (t *ContainerListTool) Execute(ctx context.Context, args map[string]interfa
 		sb.WriteString(fmt.Sprintf("名称: %s | 镜像: %s | 状态: %s\n",
 			c.Name, c.Image, c.Status))
 	}
-	return fmt.Sprintf("共 %d 个容器:\n%s", count, sb.String()), nil
+	return SuccessResult(fmt.Sprintf("共 %d 个容器:\n%s", count, sb.String()))
 }
 
 // ContainerOpTool 容器操作
@@ -59,27 +59,36 @@ func (t *ContainerOpTool) Parameters() []provider.ToolParam {
 		{Name: "action", Type: "string", Description: "操作: start/stop/restart/remove", Required: true},
 	}
 }
-func (t *ContainerOpTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *ContainerOpTool) Execute(ctx context.Context, args map[string]interface{}) ToolExecResult {
 	svc := service.NewContainerService()
 	name := GetString(args, "name")
 	action := GetString(args, "action")
 	switch action {
 	case "start":
-		return "", svc.Start(name)
+		if err := svc.Start(name); err != nil {
+			return ErrorErr(err)
+		}
+		return SuccessResult(fmt.Sprintf("容器 %s 已启动", name))
 	case "stop":
-		return fmt.Sprintf("容器 %s 已停止", name), svc.Stop(name)
+		if err := svc.Stop(name); err != nil {
+			return ErrorErr(err)
+		}
+		return SuccessResult(fmt.Sprintf("容器 %s 已停止", name))
 	case "restart":
 		if err := svc.Stop(name); err != nil {
-			return "", err
+			return ErrorErr(err)
 		}
 		if err := svc.Start(name); err != nil {
-			return "", err
+			return ErrorErr(err)
 		}
-		return fmt.Sprintf("容器 %s 已重启", name), nil
+		return SuccessResult(fmt.Sprintf("容器 %s 已重启", name))
 	case "remove":
-		return fmt.Sprintf("容器 %s 已删除", name), svc.Remove(name)
+		if err := svc.Remove(name); err != nil {
+			return ErrorErr(err)
+		}
+		return SuccessResult(fmt.Sprintf("容器 %s 已删除", name))
 	default:
-		return "", fmt.Errorf("不支持的操作: %s", action)
+		return ErrorResult("不支持的操作: %s", action)
 	}
 }
 
@@ -96,7 +105,7 @@ func (t *ContainerLogsTool) Parameters() []provider.ToolParam {
 		{Name: "tail", Type: "integer", Description: "日志行数，默认 50", Required: false},
 	}
 }
-func (t *ContainerLogsTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *ContainerLogsTool) Execute(ctx context.Context, args map[string]interface{}) ToolExecResult {
 	svc := service.NewContainerService()
 	name := GetString(args, "name")
 	tail := GetInt(args, "tail")
@@ -105,7 +114,7 @@ func (t *ContainerLogsTool) Execute(ctx context.Context, args map[string]interfa
 	}
 	logs, err := svc.Logs(name, tail)
 	if err != nil {
-		return "", err
+		return ErrorErr(err)
 	}
-	return fmt.Sprintf("容器 %s 最近 %d 行日志:\n%s", name, tail, logs), nil
+	return SuccessResult(fmt.Sprintf("容器 %s 最近 %d 行日志:\n%s", name, tail, logs))
 }

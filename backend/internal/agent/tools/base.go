@@ -7,17 +7,29 @@ import (
 	"strings"
 
 	"github.com/minipanel/minipanel/internal/agent/provider"
+	"github.com/minipanel/minipanel/internal/global"
 )
 
-// Tool 是所有工具的接口
+type ToolExecResult struct {
+	Output string
+	Error  string
+}
+
+type ToolResult struct {
+	CallID  string
+	Name    string
+	Success bool
+	Result  string
+	Error   string
+}
+
 type Tool interface {
 	Name() string
 	Description() string
 	Parameters() []provider.ToolParam
-	Execute(ctx context.Context, args map[string]interface{}) (string, error)
+	Execute(ctx context.Context, args map[string]interface{}) ToolExecResult
 }
 
-// Registry 工具注册表
 type Registry struct {
 	tools map[string]Tool
 }
@@ -27,11 +39,11 @@ func NewRegistry() *Registry {
 }
 
 func (r *Registry) Register(t Tool) {
-	r.tools[t.Name()] = t
+	r.tools[normalizeName(t.Name())] = t
 }
 
 func (r *Registry) Get(name string) (Tool, bool) {
-	t, ok := r.tools[name]
+	t, ok := r.tools[normalizeName(name)]
 	return t, ok
 }
 
@@ -43,27 +55,32 @@ func (r *Registry) List() []Tool {
 	return list
 }
 
-// ToDefinitions 转换为 LLM 可用的工具定义
+func normalizeName(name string) string {
+	return strings.ToLower(strings.ReplaceAll(name, "_", ""))
+}
+
 func (r *Registry) ToDefinitions() []provider.ToolDefinition {
 	var defs []provider.ToolDefinition
 	for _, t := range r.tools {
 		params := map[string]interface{}{
 			"type":       "object",
 			"properties": map[string]interface{}{},
-			"required":   []string{},
 		}
 		properties := params["properties"].(map[string]interface{})
-		required := params["required"].([]string)
+		var required []string
 		for _, p := range t.Parameters() {
-			properties[p.Name] = map[string]string{
+			prop := map[string]interface{}{
 				"type":        p.Type,
 				"description": p.Description,
 			}
+			properties[p.Name] = prop
 			if p.Required {
 				required = append(required, p.Name)
 			}
 		}
-		params["required"] = required
+		if len(required) > 0 {
+			params["required"] = required
+		}
 
 		defs = append(defs, provider.ToolDefinition{
 			Type: "function",
@@ -81,7 +98,6 @@ func (r *Registry) ToDefinitions() []provider.ToolDefinition {
 	return defs
 }
 
-// Executor 工具执行器
 type Executor struct {
 	registry *Registry
 }
@@ -90,46 +106,92 @@ func NewExecutor(registry *Registry) *Executor {
 	return &Executor{registry: registry}
 }
 
-func (e *Executor) Execute(ctx context.Context, call provider.ToolCall) (string, error) {
-	tool, ok := e.registry.Get(call.Function.Name)
+func (e *Executor) Execute(ctx context.Context, call provider.ToolCall) ToolResult {
+	toolName := call.Function.Name
+	tool, ok := e.registry.Get(toolName)
 	if !ok {
-		return "", fmt.Errorf("tool not found: %s", call.Function.Name)
+		err := fmt.Sprintf("Tool '%s' not found", toolName)
+		global.LOG.Warnf("[Tools] %s", err)
+		return ToolResult{
+			CallID:  call.ID,
+			Name:    toolName,
+			Success: false,
+			Error:   err,
+		}
 	}
 
 	var args map[string]interface{}
 	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-		return "", fmt.Errorf("parse tool arguments: %w", err)
+		errMsg := fmt.Sprintf("Failed to parse arguments: %v", err)
+		global.LOG.Warnf("[Tools] %s args=%s", errMsg, call.Function.Arguments)
+		return ToolResult{
+			CallID:  call.ID,
+			Name:    toolName,
+			Success: false,
+			Error:   errMsg,
+		}
 	}
 
-	result, err := tool.Execute(ctx, args)
-	if err != nil {
-		return fmt.Sprintf("Error: %v", err), nil // 返回错误但不中断流程
-	}
-	return result, nil
+	result := e.executeSafely(ctx, tool, args)
+	result.CallID = call.ID
+	result.Name = toolName
+	return result
 }
 
-// --- 通用辅助函数 ---
+func (e *Executor) executeSafely(ctx context.Context, tool Tool, args map[string]interface{}) (res ToolResult) {
+	defer func() {
+		if r := recover(); r != nil {
+			global.LOG.Errorf("[Tools] tool %s panic: %v", tool.Name(), r)
+			res.Success = false
+			res.Error = fmt.Sprintf("Tool execution panic: %v", r)
+		}
+	}()
 
-// GetString 从 args 安全获取 string
+	execRes := tool.Execute(ctx, args)
+	if execRes.Error != "" {
+		return ToolResult{
+			Success: false,
+			Result:  execRes.Output,
+			Error:   execRes.Error,
+		}
+	}
+	return ToolResult{
+		Success: true,
+		Result:  execRes.Output,
+	}
+}
+
+func (e *Executor) ExecuteAll(ctx context.Context, calls []provider.ToolCall) []ToolResult {
+	results := make([]ToolResult, len(calls))
+	for i, call := range calls {
+		results[i] = e.Execute(ctx, call)
+	}
+	return results
+}
+
 func GetString(args map[string]interface{}, key string) string {
 	v, ok := args[key]
-	if !ok {
+	if !ok || v == nil {
 		return ""
 	}
 	switch val := v.(type) {
 	case string:
 		return val
 	case float64:
-		return fmt.Sprintf("%.0f", val)
+		if val == float64(int64(val)) {
+			return fmt.Sprintf("%d", int64(val))
+		}
+		return fmt.Sprintf("%g", val)
+	case bool:
+		return fmt.Sprintf("%t", val)
 	default:
-		return fmt.Sprintf("%v", v)
+		return fmt.Sprintf("%v", val)
 	}
 }
 
-// GetInt 从 args 安全获取 int
 func GetInt(args map[string]interface{}, key string) int {
 	v, ok := args[key]
-	if !ok {
+	if !ok || v == nil {
 		return 0
 	}
 	switch val := v.(type) {
@@ -137,29 +199,92 @@ func GetInt(args map[string]interface{}, key string) int {
 		return int(val)
 	case int:
 		return val
+	case int64:
+		return int(val)
+	case string:
+		var n int
+		fmt.Sscanf(val, "%d", &n)
+		return n
 	default:
 		return 0
 	}
 }
 
-// GetBool 从 args 安全获取 bool
+func GetInt64(args map[string]interface{}, key string) int64 {
+	v, ok := args[key]
+	if !ok || v == nil {
+		return 0
+	}
+	switch val := v.(type) {
+	case float64:
+		return int64(val)
+	case int:
+		return int64(val)
+	case int64:
+		return val
+	default:
+		return 0
+	}
+}
+
 func GetBool(args map[string]interface{}, key string) bool {
 	v, ok := args[key]
-	if !ok {
+	if !ok || v == nil {
 		return false
 	}
 	switch val := v.(type) {
 	case bool:
 		return val
 	case string:
-		return strings.ToLower(val) == "true"
+		return strings.ToLower(val) == "true" || val == "1"
+	case float64:
+		return val != 0
 	default:
 		return false
 	}
 }
 
-// FormatJSON 格式化对象为 JSON 字符串
+func GetStringArray(args map[string]interface{}, key string) []string {
+	v, ok := args[key]
+	if !ok || v == nil {
+		return nil
+	}
+	switch arr := v.(type) {
+	case []interface{}:
+		res := make([]string, 0, len(arr))
+		for _, item := range arr {
+			res = append(res, fmt.Sprintf("%v", item))
+		}
+		return res
+	case []string:
+		return arr
+	default:
+		return nil
+	}
+}
+
 func FormatJSON(v interface{}) string {
-	b, _ := json.MarshalIndent(v, "", "  ")
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return fmt.Sprintf("%v", v)
+	}
 	return string(b)
+}
+
+func ErrorResult(format string, args ...interface{}) ToolExecResult {
+	return ToolExecResult{
+		Error: fmt.Sprintf(format, args...),
+	}
+}
+
+func ErrorErr(err error) ToolExecResult {
+	return ToolExecResult{
+		Error: err.Error(),
+	}
+}
+
+func SuccessResult(output string) ToolExecResult {
+	return ToolExecResult{
+		Output: output,
+	}
 }

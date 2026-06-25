@@ -8,9 +8,18 @@ import (
 	"github.com/minipanel/minipanel/internal/agent/provider"
 	"github.com/minipanel/minipanel/internal/agent/repository"
 	"github.com/minipanel/minipanel/internal/agent/tools"
+	"github.com/minipanel/minipanel/internal/global"
 )
 
-// Engine ReAct 引擎
+type StepState int
+
+const (
+	StepStateThinking StepState = iota
+	StepStateCallingTool
+	StepStateReflecting
+	StepStateCompleted
+)
+
 type Engine struct {
 	provider     provider.Provider
 	registry     *tools.Registry
@@ -18,9 +27,9 @@ type Engine struct {
 	sessionMgr   *repository.SessionManager
 	systemPrompt string
 	maxSteps     int
+	maxErrors    int
 }
 
-// NewEngine 创建引擎
 func NewEngine(p provider.Provider, registry *tools.Registry, systemPrompt string, maxSteps int) *Engine {
 	return &Engine{
 		provider:     p,
@@ -29,13 +38,14 @@ func NewEngine(p provider.Provider, registry *tools.Registry, systemPrompt strin
 		sessionMgr:   repository.NewSessionManager(),
 		systemPrompt: systemPrompt,
 		maxSteps:     maxSteps,
+		maxErrors:    3,
 	}
 }
 
-// Run 执行一轮对话（ReAct 循环）
 func (e *Engine) Run(ctx context.Context, sessionID uint, userInput string, stream chan<- StreamChunk) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
+			global.LOG.Errorf("[Engine] panic recovered: %v", r)
 			err = fmt.Errorf("engine panic: %v", r)
 			stream <- StreamChunk{Type: "error", Error: fmt.Sprintf("引擎内部错误: %v", r)}
 			stream <- StreamChunk{Type: "done", Success: false}
@@ -48,30 +58,101 @@ func (e *Engine) Run(ctx context.Context, sessionID uint, userInput string, stre
 		return err
 	}
 
-	// 注入系统提示词
-	if e.systemPrompt != "" {
-		hasSystem := false
-		for _, m := range messages {
-			if m.Role == "system" {
-				hasSystem = true
-				break
-			}
-		}
-		if !hasSystem {
-			messages = append([]provider.LLMMessage{{Role: "system", Content: e.systemPrompt}}, messages...)
-		}
-	}
-
+	messages = e.ensureSystemPrompt(messages)
 	messages = append(messages, provider.LLMMessage{Role: "user", Content: userInput})
 	if err := e.sessionMgr.SaveUserMessage(sessionID, userInput); err != nil {
 		stream <- StreamChunk{Type: "error", Error: "保存消息失败: " + err.Error()}
 		return err
 	}
 
+	return e.runReActLoop(ctx, sessionID, messages, stream)
+}
+
+func (e *Engine) RunWithConfirm(ctx context.Context, sessionID uint, toolCallID string, confirmed bool, stream chan<- StreamChunk) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			global.LOG.Errorf("[Engine] panic recovered in RunWithConfirm: %v", r)
+			err = fmt.Errorf("engine panic: %v", r)
+			stream <- StreamChunk{Type: "error", Error: fmt.Sprintf("引擎内部错误: %v", r)}
+			stream <- StreamChunk{Type: "done", Success: false}
+		}
+	}()
+
+	messages, err := e.sessionMgr.LoadMessages(sessionID)
+	if err != nil {
+		stream <- StreamChunk{Type: "error", Error: "加载会话失败: " + err.Error()}
+		return err
+	}
+
+	var targetTC *provider.ToolCall
+	var targetTCMsgIdx int = -1
+	for i, m := range messages {
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+			for j := range m.ToolCalls {
+				if m.ToolCalls[j].ID == toolCallID {
+					targetTC = &m.ToolCalls[j]
+					targetTCMsgIdx = i
+					break
+				}
+			}
+		}
+		if targetTC != nil {
+			break
+		}
+	}
+
+	if targetTC == nil {
+		stream <- StreamChunk{Type: "error", Error: "找不到工具调用信息"}
+		return fmt.Errorf("tool call not found: %s", toolCallID)
+	}
+
+	var resultContent string
+	if !confirmed {
+		resultContent = "用户取消了此操作"
+	} else {
+		stream <- StreamChunk{
+			Type:       "tool_call",
+			ToolCallID: targetTC.ID,
+			ToolName:   targetTC.Function.Name,
+			Content:    targetTC.Function.Arguments,
+		}
+
+		toolResult := e.executor.Execute(ctx, *targetTC)
+		resultContent = e.formatToolResult(toolResult)
+
+		stream <- StreamChunk{
+			Type:       "tool_result",
+			ToolCallID: targetTC.ID,
+			ToolName:   targetTC.Function.Name,
+			Content:    resultContent,
+			Success:    toolResult.Success,
+		}
+	}
+
+	_ = e.sessionMgr.SaveToolResult(sessionID, targetTC.ID, targetTC.Function.Name, resultContent)
+
+	if targetTCMsgIdx >= 0 && targetTCMsgIdx < len(messages) {
+		messages = append(messages[:targetTCMsgIdx+1], provider.LLMMessage{
+			Role:       "tool",
+			ToolCallID: targetTC.ID,
+			Content:    resultContent,
+		})
+	}
+
+	messages = e.ensureSystemPrompt(messages)
+	return e.runReActLoop(ctx, sessionID, messages, stream)
+}
+
+func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []provider.LLMMessage, stream chan<- StreamChunk) error {
 	toolDefs := e.registry.ToDefinitions()
+	consecutiveErrors := 0
+
 	for step := 0; step < e.maxSteps; step++ {
+		global.LOG.Debugf("[Engine] ReAct step %d/%d", step+1, e.maxSteps)
+
 		resp, err := e.provider.Chat(ctx, messages, toolDefs)
 		if err != nil {
+			global.LOG.Errorf("[Engine] LLM call failed: %v", err)
 			stream <- StreamChunk{Type: "error", Error: "LLM 调用失败: " + err.Error()}
 			return err
 		}
@@ -96,6 +177,7 @@ func (e *Engine) Run(ctx context.Context, sessionID uint, userInput string, stre
 		_ = e.sessionMgr.SaveAssistantMessage(sessionID, resp.Content, resp.ToolCalls)
 
 		var toolResults []provider.LLMMessage
+
 		for _, tc := range resp.ToolCalls {
 			stream <- StreamChunk{
 				Type:       "tool_call",
@@ -104,203 +186,85 @@ func (e *Engine) Run(ctx context.Context, sessionID uint, userInput string, stre
 				Content:    tc.Function.Arguments,
 			}
 
-			result, err := e.executor.Execute(ctx, tc)
-			if err != nil {
-				if confirmErr, ok := err.(*ConfirmRequiredError); ok {
-					stream <- StreamChunk{
-						Type:       "confirm_required",
-						ToolCallID: tc.ID,
-						Command:    confirmErr.Command,
-						Message:    confirmErr.Message,
-					}
-					stream <- StreamChunk{Type: "done", Success: false, Error: "等待用户确认"}
-					return nil
+			toolResult := e.executor.Execute(ctx, tc)
+			resultContent := e.formatToolResult(toolResult)
+
+			if !toolResult.Success && strings.Contains(toolResult.Error, "confirm required") {
+				stream <- StreamChunk{
+					Type:       "confirm_required",
+					ToolCallID: tc.ID,
+					ToolName:   tc.Function.Name,
+					Message:    toolResult.Error,
 				}
-				result = fmt.Sprintf("Error: %v", err)
+				stream <- StreamChunk{Type: "done", Success: false, Error: "等待用户确认"}
+				return nil
 			}
 
 			stream <- StreamChunk{
 				Type:       "tool_result",
 				ToolCallID: tc.ID,
 				ToolName:   tc.Function.Name,
-				Content:    result,
+				Content:    resultContent,
+				Success:    toolResult.Success,
 			}
 
 			toolResults = append(toolResults, provider.LLMMessage{
 				Role:       "tool",
 				ToolCallID: tc.ID,
-				Content:    result,
+				Content:    resultContent,
 			})
-			_ = e.sessionMgr.SaveToolResult(sessionID, tc.ID, tc.Function.Name, result)
+			_ = e.sessionMgr.SaveToolResult(sessionID, tc.ID, tc.Function.Name, resultContent)
+
+			if !toolResult.Success {
+				consecutiveErrors++
+				global.LOG.Warnf("[Engine] tool %s failed: %s", tc.Function.Name, toolResult.Error)
+			} else {
+				consecutiveErrors = 0
+			}
+		}
+
+		if consecutiveErrors >= e.maxErrors {
+			errMsg := fmt.Sprintf("工具连续执行失败 %d 次，已终止。请检查参数或尝试其他方式。", consecutiveErrors)
+			global.LOG.Errorf("[Engine] %s", errMsg)
+			stream <- StreamChunk{Type: "error", Error: errMsg}
+			stream <- StreamChunk{Type: "done", Success: false}
+			return fmt.Errorf(errMsg)
 		}
 
 		messages = append(messages, toolResults...)
 		messages = e.sessionMgr.CompressIfNeeded(messages)
 	}
 
-	stream <- StreamChunk{Type: "error", Error: "达到最大步数限制"}
+	stream <- StreamChunk{Type: "error", Error: "达到最大思考步数限制"}
 	stream <- StreamChunk{Type: "done", Success: false}
 	return fmt.Errorf("max steps exceeded")
 }
 
-// RunWithConfirm 带确认的流程继续执行
-func (e *Engine) RunWithConfirm(ctx context.Context, sessionID uint, toolCallID string, confirmed bool, stream chan<- StreamChunk) (err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("engine panic: %v", r)
-			stream <- StreamChunk{Type: "error", Error: fmt.Sprintf("引擎内部错误: %v", r)}
-			stream <- StreamChunk{Type: "done", Success: false}
-		}
-	}()
-
-	if !confirmed {
-		result := "用户取消了此操作"
-		_ = e.sessionMgr.SaveToolResult(sessionID, toolCallID, "", result)
-		return e.continueAfterTool(ctx, sessionID, stream)
+func (e *Engine) ensureSystemPrompt(messages []provider.LLMMessage) []provider.LLMMessage {
+	if e.systemPrompt == "" {
+		return messages
 	}
-
-	// 用户确认后，从会话历史中找到对应的 tool call 并执行
-	messages, err := e.sessionMgr.LoadMessages(sessionID)
-	if err != nil {
-		stream <- StreamChunk{Type: "error", Error: "加载会话失败: " + err.Error()}
-		return err
-	}
-
-	var targetTC *provider.ToolCall
 	for _, m := range messages {
-		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
-			for i := range m.ToolCalls {
-				if m.ToolCalls[i].ID == toolCallID {
-					targetTC = &m.ToolCalls[i]
-					break
-				}
-			}
-		}
-		if targetTC != nil {
-			break
+		if m.Role == "system" {
+			return messages
 		}
 	}
-
-	if targetTC == nil {
-		stream <- StreamChunk{Type: "error", Error: "找不到工具调用信息"}
-		return fmt.Errorf("tool call not found: %s", toolCallID)
-	}
-
-	stream <- StreamChunk{
-		Type:       "tool_call",
-		ToolCallID: targetTC.ID,
-		ToolName:   targetTC.Function.Name,
-		Content:    targetTC.Function.Arguments,
-	}
-
-	result, err := e.executor.Execute(ctx, *targetTC)
-	if err != nil {
-		result = fmt.Sprintf("Error: %v", err)
-	}
-
-	stream <- StreamChunk{
-		Type:       "tool_result",
-		ToolCallID: targetTC.ID,
-		ToolName:   targetTC.Function.Name,
-		Content:    result,
-	}
-
-	_ = e.sessionMgr.SaveToolResult(sessionID, targetTC.ID, targetTC.Function.Name, result)
-	return e.continueAfterTool(ctx, sessionID, stream)
+	return append([]provider.LLMMessage{{Role: "system", Content: e.systemPrompt}}, messages...)
 }
 
-func (e *Engine) continueAfterTool(ctx context.Context, sessionID uint, stream chan<- StreamChunk) error {
-	messages, err := e.sessionMgr.LoadMessages(sessionID)
-	if err != nil {
-		stream <- StreamChunk{Type: "error", Error: err.Error()}
-		return err
+func (e *Engine) formatToolResult(result tools.ToolResult) string {
+	if result.Success {
+		if result.Result == "" {
+			return "执行成功（无输出）"
+		}
+		return result.Result
 	}
-
-	// 注入系统提示词
-	if e.systemPrompt != "" {
-		hasSystem := false
-		for _, m := range messages {
-			if m.Role == "system" {
-				hasSystem = true
-				break
-			}
-		}
-		if !hasSystem {
-			messages = append([]provider.LLMMessage{{Role: "system", Content: e.systemPrompt}}, messages...)
-		}
+	if result.Result != "" {
+		return fmt.Sprintf("执行失败: %s\n输出:\n%s", result.Error, result.Result)
 	}
-
-	toolDefs := e.registry.ToDefinitions()
-	resp, err := e.provider.Chat(ctx, messages, toolDefs)
-	if err != nil {
-		stream <- StreamChunk{Type: "error", Error: err.Error()}
-		return err
-	}
-
-	if len(resp.ToolCalls) == 0 {
-		content := resp.Content
-		if strings.TrimSpace(content) == "" {
-			content = "操作已完成。"
-		}
-		stream <- StreamChunk{Type: "message", Content: content}
-		_ = e.sessionMgr.SaveAssistantMessage(sessionID, content, nil)
-		stream <- StreamChunk{Type: "done", Success: true}
-		return nil
-	}
-
-	// LLM 再次返回工具调用，继续执行
-	messages = append(messages, provider.LLMMessage{
-		Role:      "assistant",
-		Content:   resp.Content,
-		ToolCalls: resp.ToolCalls,
-	})
-	_ = e.sessionMgr.SaveAssistantMessage(sessionID, resp.Content, resp.ToolCalls)
-
-	var toolResults []provider.LLMMessage
-	for _, tc := range resp.ToolCalls {
-		stream <- StreamChunk{
-			Type:       "tool_call",
-			ToolCallID: tc.ID,
-			ToolName:   tc.Function.Name,
-			Content:    tc.Function.Arguments,
-		}
-
-		result, err := e.executor.Execute(ctx, tc)
-		if err != nil {
-			if confirmErr, ok := err.(*ConfirmRequiredError); ok {
-				stream <- StreamChunk{
-					Type:       "confirm_required",
-					ToolCallID: tc.ID,
-					Command:    confirmErr.Command,
-					Message:    confirmErr.Message,
-				}
-				stream <- StreamChunk{Type: "done", Success: false, Error: "等待用户确认"}
-				return nil
-			}
-			result = fmt.Sprintf("Error: %v", err)
-		}
-
-		stream <- StreamChunk{
-			Type:       "tool_result",
-			ToolCallID: tc.ID,
-			ToolName:   tc.Function.Name,
-			Content:    result,
-		}
-
-		toolResults = append(toolResults, provider.LLMMessage{
-			Role:       "tool",
-			ToolCallID: tc.ID,
-			Content:    result,
-		})
-		_ = e.sessionMgr.SaveToolResult(sessionID, tc.ID, tc.Function.Name, result)
-	}
-
-	messages = append(messages, toolResults...)
-	messages = e.sessionMgr.CompressIfNeeded(messages)
-	return e.continueAfterTool(ctx, sessionID, stream)
+	return fmt.Sprintf("执行失败: %s", result.Error)
 }
 
-// IsDestructiveCommand 判断是否为破坏性命令
 func IsDestructiveCommand(command string) bool {
 	destructive := []string{"rm ", "kill ", "shutdown", "reboot", "poweroff", "systemctl stop", "systemctl restart",
 		"docker rm", "docker stop", "docker restart", "pkill", "killall", "iptables -F", "ufw disable"}
@@ -313,7 +277,6 @@ func IsDestructiveCommand(command string) bool {
 	return false
 }
 
-// BuildTitleFromContent 根据内容生成会话标题
 func BuildTitleFromContent(content string) string {
 	if len(content) <= 20 {
 		return content

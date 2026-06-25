@@ -14,17 +14,17 @@ type FirewallListTool struct{}
 
 func NewFirewallListTool() *FirewallListTool { return &FirewallListTool{} }
 
-func (t *FirewallListTool) Name() string        { return "list_firewall_rules" }
+func (t *FirewallListTool) Name() string                     { return "list_firewall_rules" }
 func (t *FirewallListTool) Description() string              { return "列出所有防火墙规则。" }
 func (t *FirewallListTool) Parameters() []provider.ToolParam { return nil }
-func (t *FirewallListTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *FirewallListTool) Execute(ctx context.Context, args map[string]interface{}) ToolExecResult {
 	svc := service.NewFirewallService()
 	rules, err := svc.List()
 	if err != nil {
-		return "", err
+		return ErrorErr(err)
 	}
 	if len(rules) == 0 {
-		return "没有防火墙规则", nil
+		return SuccessResult("没有防火墙规则")
 	}
 	var sb strings.Builder
 	for _, r := range rules {
@@ -35,7 +35,7 @@ func (t *FirewallListTool) Execute(ctx context.Context, args map[string]interfac
 		sb.WriteString(fmt.Sprintf("ID: %d | 名称: %s | 方向: %s | 类型: %s | 动作: %s | 协议: %s | 端口: %s | IP: %s | 状态: %s | 备注: %s\n",
 			r.ID, r.Name, r.Direction, r.Type, r.Action, r.Protocol, r.Port, r.IP, enabled, r.Note))
 	}
-	return sb.String(), nil
+	return SuccessResult(sb.String())
 }
 
 // FirewallOpTool 防火墙操作
@@ -43,7 +43,7 @@ type FirewallOpTool struct{}
 
 func NewFirewallOpTool() *FirewallOpTool { return &FirewallOpTool{} }
 
-func (t *FirewallOpTool) Name() string        { return "firewall_operation" }
+func (t *FirewallOpTool) Name() string { return "firewall_operation" }
 func (t *FirewallOpTool) Description() string {
 	return "防火墙操作: apply(应用规则)/delete(删除规则)。新增规则建议通过面板操作。"
 }
@@ -53,20 +53,23 @@ func (t *FirewallOpTool) Parameters() []provider.ToolParam {
 		{Name: "id", Type: "integer", Description: "规则 ID (delete 时必填)", Required: false},
 	}
 }
-func (t *FirewallOpTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *FirewallOpTool) Execute(ctx context.Context, args map[string]interface{}) ToolExecResult {
 	svc := service.NewFirewallService()
 	action := GetString(args, "action")
 	switch action {
 	case "apply":
 		msg, err := svc.ApplyRules()
 		if err != nil {
-			return "", err
+			return ErrorErr(err)
 		}
-		return msg, nil
+		return SuccessResult(msg)
 	case "delete":
 		id := uint(GetInt(args, "id"))
-		return "", svc.Delete(id)
+		if err := svc.Delete(id); err != nil {
+			return ErrorErr(err)
+		}
+		return SuccessResult(fmt.Sprintf("防火墙规则 %d 已删除", id))
 	default:
-		return "", fmt.Errorf("不支持的操作: %s", action)
+		return ErrorResult("不支持的操作: %s", action)
 	}
 }

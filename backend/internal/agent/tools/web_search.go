@@ -27,43 +27,43 @@ func (t *WebSearchTool) Parameters() []provider.ToolParam {
 	}
 }
 
-func (t *WebSearchTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *WebSearchTool) Execute(ctx context.Context, args map[string]interface{}) ToolExecResult {
 	query := GetString(args, "query")
 	numResults := GetInt(args, "num_results")
 	if numResults <= 0 || numResults > 10 {
 		numResults = 5
 	}
 	if query == "" {
-		return "", fmt.Errorf("query is required")
+		return ErrorResult("query is required")
 	}
 
 	searchURL := "https://html.duckduckgo.com/html/?q=" + url.QueryEscape(query)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
 	if err != nil {
-		return "", err
+		return ErrorErr(err)
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0")
 
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return ErrorErr(err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("search request failed: %s", resp.Status)
+		return ErrorResult("search request failed: %s", resp.Status)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return ErrorErr(err)
 	}
 
 	results := parseDuckDuckGoResults(string(body), numResults)
 	if len(results) == 0 {
-		return "未找到搜索结果", nil
+		return SuccessResult("未找到搜索结果")
 	}
 
 	var sb strings.Builder
@@ -71,7 +71,7 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]interface{}
 	for i, r := range results {
 		sb.WriteString(fmt.Sprintf("%d. %s\n   URL: %s\n   %s\n\n", i+1, r.Title, r.URL, r.Snippet))
 	}
-	return sb.String(), nil
+	return SuccessResult(sb.String())
 }
 
 type searchResult struct {

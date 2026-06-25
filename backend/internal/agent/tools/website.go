@@ -17,14 +17,14 @@ func NewWebsiteListTool() *WebsiteListTool { return &WebsiteListTool{} }
 func (t *WebsiteListTool) Name() string                     { return "list_websites" }
 func (t *WebsiteListTool) Description() string              { return "列出所有网站配置及状态。" }
 func (t *WebsiteListTool) Parameters() []provider.ToolParam { return nil }
-func (t *WebsiteListTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *WebsiteListTool) Execute(ctx context.Context, args map[string]interface{}) ToolExecResult {
 	svc := service.NewWebsiteService()
 	websites, err := svc.List()
 	if err != nil {
-		return "", err
+		return ErrorErr(err)
 	}
 	if len(websites) == 0 {
-		return "没有网站", nil
+		return SuccessResult("没有网站")
 	}
 	var sb strings.Builder
 	for _, w := range websites {
@@ -39,7 +39,7 @@ func (t *WebsiteListTool) Execute(ctx context.Context, args map[string]interface
 		sb.WriteString(fmt.Sprintf("ID: %d | 域名: %s | 根目录: %s | 类型: %s | SSL: %s | 状态: %s\n",
 			w.ID, w.Domain, w.Root, w.Type, ssl, status))
 	}
-	return sb.String(), nil
+	return SuccessResult(sb.String())
 }
 
 // WebsiteOpTool 网站操作
@@ -57,21 +57,33 @@ func (t *WebsiteOpTool) Parameters() []provider.ToolParam {
 		{Name: "action", Type: "string", Description: "操作: enable/disable/reload_nginx/delete", Required: true},
 	}
 }
-func (t *WebsiteOpTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *WebsiteOpTool) Execute(ctx context.Context, args map[string]interface{}) ToolExecResult {
 	svc := service.NewWebsiteService()
 	id := uint(GetInt(args, "id"))
 	action := GetString(args, "action")
 	switch action {
 	case "enable":
-		return "", svc.ToggleEnable(id, true)
+		if err := svc.ToggleEnable(id, true); err != nil {
+			return ErrorErr(err)
+		}
+		return SuccessResult(fmt.Sprintf("网站 %d 已启用", id))
 	case "disable":
-		return "", svc.ToggleEnable(id, false)
+		if err := svc.ToggleEnable(id, false); err != nil {
+			return ErrorErr(err)
+		}
+		return SuccessResult(fmt.Sprintf("网站 %d 已禁用", id))
 	case "reload_nginx":
-		return "", svc.ReloadNginx()
+		if err := svc.ReloadNginx(); err != nil {
+			return ErrorErr(err)
+		}
+		return SuccessResult("Nginx 已重载")
 	case "delete":
-		return "", svc.Delete(id)
+		if err := svc.Delete(id); err != nil {
+			return ErrorErr(err)
+		}
+		return SuccessResult(fmt.Sprintf("网站 %d 已删除", id))
 	default:
-		return "", fmt.Errorf("不支持的操作: %s", action)
+		return ErrorResult("不支持的操作: %s", action)
 	}
 }
 
@@ -88,7 +100,7 @@ func (t *NginxLogTool) Parameters() []provider.ToolParam {
 		{Name: "tail", Type: "integer", Description: "行数，默认 30", Required: false},
 	}
 }
-func (t *NginxLogTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *NginxLogTool) Execute(ctx context.Context, args map[string]interface{}) ToolExecResult {
 	logType := GetString(args, "type")
 	tail := GetInt(args, "tail")
 	if tail <= 0 {
@@ -103,7 +115,7 @@ func (t *NginxLogTool) Execute(ctx context.Context, args map[string]interface{})
 	fsvc := service.NewFileService()
 	contentBytes, err := fsvc.GetContent(logPath)
 	if err != nil {
-		return "", err
+		return ErrorErr(err)
 	}
 	content := string(contentBytes)
 	lines := strings.Split(content, "\n")
@@ -111,5 +123,5 @@ func (t *NginxLogTool) Execute(ctx context.Context, args map[string]interface{})
 		lines = lines[len(lines)-tail:]
 		content = strings.Join(lines, "\n")
 	}
-	return fmt.Sprintf("Nginx %s 日志 (最近 %d 行):\n%s", logType, len(lines), content), nil
+	return SuccessResult(fmt.Sprintf("Nginx %s 日志 (最近 %d 行):\n%s", logType, len(lines), content))
 }

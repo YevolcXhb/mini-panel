@@ -17,14 +17,14 @@ func NewDatabaseListTool() *DatabaseListTool { return &DatabaseListTool{} }
 func (t *DatabaseListTool) Name() string                     { return "list_databases" }
 func (t *DatabaseListTool) Description() string              { return "列出所有数据库实例。" }
 func (t *DatabaseListTool) Parameters() []provider.ToolParam { return nil }
-func (t *DatabaseListTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *DatabaseListTool) Execute(ctx context.Context, args map[string]interface{}) ToolExecResult {
 	svc := service.NewDatabaseService()
 	dbs, err := svc.List()
 	if err != nil {
-		return "", err
+		return ErrorErr(err)
 	}
 	if len(dbs) == 0 {
-		return "没有数据库实例", nil
+		return SuccessResult("没有数据库实例")
 	}
 	var sb strings.Builder
 	for _, d := range dbs {
@@ -35,7 +35,7 @@ func (t *DatabaseListTool) Execute(ctx context.Context, args map[string]interfac
 		sb.WriteString(fmt.Sprintf("ID: %d | 名称: %s | 类型: %s | 地址: %s:%d | 状态: %s\n",
 			d.ID, d.Name, d.Type, d.Host, d.Port, enabled))
 	}
-	return sb.String(), nil
+	return SuccessResult(sb.String())
 }
 
 // DatabaseOpTool 数据库操作
@@ -43,7 +43,7 @@ type DatabaseOpTool struct{}
 
 func NewDatabaseOpTool() *DatabaseOpTool { return &DatabaseOpTool{} }
 
-func (t *DatabaseOpTool) Name() string        { return "database_operation" }
+func (t *DatabaseOpTool) Name() string { return "database_operation" }
 func (t *DatabaseOpTool) Description() string {
 	return "对数据库执行操作: test(测试连接)/delete(删除实例)。"
 }
@@ -53,7 +53,7 @@ func (t *DatabaseOpTool) Parameters() []provider.ToolParam {
 		{Name: "action", Type: "string", Description: "操作: test/delete", Required: true},
 	}
 }
-func (t *DatabaseOpTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *DatabaseOpTool) Execute(ctx context.Context, args map[string]interface{}) ToolExecResult {
 	svc := service.NewDatabaseService()
 	id := uint(GetInt(args, "id"))
 	action := GetString(args, "action")
@@ -61,16 +61,19 @@ func (t *DatabaseOpTool) Execute(ctx context.Context, args map[string]interface{
 	case "test":
 		db, err := svc.GetByID(id)
 		if err != nil {
-			return fmt.Sprintf("获取数据库失败: %v", err), nil
+			return SuccessResult(fmt.Sprintf("获取数据库失败: %v", err))
 		}
 		msg, err := svc.TestConnection(db)
 		if err != nil {
-			return fmt.Sprintf("连接测试失败: %v", err), nil
+			return SuccessResult(fmt.Sprintf("连接测试失败: %v", err))
 		}
-		return fmt.Sprintf("连接测试成功: %s", msg), nil
+		return SuccessResult(fmt.Sprintf("连接测试成功: %s", msg))
 	case "delete":
-		return "", svc.Delete(id)
+		if err := svc.Delete(id); err != nil {
+			return ErrorErr(err)
+		}
+		return SuccessResult(fmt.Sprintf("数据库实例 %d 已删除", id))
 	default:
-		return "", fmt.Errorf("不支持的操作: %s", action)
+		return ErrorResult("不支持的操作: %s", action)
 	}
 }

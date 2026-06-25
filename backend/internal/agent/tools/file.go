@@ -23,7 +23,7 @@ func (t *FileReadTool) Parameters() []provider.ToolParam {
 		{Name: "limit", Type: "integer", Description: "最大读取行数，默认 200", Required: false},
 	}
 }
-func (t *FileReadTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *FileReadTool) Execute(ctx context.Context, args map[string]interface{}) ToolExecResult {
 	svc := service.NewFileService()
 	path := GetString(args, "path")
 	limit := GetInt(args, "limit")
@@ -32,7 +32,7 @@ func (t *FileReadTool) Execute(ctx context.Context, args map[string]interface{})
 	}
 	contentBytes, err := svc.GetContent(path)
 	if err != nil {
-		return "", err
+		return ErrorErr(err)
 	}
 	content := string(contentBytes)
 	lines := strings.Split(content, "\n")
@@ -40,7 +40,7 @@ func (t *FileReadTool) Execute(ctx context.Context, args map[string]interface{})
 		lines = lines[:limit]
 		content = strings.Join(lines, "\n") + fmt.Sprintf("\n... (已截断，共 %d 行)", len(lines))
 	}
-	return content, nil
+	return SuccessResult(content)
 }
 
 // FileListTool 列出目录
@@ -55,12 +55,12 @@ func (t *FileListTool) Parameters() []provider.ToolParam {
 		{Name: "path", Type: "string", Description: "目录绝对路径", Required: true},
 	}
 }
-func (t *FileListTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *FileListTool) Execute(ctx context.Context, args map[string]interface{}) ToolExecResult {
 	svc := service.NewFileService()
 	path := GetString(args, "path")
 	files, err := svc.List(path)
 	if err != nil {
-		return "", err
+		return ErrorErr(err)
 	}
 	var sb strings.Builder
 	for _, f := range files {
@@ -77,7 +77,7 @@ func (t *FileListTool) Execute(ctx context.Context, args map[string]interface{})
 		modTime := time.Unix(f.ModTime, 0).Format("2006-01-02 15:04")
 		sb.WriteString(fmt.Sprintf("%s | %s | %s | %s\n", f.Name, ftype, size, modTime))
 	}
-	return sb.String(), nil
+	return SuccessResult(sb.String())
 }
 
 // FileWriteTool 写入文件
@@ -93,16 +93,15 @@ func (t *FileWriteTool) Parameters() []provider.ToolParam {
 		{Name: "content", Type: "string", Description: "文件内容", Required: true},
 	}
 }
-func (t *FileWriteTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *FileWriteTool) Execute(ctx context.Context, args map[string]interface{}) ToolExecResult {
 	svc := service.NewFileService()
 	path := GetString(args, "path")
 	content := GetString(args, "content")
-	// 简单判断：先尝试更新，如果文件不存在则创建
 	if err := svc.Update(path, content); err != nil {
 		if err := svc.Create(path, false, content); err != nil {
-			return "", err
+			return ErrorErr(err)
 		}
-		return fmt.Sprintf("文件 %s 已创建", path), nil
+		return SuccessResult(fmt.Sprintf("文件 %s 已创建", path))
 	}
-	return fmt.Sprintf("文件 %s 已更新", path), nil
+	return SuccessResult(fmt.Sprintf("文件 %s 已更新", path))
 }

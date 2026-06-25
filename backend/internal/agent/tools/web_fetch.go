@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"net/http"
 	"regexp"
@@ -17,8 +16,10 @@ type WebFetchTool struct{}
 
 func NewWebFetchTool() *WebFetchTool { return &WebFetchTool{} }
 
-func (t *WebFetchTool) Name() string        { return "web_fetch" }
-func (t *WebFetchTool) Description() string { return "抓取指定 URL 的网页内容，返回纯文本正文。" }
+func (t *WebFetchTool) Name() string { return "web_fetch" }
+func (t *WebFetchTool) Description() string {
+	return "抓取指定 URL 的网页内容，返回纯文本正文。"
+}
 func (t *WebFetchTool) Parameters() []provider.ToolParam {
 	return []provider.ToolParam{
 		{Name: "url", Type: "string", Description: "要抓取的网页 URL", Required: true},
@@ -26,36 +27,36 @@ func (t *WebFetchTool) Parameters() []provider.ToolParam {
 	}
 }
 
-func (t *WebFetchTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *WebFetchTool) Execute(ctx context.Context, args map[string]interface{}) ToolExecResult {
 	pageURL := GetString(args, "url")
 	maxLength := GetInt(args, "max_length")
 	if maxLength <= 0 {
 		maxLength = 10000
 	}
 	if pageURL == "" {
-		return "", fmt.Errorf("url is required")
+		return ErrorResult("url is required")
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", pageURL, nil)
 	if err != nil {
-		return "", err
+		return ErrorErr(err)
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 
 	client := &http.Client{Timeout: 20 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return ErrorErr(err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("fetch failed: %s", resp.Status)
+		return ErrorResult("fetch failed: %s", resp.Status)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return ErrorErr(err)
 	}
 
 	text := extractTextFromHTML(string(body))
@@ -64,9 +65,9 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]interface{})
 	}
 
 	if text == "" {
-		return "无法提取网页正文内容", nil
+		return SuccessResult("无法提取网页正文内容")
 	}
-	return text, nil
+	return SuccessResult(text)
 }
 
 func extractTextFromHTML(html string) string {

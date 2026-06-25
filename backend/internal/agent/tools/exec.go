@@ -32,27 +32,24 @@ func (t *ExecTool) Parameters() []provider.ToolParam {
 		{Name: "timeout", Type: "integer", Description: "超时秒数，默认 30", Required: false},
 	}
 }
-func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) ToolExecResult {
 	command := GetString(args, "command")
 	timeout := GetInt(args, "timeout")
 	if timeout <= 0 {
 		timeout = 30
 	}
 
-	// 1. 危险命令拦截
 	cmdLower := strings.ToLower(command)
 	for _, p := range dangerousPatterns {
 		if strings.Contains(cmdLower, strings.ToLower(p)) {
-			return "", fmt.Errorf("危险命令被拦截: %s", p)
+			return ErrorResult("危险命令被拦截: %s", p)
 		}
 	}
 
-	// 2. 禁止直接操作 Docker 容器（应使用 container_op 工具）
 	if strings.HasPrefix(cmdLower, "docker ") && !strings.Contains(cmdLower, "docker ps") && !strings.Contains(cmdLower, "docker images") {
-		return "", fmt.Errorf("请使用 container_op 工具管理容器，不要直接执行 docker 命令")
+		return ErrorResult("请使用 container_op 工具管理容器，不要直接执行 docker 命令")
 	}
 
-	// 3. 执行命令
 	ctx2, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
@@ -61,14 +58,14 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) (st
 	result := string(output)
 	if err != nil {
 		if ctx2.Err() == context.DeadlineExceeded {
-			return result + "\n[命令执行超时]", nil
+			return SuccessResult(result + "\n[命令执行超时]")
 		}
-		return result + fmt.Sprintf("\n[退出码: %v]", err), nil
+		return SuccessResult(result + fmt.Sprintf("\n[退出码: %v]", err))
 	}
 	if result == "" {
 		result = "[命令执行成功，无输出]"
 	}
-	return result, nil
+	return SuccessResult(result)
 }
 
 // DashboardTool 获取面板概览
@@ -81,8 +78,7 @@ func (t *DashboardTool) Description() string {
 	return "获取 MiniPanel 面板概览信息，包括容器数、网站数、数据库数等。"
 }
 func (t *DashboardTool) Parameters() []provider.ToolParam { return nil }
-func (t *DashboardTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
-	// 通过 exec 获取一些基础统计
+func (t *DashboardTool) Execute(ctx context.Context, args map[string]interface{}) ToolExecResult {
 	var sb strings.Builder
 
 	containers, _ := exec.Command("sh", "-c", "docker ps -q 2>/dev/null | wc -l").Output()
@@ -94,5 +90,5 @@ func (t *DashboardTool) Execute(ctx context.Context, args map[string]interface{}
 	uptime, _ := exec.Command("sh", "-c", "uptime -p 2>/dev/null || uptime").Output()
 	sb.WriteString(fmt.Sprintf("系统负载: %s", string(uptime)))
 
-	return sb.String(), nil
+	return SuccessResult(sb.String())
 }

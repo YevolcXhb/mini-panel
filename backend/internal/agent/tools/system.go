@@ -23,11 +23,11 @@ func (t *SystemInfoTool) Description() string {
 func (t *SystemInfoTool) Parameters() []provider.ToolParam {
 	return nil
 }
-func (t *SystemInfoTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *SystemInfoTool) Execute(ctx context.Context, args map[string]interface{}) ToolExecResult {
 	svc := service.NewDashboardService()
 	sys, err := svc.GetSystemInfo()
 	if err != nil {
-		return "", err
+		return ErrorErr(err)
 	}
 	cpuUsage, _, err := svc.GetCPUUsage()
 	if err != nil {
@@ -35,7 +35,7 @@ func (t *SystemInfoTool) Execute(ctx context.Context, args map[string]interface{
 	}
 	mem, err := svc.GetMemoryInfo()
 	if err != nil {
-		return "", err
+		return ErrorErr(err)
 	}
 	disks, err := svc.GetDiskInfo()
 	if err != nil {
@@ -58,7 +58,7 @@ func (t *SystemInfoTool) Execute(ctx context.Context, args map[string]interface{
 			d.Path, float64(d.Total)/1024/1024/1024,
 			float64(d.Free)/1024/1024/1024, d.UsedPercent))
 	}
-	return sb.String(), nil
+	return SuccessResult(sb.String())
 }
 
 // ProcessListTool 获取进程列表
@@ -75,11 +75,11 @@ func (t *ProcessListTool) Parameters() []provider.ToolParam {
 		{Name: "filter", Type: "string", Description: "按进程名或 PID 过滤（可选）", Required: false},
 	}
 }
-func (t *ProcessListTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *ProcessListTool) Execute(ctx context.Context, args map[string]interface{}) ToolExecResult {
 	svc := service.NewProcessService()
 	processes, err := svc.List()
 	if err != nil {
-		return "", err
+		return ErrorErr(err)
 	}
 	filter := GetString(args, "filter")
 	filterLower := strings.ToLower(filter)
@@ -96,9 +96,9 @@ func (t *ProcessListTool) Execute(ctx context.Context, args map[string]interface
 	}
 	if len(displayList) == 0 {
 		if filter != "" {
-			return fmt.Sprintf("未找到匹配 '%s' 的进程", filter), nil
+			return SuccessResult(fmt.Sprintf("未找到匹配 '%s' 的进程", filter))
 		}
-		return "未找到进程", nil
+		return SuccessResult("未找到进程")
 	}
 	var sb strings.Builder
 	if filter != "" {
@@ -114,5 +114,5 @@ func (t *ProcessListTool) Execute(ctx context.Context, args map[string]interface
 		sb.WriteString(fmt.Sprintf("PID: %d | 名称: %s | CPU: %.1f%% | 内存: %.1f%% | 命令: %s\n",
 			p.PID, p.Name, p.CPUPercent, p.MemPercent, cmd))
 	}
-	return sb.String(), nil
+	return SuccessResult(sb.String())
 }

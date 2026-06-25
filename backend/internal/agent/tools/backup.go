@@ -22,17 +22,17 @@ func (t *BackupListTool) Parameters() []provider.ToolParam {
 		{Name: "task_id", Type: "integer", Description: "任务ID(查询records时必填)", Required: false},
 	}
 }
-func (t *BackupListTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *BackupListTool) Execute(ctx context.Context, args map[string]interface{}) ToolExecResult {
 	listType := GetString(args, "type")
 	svc := service.NewBackupService()
 	if listType == "records" {
 		taskID := uint(GetInt(args, "task_id"))
 		records, err := svc.ListRecords(taskID)
 		if err != nil {
-			return "", err
+			return ErrorErr(err)
 		}
 		if len(records) == 0 {
-			return "没有备份记录", nil
+			return SuccessResult("没有备份记录")
 		}
 		var sb strings.Builder
 		for _, r := range records {
@@ -43,15 +43,15 @@ func (t *BackupListTool) Execute(ctx context.Context, args map[string]interface{
 			sb.WriteString(fmt.Sprintf("ID: %d | 任务ID: %d | 文件: %s | 大小: %s | 状态: %s\n",
 				r.ID, r.TaskID, r.FilePath, size, r.Status))
 		}
-		return sb.String(), nil
+		return SuccessResult(sb.String())
 	}
 
 	tasks, err := svc.ListTasks()
 	if err != nil {
-		return "", err
+		return ErrorErr(err)
 	}
 	if len(tasks) == 0 {
-		return "没有备份任务", nil
+		return SuccessResult("没有备份任务")
 	}
 	var sb strings.Builder
 	for _, task := range tasks {
@@ -62,7 +62,7 @@ func (t *BackupListTool) Execute(ctx context.Context, args map[string]interface{
 		sb.WriteString(fmt.Sprintf("ID: %d | 名称: %s | 类型: %s | 目标: %s | 计划: %s | 保留: %d | 状态: %s\n",
 			task.ID, task.Name, task.Type, task.TargetDir, task.Schedule, task.KeepCount, enabled))
 	}
-	return sb.String(), nil
+	return SuccessResult(sb.String())
 }
 
 // BackupOpTool 备份操作
@@ -80,7 +80,7 @@ func (t *BackupOpTool) Parameters() []provider.ToolParam {
 		{Name: "id", Type: "integer", Description: "任务 ID 或记录 ID", Required: true},
 	}
 }
-func (t *BackupOpTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+func (t *BackupOpTool) Execute(ctx context.Context, args map[string]interface{}) ToolExecResult {
 	svc := service.NewBackupService()
 	action := GetString(args, "action")
 	id := uint(GetInt(args, "id"))
@@ -88,20 +88,26 @@ func (t *BackupOpTool) Execute(ctx context.Context, args map[string]interface{})
 	case "run":
 		record, err := svc.RunBackup(id)
 		if err != nil {
-			return "", err
+			return ErrorErr(err)
 		}
-		return fmt.Sprintf("备份任务已执行，记录ID: %d", record.ID), nil
+		return SuccessResult(fmt.Sprintf("备份任务已执行，记录ID: %d", record.ID))
 	case "restore":
 		msg, err := svc.RestoreBackup(id)
 		if err != nil {
-			return "", err
+			return ErrorErr(err)
 		}
-		return msg, nil
+		return SuccessResult(msg)
 	case "delete_task":
-		return "", svc.DeleteTask(id)
+		if err := svc.DeleteTask(id); err != nil {
+			return ErrorErr(err)
+		}
+		return SuccessResult(fmt.Sprintf("备份任务 %d 已删除", id))
 	case "delete_record":
-		return "", svc.DeleteRecord(id)
+		if err := svc.DeleteRecord(id); err != nil {
+			return ErrorErr(err)
+		}
+		return SuccessResult(fmt.Sprintf("备份记录 %d 已删除", id))
 	default:
-		return "", fmt.Errorf("不支持的操作: %s", action)
+		return ErrorResult("不支持的操作: %s", action)
 	}
 }
