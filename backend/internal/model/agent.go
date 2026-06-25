@@ -4,7 +4,7 @@ package model
 type AgentConfig struct {
 	BaseModel
 	UserID       uint    `json:"-" gorm:"uniqueIndex"`
-	Provider     string  `json:"provider" gorm:"default:openai"` // openai / anthropic / deepseek / ollama
+	Provider     string  `json:"provider" gorm:"default:openai"` // openai / anthropic / deepseek / ollama / custom
 	BaseURL      string  `json:"base_url"`
 	APIKey       string  `json:"-"` // 不在 JSON 中暴露
 	Model        string  `json:"model" gorm:"default:gpt-4o-mini"`

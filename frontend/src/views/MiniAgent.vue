@@ -116,6 +116,7 @@
             <el-option label="Anthropic (Claude)" value="anthropic" />
             <el-option label="DeepSeek" value="deepseek" />
             <el-option label="Ollama" value="ollama" />
+            <el-option label="自定义 (OpenAI 兼容)" value="custom" />
           </el-select>
         </el-form-item>
         <el-form-item label="API Base URL">

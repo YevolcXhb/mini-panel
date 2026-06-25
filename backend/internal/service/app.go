@@ -612,16 +612,72 @@ func (s *AppService) extractImageFrom1Panel(downloadURL string) string {
 	}
 	defer os.Remove(tmpPath)
 
-	// Try zip first
+	// Extract to a temp dir to access .env and data.json in a unified way
+	extractDir := filepath.Join(os.TempDir(), fmt.Sprintf("minipanel-app-extract-%d", time.Now().Unix()))
+	os.MkdirAll(extractDir, 0755)
+	defer os.RemoveAll(extractDir)
+
+	extracted := false
+	if extractZip(tmpPath, extractDir) == nil {
+		flattenSingleSubdir(extractDir)
+		extracted = true
+	} else if extractTarGz(tmpPath, extractDir) == nil {
+		flattenSingleSubdir(extractDir)
+		extracted = true
+	}
+
+	if extracted {
+		composePath := findComposeFile(extractDir)
+		envMap := parseDotFile(filepath.Dir(composePath))
+		scanEnv := scanAllEnvFiles(extractDir)
+		for k, v := range scanEnv {
+			if _, exists := envMap[k]; !exists {
+				envMap[k] = v
+			}
+		}
+		dataImage := parseDataJSON(extractDir)
+
+		if composePath != "" {
+			if data, err := os.ReadFile(composePath); err == nil {
+				var compose struct {
+					Services map[string]struct {
+						Image string `yaml:"image"`
+					} `yaml:"services"`
+				}
+				if err := yaml.Unmarshal(data, &compose); err == nil {
+					for _, svc := range compose.Services {
+						if svc.Image == "" {
+							continue
+						}
+						resolved := resolveEnvVars(svc.Image, envMap)
+						if !strings.Contains(resolved, "$") {
+							global.LOG.Infof("[Sync] extracted image from compose: %s", resolved)
+							return resolved
+						}
+						// Fallback: if image uses a known variable and data.json has image, use it
+						if dataImage != "" && !strings.Contains(dataImage, "$") {
+							global.LOG.Infof("[Sync] using data.json image: %s", dataImage)
+							return dataImage
+						}
+					}
+				}
+			}
+		}
+		if dataImage != "" && !strings.Contains(dataImage, "$") {
+			global.LOG.Infof("[Sync] extracted image from data.json: %s", dataImage)
+			return dataImage
+		}
+	}
+
+	// Fallback to streaming extraction for compressed archives
 	image := extractImageFromZip(tmpPath)
 	envMap := extractEnvFromZip(tmpPath)
 	image = resolveEnvVars(image, envMap)
-	if image != "" {
+	if image != "" && !strings.Contains(image, "$") {
 		global.LOG.Infof("[Sync] extracted image from zip: %s", image)
 		return image
 	}
 
-	// Try tar.gz
 	image = extractImageFromTarGz(tmpPath)
 	envMap = extractEnvFromTarGz(tmpPath)
 	image = resolveEnvVars(image, envMap)
@@ -630,14 +686,12 @@ func (s *AppService) extractImageFrom1Panel(downloadURL string) string {
 		return image
 	}
 
-	// Try data.json in tar.gz
 	dataImage := extractImageFromDataJSON(tmpPath)
-	if dataImage != "" {
+	if dataImage != "" && !strings.Contains(dataImage, "$") {
 		global.LOG.Infof("[Sync] extracted image from data.json: %s", dataImage)
 		return dataImage
 	}
 
-	// Scan all files in tar.gz for env-like content
 	allEnv := extractAllEnvFromTarGz(tmpPath)
 	if len(allEnv) > 0 && image != "" {
 		image = resolveEnvVars(image, allEnv)
@@ -647,16 +701,10 @@ func (s *AppService) extractImageFrom1Panel(downloadURL string) string {
 		}
 	}
 
-	// Try extracting XXX_IMAGE= from init.sh / upgrade.sh
 	scriptImage := extractImageFromScripts(tmpPath)
 	if scriptImage != "" {
 		global.LOG.Infof("[Sync] extracted image from init script: %s", scriptImage)
 		return scriptImage
-	}
-
-	if image != "" && strings.Contains(image, "$") {
-		global.LOG.Warnf("[Sync] image contains unresolved variables: %s", image)
-		return ""
 	}
 
 	global.LOG.Warnf("[Sync] failed to extract image from package")
@@ -1223,23 +1271,47 @@ func downloadAppPackage(url, destDir string) error {
 	}
 	defer os.Remove(tmpPath)
 
-	// Try zip first
-	if err := extractZip(tmpPath, destDir); err == nil {
-		flattenSingleSubdir(destDir)
-		global.LOG.Infof("[Install] extracted zip package")
-		return nil
+	if isZip(tmpPath) {
+		if err := extractZip(tmpPath, destDir); err == nil {
+			flattenSingleSubdir(destDir)
+			global.LOG.Infof("[Install] extracted zip package")
+			return nil
+		}
+		global.LOG.Warnf("[Install] zip extract failed: %v", err)
+	} else if isTarGz(tmpPath) {
+		if err := extractTarGz(tmpPath, destDir); err == nil {
+			flattenSingleSubdir(destDir)
+			global.LOG.Infof("[Install] extracted tar.gz package")
+			return nil
+		}
+		global.LOG.Warnf("[Install] tar.gz extract failed: %v", err)
+	} else {
+		global.LOG.Warnf("[Install] unknown package format")
 	}
-	global.LOG.Warnf("[Install] zip extract failed: %v", err)
-
-	// Try tar.gz
-	if err := extractTarGz(tmpPath, destDir); err == nil {
-		flattenSingleSubdir(destDir)
-		global.LOG.Infof("[Install] extracted tar.gz package")
-		return nil
-	}
-	global.LOG.Warnf("[Install] tar.gz extract failed: %v", err)
 
 	return fmt.Errorf("unsupported package format")
+}
+
+func isZip(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	header := make([]byte, 4)
+	_, err = f.Read(header)
+	return err == nil && header[0] == 0x50 && header[1] == 0x4B && header[2] == 0x03 && header[3] == 0x04
+}
+
+func isTarGz(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	header := make([]byte, 2)
+	_, err = f.Read(header)
+	return err == nil && header[0] == 0x1F && header[1] == 0x8B
 }
 
 func extractZip(src, dest string) error {
@@ -1250,7 +1322,11 @@ func extractZip(src, dest string) error {
 	defer zr.Close()
 
 	for _, file := range zr.File {
-		fpath := filepath.Join(dest, file.Name)
+		fpath, ok := safeJoin(dest, file.Name)
+		if !ok {
+			global.LOG.Warnf("[Install] zip path traversal blocked: %s", file.Name)
+			continue
+		}
 		if file.FileInfo().IsDir() {
 			os.MkdirAll(fpath, file.Mode())
 			continue
@@ -1294,7 +1370,11 @@ func extractTarGz(src, dest string) error {
 		if err != nil {
 			return err
 		}
-		fpath := filepath.Join(dest, hdr.Name)
+		fpath, ok := safeJoin(dest, hdr.Name)
+		if !ok {
+			global.LOG.Warnf("[Install] tar path traversal blocked: %s", hdr.Name)
+			continue
+		}
 		if hdr.Typeflag == tar.TypeDir {
 			os.MkdirAll(fpath, os.FileMode(hdr.Mode))
 			continue
@@ -1311,4 +1391,14 @@ func extractTarGz(src, dest string) error {
 		}
 	}
 	return nil
+}
+
+func safeJoin(base, sub string) (string, bool) {
+	joined := filepath.Join(base, filepath.Clean("/"+sub))
+	absBase, _ := filepath.Abs(base)
+	absJoined, _ := filepath.Abs(joined)
+	if absBase != "" && !strings.HasPrefix(absJoined, absBase+string(os.PathSeparator)) && absJoined != absBase {
+		return "", false
+	}
+	return joined, true
 }

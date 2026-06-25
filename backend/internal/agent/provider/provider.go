@@ -65,7 +65,7 @@ func NewProvider(provider, baseURL, apiKey, model string) (Provider, error) {
 		return NewAnthropicProvider(baseURL, apiKey, model), nil
 	case "ollama":
 		return NewOpenAIProvider(baseURL, apiKey, model), nil // Ollama 兼容 OpenAI 格式
-	default: // openai, deepseek, and any openai-compatible
+	default: // openai, deepseek, custom, and any openai-compatible
 		return NewOpenAIProvider(baseURL, apiKey, model), nil
 	}
 }
