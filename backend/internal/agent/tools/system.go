@@ -8,6 +8,7 @@ import (
 
 	"github.com/minipanel/minipanel/internal/agent/provider"
 	"github.com/minipanel/minipanel/internal/service"
+	"github.com/minipanel/minipanel/internal/utils/psutil"
 )
 
 // SystemInfoTool 获取系统信息
@@ -65,7 +66,7 @@ type ProcessListTool struct{}
 
 func NewProcessListTool() *ProcessListTool { return &ProcessListTool{} }
 
-func (t *ProcessListTool) Name() string        { return "list_processes" }
+func (t *ProcessListTool) Name() string { return "list_processes" }
 func (t *ProcessListTool) Description() string {
 	return "获取当前运行的进程列表，可按名称或 PID 过滤。"
 }
@@ -81,39 +82,37 @@ func (t *ProcessListTool) Execute(ctx context.Context, args map[string]interface
 		return "", err
 	}
 	filter := GetString(args, "filter")
+	filterLower := strings.ToLower(filter)
+	var displayList []psutil.ProcessInfo
 	if filter != "" {
-		var filtered []interface{}
 		for _, p := range processes {
-			if strings.Contains(strings.ToLower(p.Name), strings.ToLower(filter)) ||
+			if strings.Contains(strings.ToLower(p.Name), filterLower) ||
 				fmt.Sprintf("%d", p.PID) == filter {
-				filtered = append(filtered, p)
+				displayList = append(displayList, p)
 			}
 		}
-		if len(filtered) == 0 {
-			return "未找到匹配的进程", nil
-		}
-		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("共 %d 个匹配进程:\n", len(filtered)))
-		for _, p := range filtered {
-			proc := p.(interface {
-				GetPID() int32
-				GetName() string
-				GetCPUPercent() float64
-				GetMemPercent() float32
-				GetCmdLine() string
-			})
-			_ = proc
-		}
-		// 简化处理：直接返回全部并提示过滤条件
+	} else {
+		displayList = processes
 	}
-	if len(processes) == 0 {
+	if len(displayList) == 0 {
+		if filter != "" {
+			return fmt.Sprintf("未找到匹配 '%s' 的进程", filter), nil
+		}
 		return "未找到进程", nil
 	}
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("共 %d 个进程:\n", len(processes)))
-	for _, p := range processes {
+	if filter != "" {
+		sb.WriteString(fmt.Sprintf("共找到 %d 个匹配 '%s' 的进程:\n", len(displayList), filter))
+	} else {
+		sb.WriteString(fmt.Sprintf("共 %d 个进程:\n", len(displayList)))
+	}
+	for _, p := range displayList {
+		cmd := p.CmdLine
+		if len(cmd) > 100 {
+			cmd = cmd[:100] + "..."
+		}
 		sb.WriteString(fmt.Sprintf("PID: %d | 名称: %s | CPU: %.1f%% | 内存: %.1f%% | 命令: %s\n",
-			p.PID, p.Name, p.CPUPercent, p.MemPercent, p.CmdLine))
+			p.PID, p.Name, p.CPUPercent, p.MemPercent, cmd))
 	}
 	return sb.String(), nil
 }
