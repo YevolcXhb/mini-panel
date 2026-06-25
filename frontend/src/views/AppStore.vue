@@ -188,11 +188,11 @@
           <div style="display:flex;justify-content:space-between;align-items:center">
             <span style="font-weight:500">{{ t.name }}</span>
             <el-tag size="small" :type="t.status === 'done' ? 'success' : t.status === 'error' ? 'danger' : 'info'">
-              {{ t.status === 'done' ? '完成' : t.status === 'error' ? '失败' : '安装中' }}
+              {{ t.status === 'done' ? '完成' : t.status === 'error' ? '失败' : `${t.progress || 0}%` }}
             </el-tag>
           </div>
           <div v-if="t.status === 'installing'" style="margin-top:6px">
-            <el-progress :percentage="100" :indeterminate="true" :duration="2" :stroke-width="4" />
+            <el-progress :percentage="t.progress || 0" :stroke-width="4" />
           </div>
           <div v-if="t.message" style="font-size:12px;color:var(--dim);margin-top:4px;white-space:pre-wrap;word-break:break-word;max-height:120px;overflow:auto">{{ t.message }}</div>
         </div>
@@ -339,7 +339,7 @@ async function doInstall() {
   if (!selectedApp.value) return
   showInstall.value = false
   const taskId = ++bgTaskId
-  const task = { id: taskId, name: installForm.value.name || selectedApp.value.name, status: 'installing', message: '' }
+  const task: any = { id: taskId, name: installForm.value.name || selectedApp.value.name, status: 'installing', progress: 10, message: '正在初始化安装...' }
   bgTasks.value.unshift(task)
   bgExpanded.value = true
   saveBgTasks()
@@ -348,24 +348,58 @@ async function doInstall() {
     env[k] = String(v ?? '')
   }
   try {
-    await appApi.install({
+    const res: any = await appApi.install({
       app_id: selectedApp.value.id,
       app_detail_id: installForm.value.app_detail_id,
       name: installForm.value.name,
       env: env
     })
-    task.status = 'done'
-    task.message = '安装完成'
-    saveBgTasks()
-    ElMessage.success(`${task.name} 安装成功`)
-    loadInstalled()
+    const instName = res.data?.name || task.name
+    pollInstallStatus(taskId, instName)
   } catch (e: any) {
     task.status = 'error'
+    task.progress = 100
     const backendMsg = e?.response?.data?.message || e?.response?.data?.data?.message || ''
     task.message = backendMsg || e?.message || '安装失败'
     saveBgTasks()
     ElMessage.error(backendMsg || e?.message || '安装失败')
   }
+}
+
+function pollInstallStatus(taskId: number, name: string) {
+  const pollTimer = setInterval(async () => {
+    const task = bgTasks.value.find((t: any) => t.id === taskId)
+    if (!task || task.status !== 'installing') {
+      clearInterval(pollTimer)
+      return
+    }
+    try {
+      const res: any = await appApi.installStatus(name)
+      if (res.data) {
+        task.progress = res.data.progress || task.progress
+        task.message = res.data.message || task.message
+        if (res.data.status === 'running') {
+          task.status = 'done'
+          task.progress = 100
+          task.message = '安装完成'
+          clearInterval(pollTimer)
+          saveBgTasks()
+          ElMessage.success(`${task.name} 安装成功`)
+          loadInstalled()
+        } else if (res.data.status === 'failed') {
+          task.status = 'error'
+          task.progress = 100
+          clearInterval(pollTimer)
+          saveBgTasks()
+          ElMessage.error(task.message || '安装失败')
+        } else {
+          saveBgTasks()
+        }
+      }
+    } catch (e) {
+      // 忽略错误，继续轮询
+    }
+  }, 800)
 }
 
 async function uninstall(row: any) {

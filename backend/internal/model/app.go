@@ -36,6 +36,7 @@ type AppInstall struct {
 	AppDetailID uint   `gorm:"index;not null" json:"app_detail_id"`
 	Name        string `gorm:"uniqueIndex;not null" json:"name"`
 	Status      string `gorm:"default:'installing'" json:"status"`
+	Progress    int    `gorm:"default:0" json:"progress"`
 	Image       string `json:"image"`
 	Version     string `json:"version"`
 	Container   string `json:"container"`

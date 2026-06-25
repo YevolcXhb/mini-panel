@@ -74,6 +74,7 @@ func NewRouter() *gin.Engine {
 		apiV1.GET("/apps/icon/:key", app.Icon)
 		apiV1.GET("/apps/:id", app.Detail)
 		apiV1.POST("/apps/install", app.Install)
+		apiV1.GET("/apps/install/:name/status", app.InstallStatus)
 		apiV1.POST("/apps/:id/uninstall", app.Uninstall)
 		apiV1.GET("/apps/installed", app.Installed)
 		apiV1.DELETE("/apps/history", app.ClearHistory)

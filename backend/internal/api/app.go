@@ -91,6 +91,20 @@ func (a *AppAPI) Install(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: inst})
 }
 
+func (a *AppAPI) InstallStatus(c *gin.Context) {
+	name := c.Param("name")
+	if name == "" {
+		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "name is required"})
+		return
+	}
+	inst, err := a.service.GetInstallStatus(name)
+	if err != nil {
+		c.JSON(http.StatusNotFound, dto.Response{Code: 404, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: inst})
+}
+
 func (a *AppAPI) Uninstall(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {

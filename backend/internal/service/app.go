@@ -75,15 +75,18 @@ func (s *AppService) Installed() ([]model.AppInstall, error) {
 	return s.instRepo.List()
 }
 
+func (s *AppService) GetInstallStatus(name string) (*model.AppInstall, error) {
+	return s.instRepo.GetByName(name)
+}
+
 func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, error) {
 	appInstallMu.Lock()
-	defer appInstallMu.Unlock()
 
 	global.LOG.Infof("[Install] start install app_id=%d detail_id=%d name=%s", req.AppID, req.AppDetailID, req.Name)
-	defer global.LOG.Infof("[Install] finish install name=%s", req.Name)
 
 	app, err := s.appRepo.GetByID(req.AppID)
 	if err != nil {
+		appInstallMu.Unlock()
 		global.LOG.Errorf("[Install] get app failed: %v", err)
 		return nil, fmt.Errorf("app not found: %w", err)
 	}
@@ -93,6 +96,7 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 	if req.AppDetailID > 0 {
 		detail, err = s.detailRepo.GetByID(req.AppDetailID)
 		if err != nil {
+			appInstallMu.Unlock()
 			global.LOG.Errorf("[Install] get detail failed: %v", err)
 			return nil, fmt.Errorf("version not found: %w", err)
 		}
@@ -133,49 +137,76 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 	instName = strings.ToLower(instName)
 	instName = regexp.MustCompile(`[^a-z0-9_-]`).ReplaceAllString(instName, "-")
 
-	// 添加随机后缀避免容器名冲突
 	rand.Seed(time.Now().UnixNano())
 	suffix := fmt.Sprintf("%04d", rand.Intn(10000))
 	containerName := fmt.Sprintf("%s-%s", instName, suffix)
 	global.LOG.Infof("[Install] using container name: %s", containerName)
 
+	detailID := req.AppDetailID
+	if detail != nil && detailID == 0 {
+		detailID = detail.ID
+	}
+
 	inst := &model.AppInstall{
 		AppID:       req.AppID,
-		AppDetailID: req.AppDetailID,
+		AppDetailID: detailID,
 		Name:        instName,
 		Status:      "installing",
+		Progress:    10,
+		Message:     "正在初始化安装...",
 		Image:       image,
 		Version:     version,
 		Container:   containerName,
 		Path:        filepath.Join(global.GetDataDir(), "apps", instName),
 	}
 
-	// 处理已存在的安装记录
 	existing, _ := s.instRepo.GetByName(instName)
 	if existing != nil {
 		if existing.Status == "running" {
+			appInstallMu.Unlock()
 			return nil, fmt.Errorf("应用 %s 已存在且正在运行，请更换实例名称", instName)
 		}
-		global.LOG.Infof("[Install] found existing install record id=%d status=%s, cleaning up", existing.ID, existing.Status)
-		// 删除旧的失败记录和容器
+		global.LOG.Infof("[Install] found existing install record id=%d status=%s, cleaning up container", existing.ID, existing.Status)
 		if s.ctnService.IsAvailable() {
 			_ = s.ctnService.client.Rm(existing.Container)
 		}
-		if err := s.instRepo.DeleteByName(instName); err != nil {
-			global.LOG.Warnf("[Install] delete old records by name failed: %v, will try delete by id", err)
-			if err := s.instRepo.Delete(existing.ID); err != nil {
-				global.LOG.Errorf("[Install] failed to delete old record: %v", err)
-				return nil, fmt.Errorf("清理旧安装记录失败: %w", err)
-			}
-		}
-		global.LOG.Infof("[Install] old records cleaned up successfully")
+		inst.ID = existing.ID
 	}
 
-	if err := s.instRepo.Create(inst); err != nil {
-		global.LOG.Errorf("[Install] create install record failed: %v", err)
+	if err := s.instRepo.Upsert(inst); err != nil {
+		appInstallMu.Unlock()
+		global.LOG.Errorf("[Install] upsert install record failed: %v", err)
 		return nil, err
 	}
-	global.LOG.Infof("[Install] install record created id=%d path=%s", inst.ID, inst.Path)
+	global.LOG.Infof("[Install] install record upserted id=%d path=%s", inst.ID, inst.Path)
+	appInstallMu.Unlock()
+
+	go func() {
+		defer global.LOG.Infof("[Install] async install finish name=%s", instName)
+
+		if err := s.doInstall(inst, app, detail, req, image); err != nil {
+			global.LOG.Errorf("[Install] async install failed: %v", err)
+			inst.Status = "failed"
+			inst.Progress = 100
+			inst.Message = err.Error()
+			s.instRepo.Update(inst)
+		} else {
+			inst.Status = "running"
+			inst.Progress = 100
+			inst.Message = "安装完成"
+			s.instRepo.Update(inst)
+		}
+	}()
+
+	return inst, nil
+}
+
+func (s *AppService) doInstall(inst *model.AppInstall, app *model.App, detail *model.AppDetail, req dto.AppInstallRequest, image string) error {
+	global.LOG.Infof("[Install] async doInstall start name=%s", inst.Name)
+
+	// 20%: 解析配置
+	s.instRepo.UpdateProgress(inst.Name, 20, "installing", "正在下载/解析配置文件...")
+	time.Sleep(300 * time.Millisecond)
 
 	// ========== 解析 docker-compose.yml ==========
 	var composeEnvs []string
@@ -236,7 +267,7 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 				}
 
 				// 注入默认环境变量
-				envMap["CONTAINER_NAME"] = containerName
+				envMap["CONTAINER_NAME"] = inst.Container
 				envMap["INSTALL_DIR"] = inst.Path
 
 				// 自动分配端口给 PANEL_APP_PORT 变量
@@ -436,83 +467,70 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 		global.LOG.Infof("[Install] user volumes count=%d", len(req.Volumes))
 	}
 
+	// 30%: 准备完成，开始拉取镜像
+	s.instRepo.UpdateProgress(inst.Name, 30, "installing", "配置解析完成，准备拉取镜像...")
+	time.Sleep(200 * time.Millisecond)
+
 	// 规范化镜像名
 	image = dockroot.NormalizeImageRef(image)
-	global.LOG.Infof("[Install] final params image=%s container=%s envs=%d volumes=%d", image, containerName, len(envs), len(volumes))
+	global.LOG.Infof("[Install] final params image=%s container=%s envs=%d volumes=%d", image, inst.Container, len(envs), len(volumes))
 
 	if image == "" {
 		global.LOG.Errorf("[Install] image is empty after parsing compose")
-		inst.Status = "failed"
-		inst.Message = "未能从应用包中解析出镜像名，请检查应用源或 docker-compose.yml"
-		s.instRepo.Update(inst)
-		return inst, fmt.Errorf("image is empty")
+		return fmt.Errorf("未能从应用包中解析出镜像名，请检查应用源或 docker-compose.yml")
 	}
 	if strings.Contains(image, "$") {
 		global.LOG.Errorf("[Install] image contains unresolved variables: %s", image)
-		inst.Status = "failed"
-		inst.Message = fmt.Sprintf("镜像名包含未解析的变量: %s", image)
-		s.instRepo.Update(inst)
-		return inst, fmt.Errorf("image contains unresolved variables: %s", image)
+		return fmt.Errorf("镜像名包含未解析的变量: %s", image)
 	}
 
 	if s.ctnService.IsAvailable() {
 		// 先清理已存在的同名容器
-		global.LOG.Infof("[Install] cleaning up existing container %s", containerName)
-		_ = s.ctnService.client.Rm(containerName)
+		global.LOG.Infof("[Install] cleaning up existing container %s", inst.Container)
+		_ = s.ctnService.client.Rm(inst.Container)
 
-		global.LOG.Infof("[Install] pulling image %s for container %s ...", image, containerName)
-		pullOut, err := s.ctnService.client.Pull(image, containerName)
+		// 40%: 拉取镜像
+		s.instRepo.UpdateProgress(inst.Name, 40, "installing", "正在拉取镜像...")
+		global.LOG.Infof("[Install] pulling image %s for container %s ...", image, inst.Container)
+		pullOut, err := s.ctnService.client.Pull(image, inst.Container)
 		if err != nil {
 			global.LOG.Errorf("[Install] pull image failed: %v, output: %s", err, pullOut)
-			inst.Status = "failed"
-			inst.Message = fmt.Sprintf("拉取镜像失败: %v\n%s", err, truncateOutput(pullOut))
-			s.instRepo.Update(inst)
-			return inst, fmt.Errorf("pull image: %w", err)
+			return fmt.Errorf("拉取镜像失败: %v\n%s", err, truncateOutput(pullOut))
 		}
 		global.LOG.Infof("[Install] pull image success")
 
-		global.LOG.Infof("[Install] running container %s ...", containerName)
-		runOut, err := s.ctnService.client.RunWithCommand(containerName, true, envs, volumes, composeCommand)
+		// 70%: 创建并启动容器
+		s.instRepo.UpdateProgress(inst.Name, 70, "installing", "正在创建并启动容器...")
+		global.LOG.Infof("[Install] running container %s ...", inst.Container)
+		runOut, err := s.ctnService.client.RunWithCommand(inst.Container, true, envs, volumes, composeCommand)
 		if err != nil {
 			global.LOG.Errorf("[Install] run container failed: %v, output: %s", err, runOut)
-			inst.Status = "failed"
-			inst.Message = fmt.Sprintf("启动容器失败: %v\n%s", err, truncateOutput(runOut))
-			s.instRepo.Update(inst)
-			return inst, fmt.Errorf("run container: %w", err)
+			return fmt.Errorf("启动容器失败: %v\n%s", err, truncateOutput(runOut))
 		}
 		global.LOG.Infof("[Install] run container success")
 
-		// 等待2秒后检查容器是否真的在运行
+		// 90%: 检查容器运行状态
+		s.instRepo.UpdateProgress(inst.Name, 90, "installing", "正在检查容器运行状态...")
 		time.Sleep(2 * time.Second)
-		pids, psErr := s.ctnService.client.Ps(containerName)
+		pids, psErr := s.ctnService.client.Ps(inst.Container)
 		if psErr != nil || len(pids) == 0 {
-			// 容器启动后立即退出，读取日志
-			logOut, _ := s.ctnService.client.ReadLog(containerName, 50)
+			logOut, _ := s.ctnService.client.ReadLog(inst.Container, 50)
 			errMsg := "容器启动后立即退出"
 			if logOut != "" {
 				errMsg += fmt.Sprintf("\n日志: %s", truncateOutput(logOut))
 			}
 			global.LOG.Errorf("[Install] container exited immediately: %s", errMsg)
-			inst.Status = "failed"
-			inst.Message = errMsg
-			s.instRepo.Update(inst)
-			return inst, fmt.Errorf("container exited immediately after start")
+			return fmt.Errorf("%s", errMsg)
 		}
+		inst.Port = inst.Port
 		global.LOG.Infof("[Install] container is running with pids: %v", pids)
 	} else {
 		global.LOG.Errorf("[Install] dockroot not available")
-		inst.Status = "not_supported"
-		inst.Message = "dockroot 不可用"
-		s.instRepo.Update(inst)
-		return inst, fmt.Errorf("dockroot not available")
+		return fmt.Errorf("dockroot 不可用")
 	}
 
-	inst.Status = "running"
-	if err := s.instRepo.Update(inst); err != nil {
-		global.LOG.Errorf("[Install] update install status failed: %v", err)
-	}
 	global.LOG.Infof("[Install] install success id=%d status=running", inst.ID)
-	return inst, nil
+	return nil
 }
 
 func truncateOutput(s string) string {

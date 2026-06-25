@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"time"
+
 	"github.com/minipanel/minipanel/internal/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -139,8 +141,19 @@ func (r *AppInstallRepository) Create(item *model.AppInstall) error {
 func (r *AppInstallRepository) Upsert(item *model.AppInstall) error {
 	return r.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "name"}},
-		DoUpdates: clause.AssignmentColumns([]string{"app_id", "app_detail_id", "status", "image", "version", "container", "port", "path", "env", "message", "updated_at"}),
+		DoUpdates: clause.AssignmentColumns([]string{"app_id", "app_detail_id", "status", "progress", "image", "version", "container", "port", "path", "env", "message", "updated_at"}),
 	}).Create(item).Error
+}
+
+func (r *AppInstallRepository) UpdateProgress(name string, progress int, status string, message string) error {
+	updates := map[string]interface{}{"progress": progress, "updated_at": time.Now()}
+	if status != "" {
+		updates["status"] = status
+	}
+	if message != "" {
+		updates["message"] = message
+	}
+	return r.db.Model(&model.AppInstall{}).Where("name = ?", name).Updates(updates).Error
 }
 
 func (r *AppInstallRepository) DeleteByName(name string) error {
