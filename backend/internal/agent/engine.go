@@ -180,6 +180,10 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 			return nil
 		}
 
+		if strings.TrimSpace(resp.Content) != "" {
+			stream <- StreamChunk{Type: "message", Content: resp.Content}
+		}
+
 		messages = append(messages, provider.LLMMessage{
 			Role:      "assistant",
 			Content:   resp.Content,
