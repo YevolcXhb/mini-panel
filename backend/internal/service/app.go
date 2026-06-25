@@ -154,12 +154,14 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 	// ========== 解析 docker-compose.yml ==========
 	var composeEnvs []string
 	var composeVolumes []string
-	var containerPort int
 
 	composePath := filepath.Join(inst.Path, "docker-compose.yml")
 	if detail != nil && detail.DownloadURL != "" {
+		global.LOG.Infof("[Install] downloading package from %s", detail.DownloadURL)
 		if err := downloadAppPackage(detail.DownloadURL, inst.Path); err != nil {
 			global.LOG.Warnf("[Install] download package failed: %v", err)
+		} else {
+			global.LOG.Infof("[Install] package downloaded to %s", inst.Path)
 		}
 	}
 
@@ -175,70 +177,117 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 				Ports       []string    `yaml:"ports"`
 				Environment interface{} `yaml:"environment"`
 				Volumes     []string    `yaml:"volumes"`
+				Networks    interface{} `yaml:"networks"`
 			} `yaml:"services"`
 		}
-		if err := yaml.Unmarshal(data, &compose); err == nil {
-			dotEnv := parseDotFile(filepath.Dir(composePath))
-			dataJSONImage := parseDataJSON(filepath.Dir(composePath))
-			scanEnv := scanAllEnvFiles(filepath.Dir(composePath))
-			for k, v := range scanEnv {
-				if _, exists := dotEnv[k]; !exists {
-					dotEnv[k] = v
+		if err := yaml.Unmarshal(data, &compose); err != nil {
+			global.LOG.Warnf("[Install] unmarshal compose failed: %v", err)
+		} else {
+			composeDir := filepath.Dir(composePath)
+
+			// 构建环境变量表：data.yml 默认值 > .env > data.json > 扫描文件
+			envMap := make(map[string]string)
+			for k, v := range parseDataYML(composeDir) {
+				envMap[k] = v
+			}
+			for k, v := range parseDotFile(composeDir) {
+				envMap[k] = v
+			}
+			for k, v := range scanAllEnvFiles(composeDir) {
+				if _, exists := envMap[k]; !exists {
+					envMap[k] = v
 				}
 			}
-			for _, svc := range compose.Services {
-				if svc.Image != "" && strings.Contains(svc.Image, "$") {
-					varNames := extractVarNames(svc.Image)
-					for _, vn := range varNames {
-						if dataJSONImage != "" {
-							dotEnv[vn] = dataJSONImage
+			dataJSONImage := parseDataJSON(composeDir)
+			if dataJSONImage != "" {
+				envMap["IMAGE_NAME"] = dataJSONImage
+			}
+			// 注入容器名变量
+			envMap["CONTAINER_NAME"] = instName
+
+			// 合并 detail.Params 中的 formFields 默认值（用户输入稍后覆盖）
+			if detail != nil && detail.Params != "" {
+				var fields []panelFormField
+				if err := json.Unmarshal([]byte(detail.Params), &fields); err == nil {
+					for _, f := range fields {
+						if f.EnvKey == "" {
+							continue
+						}
+						if _, exists := envMap[f.EnvKey]; !exists {
+							if f.Default != nil {
+								envMap[f.EnvKey] = fmt.Sprintf("%v", f.Default)
+							} else {
+								envMap[f.EnvKey] = ""
+							}
+							global.LOG.Infof("[Install] formField default: %s=%s", f.EnvKey, envMap[f.EnvKey])
 						}
 					}
+					global.LOG.Infof("[Install] detail params loaded count=%d", len(fields))
+				} else {
+					global.LOG.Warnf("[Install] unmarshal detail params failed: %v", err)
 				}
-				break
 			}
-			global.LOG.Infof("[Install] env sources: dotEnv=%d, dataJSON=%s, scanEnv=%d", len(dotEnv), dataJSONImage, len(scanEnv))
+
+			global.LOG.Infof("[Install] env sources: dataYML=%v dotEnv=%d dataJSON=%s scanEnv prepared", envMap, len(parseDotFile(composeDir)), dataJSONImage)
+
 			for _, svc := range compose.Services {
+				// 解析 image
 				if svc.Image != "" {
-					resolved := resolveEnvVars(svc.Image, dotEnv)
-					if resolved != svc.Image && !strings.Contains(resolved, "$") {
+					resolved := resolveEnvVars(svc.Image, envMap)
+					if resolved != "" && !strings.Contains(resolved, "$") {
 						image = resolved
+						inst.Image = image
+						global.LOG.Infof("[Install] resolved image: %s", image)
 					} else if dataJSONImage != "" && !strings.Contains(dataJSONImage, "$") {
 						image = dataJSONImage
-					}
-					if !strings.Contains(image, "$") {
 						inst.Image = image
+						global.LOG.Infof("[Install] using data.json image: %s", image)
+					} else {
+						global.LOG.Warnf("[Install] image unresolved: %s", svc.Image)
 					}
 				}
-				if containerPort == 0 {
-					containerPort = extractContainerPort(svc.Ports)
+
+				// dockroot 不支持端口映射，仅记录日志并跳过
+				if len(svc.Ports) > 0 {
+					global.LOG.Infof("[Install] dockroot does not support port mapping, ignoring ports: %v", svc.Ports)
 				}
+
+				// 解析 environment（支持 map 和 list 两种形式）
 				switch env := svc.Environment.(type) {
 				case map[string]interface{}:
 					for k, v := range env {
-						composeEnvs = append(composeEnvs, fmt.Sprintf("%s=%s", k, fmt.Sprintf("%v", v)))
+						resolved := resolveEnvVars(fmt.Sprintf("%v", v), envMap)
+						composeEnvs = append(composeEnvs, fmt.Sprintf("%s=%s", k, resolved))
+					}
+				case []interface{}:
+					for _, item := range env {
+						s := fmt.Sprintf("%v", item)
+						if idx := strings.Index(s, "="); idx > 0 {
+							key := s[:idx]
+							val := resolveEnvVars(s[idx+1:], envMap)
+							composeEnvs = append(composeEnvs, fmt.Sprintf("%s=%s", key, val))
+						}
 					}
 				}
+
+				// 解析 volumes
 				for _, v := range svc.Volumes {
-					parts := strings.Split(v, ":")
+					resolved := resolveEnvVars(v, envMap)
+					parts := strings.Split(resolved, ":")
 					if len(parts) >= 2 {
 						hostPath := filepath.Join(inst.Path, filepath.Base(parts[0]))
 						os.MkdirAll(hostPath, 0755)
 						composeVolumes = append(composeVolumes, fmt.Sprintf("%s:%s", hostPath, parts[1]))
 					}
 				}
+
+				// 每个 service 处理一次即可（dockroot 单容器运行）
 				break
 			}
 			global.LOG.Infof("[Install] compose parsed image=%s envs=%d volumes=%d", image, len(composeEnvs), len(composeVolumes))
-		} else {
-			global.LOG.Warnf("[Install] unmarshal compose failed: %v", err)
 		}
 	} else {
 		global.LOG.Infof("[Install] no docker-compose.yml found at %s", composePath)
-	}
-
-	if containerPort > 0 {
-		inst.Port = containerPort
 	}
 
 	var envs []string
@@ -247,7 +296,7 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 		if idx := strings.Index(e, "="); idx >= 0 {
 			key := e[:idx]
 			val := e[idx+1:]
-			if strings.Contains(val, "${") || strings.Contains(val, "$") && strings.IndexByte(val, '$') == 0 {
+			if strings.Contains(val, "${") || (strings.Contains(val, "$") && strings.IndexByte(val, '$') == 0) {
 				global.LOG.Infof("[Install] skip env with unresolved var: %s", e)
 				continue
 			}
@@ -268,6 +317,7 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 	if req.Env != nil {
 		for k, v := range req.Env {
 			envSet[k] = v
+			global.LOG.Infof("[Install] user env override: %s=%s", k, v)
 		}
 		global.LOG.Infof("[Install] user env count=%d", len(req.Env))
 	}
@@ -465,9 +515,23 @@ type panelAppProperty struct {
 }
 
 type panelAppVersion struct {
-	Name         string `json:"name"`
-	LastModified int    `json:"lastModified"`
-	DownloadURL  string `json:"downloadUrl"`
+	Name                 string            `json:"name"`
+	LastModified         int               `json:"lastModified"`
+	DownloadURL          string            `json:"downloadUrl"`
+	AdditionalProperties panelAppExtraProp `json:"additionalProperties"`
+}
+
+type panelAppExtraProp struct {
+	FormFields []panelFormField `json:"formFields"`
+}
+
+type panelFormField struct {
+	EnvKey   string      `json:"envKey"`
+	Default  interface{} `json:"default"`
+	Type     string      `json:"type"`
+	Required bool        `json:"required"`
+	LabelZh  string      `json:"labelZh"`
+	LabelEn  string      `json:"labelEn"`
 }
 
 func (s *AppService) syncFrom1PanelZip(source *model.AppSource) error {
@@ -566,14 +630,26 @@ func (s *AppService) syncFrom1PanelZip(source *model.AppSource) error {
 		}
 
 		for _, pv := range pa.Versions {
+			paramsJSON := ""
+			if len(pv.AdditionalProperties.FormFields) > 0 {
+				if b, err := json.Marshal(pv.AdditionalProperties.FormFields); err == nil {
+					paramsJSON = string(b)
+					global.LOG.Infof("[Sync] app=%s version=%s formFields count=%d", key, pv.Name, len(pv.AdditionalProperties.FormFields))
+				} else {
+					global.LOG.Warnf("[Sync] marshal formFields failed for %s/%s: %v", key, pv.Name, err)
+				}
+			}
 			detail := &model.AppDetail{
 				AppID:       app.ID,
 				Version:     pv.Name,
 				Image:       "", // lazy extract on install
 				DownloadURL: pv.DownloadURL,
+				Params:      paramsJSON,
 				Status:      "active",
 			}
-			_ = s.detailRepo.Create(detail)
+			if err := s.detailRepo.Create(detail); err != nil {
+				global.LOG.Warnf("[Sync] create detail failed for %s/%s: %v", key, pv.Name, err)
+			}
 		}
 	}
 
@@ -1060,6 +1136,55 @@ func findComposeFile(dir string) string {
 		return nil
 	})
 	return found
+}
+
+// parseDataYML 读取 1Panel 应用包中的 data.yml，解析 formFields 的 envKey 和 default 值
+func parseDataYML(dir string) map[string]string {
+	envMap := make(map[string]string)
+	candidates := []string{"data.yml", "data.yaml"}
+	var data []byte
+	var found string
+	for _, name := range candidates {
+		path := filepath.Join(dir, name)
+		if d, err := os.ReadFile(path); err == nil {
+			data = d
+			found = path
+			break
+		}
+	}
+	if found == "" {
+		global.LOG.Infof("[Install] no data.yml found in %s", dir)
+		return envMap
+	}
+	global.LOG.Infof("[Install] parsing data.yml: %s", found)
+
+	type formField struct {
+		EnvKey  string      `yaml:"envKey"`
+		Default interface{} `yaml:"default"`
+		Type    string      `yaml:"type"`
+	}
+	type dataYML struct {
+		AdditionalProperties struct {
+			FormFields []formField `yaml:"formFields"`
+		} `yaml:"additionalProperties"`
+	}
+	var dy dataYML
+	if err := yaml.Unmarshal(data, &dy); err != nil {
+		global.LOG.Warnf("[Install] parse data.yml failed: %v", err)
+		return envMap
+	}
+	for _, f := range dy.AdditionalProperties.FormFields {
+		if f.EnvKey == "" {
+			continue
+		}
+		val := ""
+		if f.Default != nil {
+			val = fmt.Sprintf("%v", f.Default)
+		}
+		envMap[f.EnvKey] = val
+		global.LOG.Infof("[Install] data.yml formField: %s=%s (type=%s)", f.EnvKey, val, f.Type)
+	}
+	return envMap
 }
 
 func parseDotFile(dir string) map[string]string {

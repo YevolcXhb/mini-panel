@@ -116,10 +116,15 @@
           </el-select>
         </el-form-item>
         <el-form-item label="实例名称"><el-input v-model="installForm.name" placeholder="默认为应用名，可加编号如 openlist001" /></el-form-item>
-        <el-form-item label="环境变量" v-if="envKeys.length">
-          <div v-for="(k, idx) in envKeys" :key="idx" style="display:flex;gap:8px;margin-bottom:8px">
-            <el-input :model-value="k" disabled style="width:120px" />
-            <el-input v-model="installForm.env[k]" placeholder="值" />
+        <el-form-item label="参数配置" v-if="formFields.length">
+          <div style="width:100%">
+            <div v-for="(f, idx) in formFields" :key="f.envKey || idx" style="margin-bottom:10px">
+              <div style="font-size:12px;color:var(--dim);margin-bottom:4px">
+                {{ f.labelZh || f.labelEn || f.envKey }}{{ f.required ? ' *' : '' }}
+              </div>
+              <el-input v-if="f.type === 'number'" v-model.number="installForm.env[f.envKey]" :placeholder="String(f.default ?? '')" type="number" />
+              <el-input v-else v-model="installForm.env[f.envKey]" :placeholder="String(f.default ?? '')" />
+            </div>
           </div>
         </el-form-item>
       </el-form>
@@ -241,6 +246,21 @@ const parsedImage = computed(() => {
 
 const envKeys = computed(() => Object.keys(installForm.value.env || {}))
 
+const selectedDetail = computed(() => {
+  const id = installForm.value.app_detail_id
+  return appDetails.value.find((d: any) => d.id === id)
+})
+
+const formFields = computed(() => {
+  const d = selectedDetail.value
+  if (!d || !d.params) return []
+  try {
+    const arr = JSON.parse(d.params)
+    if (Array.isArray(arr)) return arr
+  } catch (e) {}
+  return []
+})
+
 async function loadApps() {
   try {
     const res: any = await appApi.list(selectedCategory.value === 'all' ? undefined : selectedCategory.value)
@@ -267,6 +287,24 @@ async function loadSources() {
   try { const res: any = await appApi.sources(); sources.value = res.data || [] } catch (e) {}
 }
 
+function initEnvFromFields(detailId?: number) {
+  const d = appDetails.value.find((x: any) => x.id === detailId)
+  const env: Record<string, any> = {}
+  if (d && d.params) {
+    try {
+      const fields = JSON.parse(d.params)
+      if (Array.isArray(fields)) {
+        for (const f of fields) {
+          if (f.envKey) {
+            env[f.envKey] = f.default ?? ''
+          }
+        }
+      }
+    } catch (e) {}
+  }
+  installForm.value.env = env
+}
+
 async function openInstall(app: any) {
   selectedApp.value = app
   installForm.value = { name: app.key, app_detail_id: undefined, env: {} }
@@ -275,10 +313,15 @@ async function openInstall(app: any) {
     appDetails.value = res.data?.details || []
     if (appDetails.value.length > 0) {
       installForm.value.app_detail_id = appDetails.value[0].id
+      initEnvFromFields(appDetails.value[0].id)
     }
   } catch (e) { appDetails.value = [] }
   showInstall.value = true
 }
+
+watch(() => installForm.value.app_detail_id, (newVal) => {
+  if (newVal) initEnvFromFields(newVal as number)
+})
 
 async function openDetail(app: any) {
   detailApp.value = app
@@ -297,12 +340,16 @@ async function doInstall() {
   bgTasks.value.unshift(task)
   bgExpanded.value = true
   saveBgTasks()
+  const env: Record<string, string> = {}
+  for (const [k, v] of Object.entries(installForm.value.env || {})) {
+    env[k] = String(v ?? '')
+  }
   try {
     await appApi.install({
       app_id: selectedApp.value.id,
       app_detail_id: installForm.value.app_detail_id,
       name: installForm.value.name,
-      env: installForm.value.env
+      env: env
     })
     task.status = 'done'
     task.message = '安装完成'
