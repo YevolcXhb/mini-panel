@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
+	"time"
 
 	"github.com/minipanel/minipanel/internal/agent/provider"
 	"github.com/minipanel/minipanel/internal/agent/repository"
@@ -159,9 +161,9 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 	for step := 0; step < e.maxSteps; step++ {
 		global.LOG.Debugf("[Engine] ReAct step %d/%d, errors=%d", step+1, e.maxSteps, consecutiveErrors)
 
-		resp, err := e.provider.Chat(ctx, messages, toolDefs)
+		resp, err := e.chatWithRetry(ctx, messages, toolDefs, 3)
 		if err != nil {
-			global.LOG.Errorf("[Engine] LLM call failed: %v", err)
+			global.LOG.Errorf("[Engine] LLM call failed after retries: %v", err)
 			stream <- StreamChunk{Type: "error", Error: "LLM 调用失败: " + err.Error()}
 			return err
 		}
@@ -289,7 +291,7 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 	}
 
 	toolDefsEmpty := []provider.ToolDefinition{}
-	finalResp, err := e.provider.Chat(ctx, messages, toolDefsEmpty)
+	finalResp, err := e.chatWithRetry(ctx, messages, toolDefsEmpty, 2)
 	if err != nil {
 		global.LOG.Errorf("[Engine] 最终总结调用失败: %v", err)
 		stream <- StreamChunk{Type: "message", Content: "操作已执行，但生成总结时遇到问题。请查看上方工具执行结果。"}
@@ -330,6 +332,36 @@ func (e *Engine) formatToolResult(result tools.ToolResult) string {
 		return fmt.Sprintf("执行失败: %s\n输出:\n%s", result.Error, result.Result)
 	}
 	return fmt.Sprintf("执行失败: %s", result.Error)
+}
+
+func (e *Engine) chatWithRetry(ctx context.Context, messages []provider.LLMMessage, tools []provider.ToolDefinition, maxRetries int) (*provider.LLMResponse, error) {
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			waitMs := int(math.Pow(2, float64(attempt-1))) * 1000
+			global.LOG.Warnf("[Engine] LLM 调用限流，等待 %dms 后重试 (第%d次)", waitMs, attempt)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(waitMs) * time.Millisecond):
+			}
+		}
+
+		resp, err := e.provider.Chat(ctx, messages, tools)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+
+		errStr := err.Error()
+		isRateLimit := strings.Contains(errStr, "429") ||
+			strings.Contains(errStr, "Too Many Requests") ||
+			strings.Contains(errStr, "rate limit")
+		if !isRateLimit || attempt == maxRetries {
+			return nil, err
+		}
+	}
+	return nil, lastErr
 }
 
 func argsStrToMap(args string) map[string]interface{} {
