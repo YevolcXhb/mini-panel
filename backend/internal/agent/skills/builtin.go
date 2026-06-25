@@ -12,11 +12,12 @@ func LoadBuiltinSkills() *Manager {
 	mgr.Register(&Skill{
 		ID:          "system",
 		Name:        "系统监控",
-		Description: "查看系统信息、CPU、内存、磁盘、进程状态",
+		Description: "查看系统信息、CPU、内存、磁盘、进程状态、执行命令",
 		Icon:        "Monitor",
 		Tools: []tools.Tool{
 			tools.NewSystemInfoTool(),
 			tools.NewProcessListTool(),
+			tools.NewExecTool(),
 		},
 	})
 

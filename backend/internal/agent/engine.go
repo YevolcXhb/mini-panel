@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -19,6 +20,13 @@ const (
 	StepStateReflecting
 	StepStateCompleted
 )
+
+const maxToolOutputLength = 8000
+
+type recentToolCall struct {
+	Name string
+	Args string
+}
 
 type Engine struct {
 	provider     provider.Provider
@@ -38,7 +46,7 @@ func NewEngine(p provider.Provider, registry *tools.Registry, systemPrompt strin
 		sessionMgr:   repository.NewSessionManager(),
 		systemPrompt: systemPrompt,
 		maxSteps:     maxSteps,
-		maxErrors:    3,
+		maxErrors:    5,
 	}
 }
 
@@ -146,9 +154,10 @@ func (e *Engine) RunWithConfirm(ctx context.Context, sessionID uint, toolCallID 
 func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []provider.LLMMessage, stream chan<- StreamChunk) error {
 	toolDefs := e.registry.ToDefinitions()
 	consecutiveErrors := 0
+	var recentCalls []recentToolCall
 
 	for step := 0; step < e.maxSteps; step++ {
-		global.LOG.Debugf("[Engine] ReAct step %d/%d", step+1, e.maxSteps)
+		global.LOG.Debugf("[Engine] ReAct step %d/%d, errors=%d", step+1, e.maxSteps, consecutiveErrors)
 
 		resp, err := e.provider.Chat(ctx, messages, toolDefs)
 		if err != nil {
@@ -160,7 +169,7 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 		if len(resp.ToolCalls) == 0 {
 			content := resp.Content
 			if strings.TrimSpace(content) == "" {
-				content = "工具执行完成，结果已展示。"
+				content = "工具执行完成，结果已展示。如果需要进一步操作，请告诉我。"
 			}
 			stream <- StreamChunk{Type: "message", Content: content}
 			messages = append(messages, provider.LLMMessage{Role: "assistant", Content: content})
@@ -179,15 +188,42 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 		var toolResults []provider.LLMMessage
 
 		for _, tc := range resp.ToolCalls {
+			argsStr := tc.Function.Arguments
+			callKey := recentToolCall{Name: tc.Function.Name, Args: argsStr}
+
+			dupCount := 0
+			for _, rc := range recentCalls {
+				if rc.Name == callKey.Name && rc.Args == callKey.Args {
+					dupCount++
+				}
+			}
+			if dupCount >= 2 {
+				warnMsg := fmt.Sprintf("注意：你已经连续%d次调用相同的工具 %s (参数: %s)，请换一种思路或工具，不要重复相同操作。", dupCount+1, tc.Function.Name, argsStr)
+				global.LOG.Warnf("[Engine] %s", warnMsg)
+				resultContent := warnMsg
+				toolResults = append(toolResults, provider.LLMMessage{
+					Role:       "tool",
+					ToolCallID: tc.ID,
+					Content:    resultContent,
+				})
+				_ = e.sessionMgr.SaveToolResult(sessionID, tc.ID, tc.Function.Name, resultContent)
+				consecutiveErrors++
+				continue
+			}
+
 			stream <- StreamChunk{
 				Type:       "tool_call",
 				ToolCallID: tc.ID,
 				ToolName:   tc.Function.Name,
-				Content:    tc.Function.Arguments,
+				Content:    argsStr,
 			}
 
 			toolResult := e.executor.Execute(ctx, tc)
 			resultContent := e.formatToolResult(toolResult)
+
+			if len(resultContent) > maxToolOutputLength {
+				resultContent = resultContent[:maxToolOutputLength] + fmt.Sprintf("\n... [输出过长，已截断。总长度 %d 字符]", len(resultContent))
+			}
 
 			if !toolResult.Success && strings.Contains(toolResult.Error, "confirm required") {
 				stream <- StreamChunk{
@@ -215,29 +251,60 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 			})
 			_ = e.sessionMgr.SaveToolResult(sessionID, tc.ID, tc.Function.Name, resultContent)
 
+			recentCalls = append(recentCalls, callKey)
+			if len(recentCalls) > 5 {
+				recentCalls = recentCalls[1:]
+			}
+
 			if !toolResult.Success {
 				consecutiveErrors++
-				global.LOG.Warnf("[Engine] tool %s failed: %s", tc.Function.Name, toolResult.Error)
+				global.LOG.Warnf("[Engine] tool %s failed (consecutive=%d): %s", tc.Function.Name, consecutiveErrors, toolResult.Error)
 			} else {
 				consecutiveErrors = 0
 			}
 		}
 
 		if consecutiveErrors >= e.maxErrors {
-			errMsg := fmt.Sprintf("工具连续执行失败 %d 次，已终止。请检查参数或尝试其他方式。", consecutiveErrors)
-			global.LOG.Errorf("[Engine] %s", errMsg)
-			stream <- StreamChunk{Type: "error", Error: errMsg}
-			stream <- StreamChunk{Type: "done", Success: false}
-			return fmt.Errorf(errMsg)
+			global.LOG.Warnf("[Engine] 连续 %d 次错误，尝试强制总结", consecutiveErrors)
+			messages = append(messages, toolResults...)
+			messages = append(messages, provider.LLMMessage{
+				Role:    "user",
+				Content: "工具连续执行多次失败。请停止调用工具，直接总结当前已获取的信息，说明遇到的问题，并给用户建议。不要继续调用工具。",
+			})
+			break
+		}
+
+		if step >= e.maxSteps-1 {
+			global.LOG.Warnf("[Engine] 达到最大步数 %d，强制总结", e.maxSteps)
+			messages = append(messages, toolResults...)
+			messages = append(messages, provider.LLMMessage{
+				Role:    "user",
+				Content: "已达到最大思考步数。请立即停止调用工具，对当前执行结果给出总结，说明完成了什么，还有什么没完成，给用户建议。",
+			})
+			break
 		}
 
 		messages = append(messages, toolResults...)
 		messages = e.sessionMgr.CompressIfNeeded(messages)
 	}
 
-	stream <- StreamChunk{Type: "error", Error: "达到最大思考步数限制"}
-	stream <- StreamChunk{Type: "done", Success: false}
-	return fmt.Errorf("max steps exceeded")
+	toolDefsEmpty := []provider.ToolDefinition{}
+	finalResp, err := e.provider.Chat(ctx, messages, toolDefsEmpty)
+	if err != nil {
+		global.LOG.Errorf("[Engine] 最终总结调用失败: %v", err)
+		stream <- StreamChunk{Type: "message", Content: "操作已执行，但生成总结时遇到问题。请查看上方工具执行结果。"}
+		stream <- StreamChunk{Type: "done", Success: true}
+		return nil
+	}
+
+	content := finalResp.Content
+	if strings.TrimSpace(content) == "" {
+		content = "工具执行完成，结果已展示。如果需要进一步操作，请告诉我。"
+	}
+	stream <- StreamChunk{Type: "message", Content: content}
+	_ = e.sessionMgr.SaveAssistantMessage(sessionID, content, nil)
+	stream <- StreamChunk{Type: "done", Success: true}
+	return nil
 }
 
 func (e *Engine) ensureSystemPrompt(messages []provider.LLMMessage) []provider.LLMMessage {
@@ -263,6 +330,12 @@ func (e *Engine) formatToolResult(result tools.ToolResult) string {
 		return fmt.Sprintf("执行失败: %s\n输出:\n%s", result.Error, result.Result)
 	}
 	return fmt.Sprintf("执行失败: %s", result.Error)
+}
+
+func argsStrToMap(args string) map[string]interface{} {
+	var m map[string]interface{}
+	_ = json.Unmarshal([]byte(args), &m)
+	return m
 }
 
 func IsDestructiveCommand(command string) bool {
