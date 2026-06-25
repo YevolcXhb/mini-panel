@@ -3,7 +3,9 @@ package service
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
+	"runtime"
 	"time"
 
 	"github.com/minipanel/minipanel/internal/dto"
@@ -23,6 +25,31 @@ func NewCronjobService() *CronjobService {
 	}
 }
 
+func (s *CronjobService) LoadAll() error {
+	if global.Cron == nil || global.DB == nil {
+		return nil
+	}
+	cronjobs, err := s.repo.List()
+	if err != nil {
+		return err
+	}
+	for i := range cronjobs {
+		job := &cronjobs[i]
+		if job.Status != "enabled" || job.EntryID > 0 {
+			continue
+		}
+		if job.Spec == "" {
+			continue
+		}
+		if err := s.schedule(job); err != nil {
+			global.LOG.Warnf("Failed to load cronjob %d (%s): %v", job.ID, job.Name, err)
+			continue
+		}
+		global.LOG.Infof("Loaded cronjob: %s (%s)", job.Name, job.Spec)
+	}
+	return nil
+}
+
 func (s *CronjobService) List() ([]model.Cronjob, error) {
 	return s.repo.List()
 }
@@ -39,7 +66,7 @@ func (s *CronjobService) Create(req dto.CronjobCreateRequest) (*model.Cronjob, e
 		return nil, err
 	}
 	if err := s.schedule(item); err != nil {
-		return nil, err
+		global.LOG.Warnf("schedule cronjob %d failed: %v", item.ID, err)
 	}
 	return item, nil
 }
@@ -111,17 +138,41 @@ func (s *CronjobService) execute(item *model.Cronjob) error {
 	item.LastRun = time.Now().Unix()
 	var out bytes.Buffer
 	var cmd *exec.Cmd
+
+	shell := "sh"
+	shellArg := "-c"
+	if runtime.GOOS == "windows" {
+		shell = "cmd"
+		shellArg = "/C"
+	}
+
 	if item.Script != "" {
-		cmd = exec.Command("sh", "-c", item.Script)
+		tmpFile, err := os.CreateTemp("", "cron-*.sh")
+		if err != nil {
+			item.LastLog = fmt.Sprintf("create temp script failed: %v", err)
+			item.LastStatus = "failed"
+			return s.repo.Update(item)
+		}
+		defer os.Remove(tmpFile.Name())
+		if _, err := tmpFile.WriteString(item.Script); err != nil {
+			item.LastLog = fmt.Sprintf("write temp script failed: %v", err)
+			item.LastStatus = "failed"
+			return s.repo.Update(item)
+		}
+		tmpFile.Close()
+		os.Chmod(tmpFile.Name(), 0755)
+		cmd = exec.Command(shell, tmpFile.Name())
 	} else {
-		cmd = exec.Command("sh", "-c", item.Command)
+		cmd = exec.Command(shell, shellArg, item.Command)
 	}
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	err := cmd.Run()
 	item.LastLog = out.String()
+	item.LastStatus = "success"
 	if err != nil {
 		item.LastLog += fmt.Sprintf("\nError: %v", err)
+		item.LastStatus = "failed"
 	}
 	return s.repo.Update(item)
 }

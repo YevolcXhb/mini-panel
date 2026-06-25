@@ -4,45 +4,76 @@
       <h2 class="page-title">
         <span class="icon">🛡️</span> 防火墙
       </h2>
-      <div>
-        <el-button type="success" @click="applyRules" :loading="applying">应用规则</el-button>
-        <el-button type="primary" @click="openDialog()">添加规则</el-button>
-      </div>
     </div>
 
-    <el-table :data="rules" style="width: 100%" v-loading="loading">
-      <el-table-column prop="name" label="名称" min-width="120" />
-      <el-table-column prop="type" label="类型" width="80">
-        <template #default="{ row }">
-          <el-tag :type="row.type === 'port' ? 'primary' : 'warning'">{{ row.type === 'port' ? '端口' : 'IP' }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column prop="action" label="动作" width="80">
-        <template #default="{ row }">
-          <el-tag :type="row.action === 'allow' ? 'success' : 'danger'">{{ row.action === 'allow' ? '允许' : '拒绝' }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column prop="protocol" label="协议" width="80" />
-      <el-table-column prop="port" label="端口" width="100" />
-      <el-table-column prop="ip" label="IP" width="120" />
-      <el-table-column prop="direction" label="方向" width="80">
-        <template #default="{ row }">
-          {{ row.direction === 'in' ? '入站' : '出站' }}
-        </template>
-      </el-table-column>
-      <el-table-column prop="enabled" label="状态" width="80">
-        <template #default="{ row }">
-          <el-tag v-if="row.enabled" type="success">启用</el-tag>
-          <el-tag v-else type="info">停用</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="操作" width="180" fixed="right">
-        <template #default="{ row }">
-          <el-button size="small" @click="openDialog(row)">编辑</el-button>
-          <el-button size="small" type="danger" @click="handleDelete(row.id)">删除</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+    <el-alert v-if="!serviceStatus.installed" type="warning" show-icon style="margin-bottom: 16px">
+      <template #title>
+        未检测到防火墙服务 (firewalld/ufw)，仅支持 Linux 系统
+      </template>
+      <template #default>
+        <div style="margin-top: 8px">
+          <p style="margin: 0; color: #666; font-size: 13px">请手动安装 firewalld 或 ufw：</p>
+          <ul style="margin: 8px 0; padding-left: 20px; font-size: 13px; color: #666">
+            <li>CentOS/RHEL: yum install firewalld</li>
+            <li>Ubuntu/Debian: apt install ufw</li>
+          </ul>
+        </div>
+      </template>
+    </el-alert>
+
+    <template v-else>
+      <el-card style="margin-bottom: 16px">
+        <div style="display: flex; justify-content: space-between; align-items: center">
+          <div style="display: flex; align-items: center; gap: 12px">
+            <el-tag :type="serviceStatus.running ? 'success' : 'danger'" size="large">
+              {{ serviceStatus.running ? '运行中' : '已停止' }}
+            </el-tag>
+            <span>{{ firewallType === 'ufw' ? 'UFW' : 'firewalld' }} {{ serviceStatus.version ? 'v' + serviceStatus.version : '' }}</span>
+          </div>
+          <div style="display: flex; gap: 8px">
+            <el-button size="small" type="primary" @click="startFirewall" v-if="!serviceStatus.running" :loading="actionLoading">启动</el-button>
+            <el-button size="small" type="warning" @click="stopFirewall" v-if="serviceStatus.running" :loading="actionLoading">停止</el-button>
+            <el-button size="small" @click="checkStatus">刷新状态</el-button>
+            <el-button type="success" size="small" @click="applyRules" :loading="applying">应用规则</el-button>
+            <el-button type="primary" size="small" @click="openDialog()">添加规则</el-button>
+          </div>
+        </div>
+      </el-card>
+
+      <el-table :data="rules" style="width: 100%" v-loading="loading">
+        <el-table-column prop="name" label="名称" min-width="120" />
+        <el-table-column prop="type" label="类型" width="80">
+          <template #default="{ row }">
+            <el-tag :type="row.type === 'port' ? 'primary' : 'warning'">{{ row.type === 'port' ? '端口' : 'IP' }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="action" label="动作" width="80">
+          <template #default="{ row }">
+            <el-tag :type="row.action === 'allow' ? 'success' : 'danger'">{{ row.action === 'allow' ? '允许' : '拒绝' }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="protocol" label="协议" width="80" />
+        <el-table-column prop="port" label="端口" width="100" />
+        <el-table-column prop="ip" label="IP" width="120" />
+        <el-table-column prop="direction" label="方向" width="80">
+          <template #default="{ row }">
+            {{ row.direction === 'in' ? '入站' : '出站' }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="enabled" label="状态" width="80">
+          <template #default="{ row }">
+            <el-tag v-if="row.enabled" type="success">启用</el-tag>
+            <el-tag v-else type="info">停用</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="180" fixed="right">
+          <template #default="{ row }">
+            <el-button size="small" @click="openDialog(row)">编辑</el-button>
+            <el-button size="small" type="danger" @click="handleDelete(row.id)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </template>
 
     <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑规则' : '添加规则'" width="500px">
       <el-form :model="form" label-width="100px" ref="formRef" :rules="formRules">
@@ -96,16 +127,20 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { firewallApi } from '../api'
+import { firewallApi, systemApi } from '../api'
 
 const rules = ref<any[]>([])
 const loading = ref(false)
 const applying = ref(false)
+const actionLoading = ref(false)
 const dialogVisible = ref(false)
 const isEdit = ref(false)
 const formRef = ref<any>(null)
+const serviceStatus = ref<any>({ installed: false, running: false, version: '', name: 'firewalld' })
+
+const firewallType = computed(() => serviceStatus.value.name === 'ufw' ? 'ufw' : 'firewalld')
 
 const form = reactive({
   id: 0,
@@ -148,6 +183,41 @@ function openDialog(row?: any) {
     resetForm()
   }
   dialogVisible.value = true
+}
+
+async function checkStatus() {
+  try {
+    const res: any = await systemApi.checkServices()
+    serviceStatus.value = res.data?.firewalld || { installed: false, running: false }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '检查服务状态失败')
+  }
+}
+
+async function startFirewall() {
+  actionLoading.value = true
+  try {
+    await firewallApi.start()
+    ElMessage.success('防火墙启动成功')
+    await checkStatus()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '启动失败')
+  } finally {
+    actionLoading.value = false
+  }
+}
+
+async function stopFirewall() {
+  actionLoading.value = true
+  try {
+    await firewallApi.stop()
+    ElMessage.success('防火墙停止成功')
+    await checkStatus()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '停止失败')
+  } finally {
+    actionLoading.value = false
+  }
 }
 
 async function loadRules() {
@@ -204,7 +274,12 @@ async function applyRules() {
   }
 }
 
-onMounted(loadRules)
+onMounted(async () => {
+  await checkStatus()
+  if (serviceStatus.value.installed) {
+    loadRules()
+  }
+})
 </script>
 
 <style scoped>

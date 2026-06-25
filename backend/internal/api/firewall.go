@@ -79,3 +79,28 @@ func (h *FirewallAPI) Apply(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": msg})
 }
+
+func (h *FirewallAPI) Status(c *gin.Context) {
+	status, err := h.service.GetStatus()
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": status})
+}
+
+func (h *FirewallAPI) Start(c *gin.Context) {
+	if err := h.service.Start(); err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "Firewall started"})
+}
+
+func (h *FirewallAPI) Stop(c *gin.Context) {
+	if err := h.service.Stop(); err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "Firewall stopped"})
+}

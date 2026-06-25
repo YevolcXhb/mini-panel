@@ -1,17 +1,21 @@
 package service
 
 import (
+	"archive/zip"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/minipanel/minipanel/internal/global"
 	"github.com/minipanel/minipanel/internal/model"
 	"github.com/minipanel/minipanel/internal/repository"
+	syscmd "github.com/minipanel/minipanel/internal/utils/cmd"
+	"github.com/robfig/cron/v3"
 )
 
 type BackupService struct {
@@ -22,44 +26,149 @@ func NewBackupService() *BackupService {
 	return &BackupService{repo: repository.NewBackupRepository(global.DB)}
 }
 
+func (s *BackupService) LoadAll() error {
+	if global.Cron == nil || global.DB == nil {
+		return nil
+	}
+	tasks, err := s.repo.ListTasks()
+	if err != nil {
+		return err
+	}
+	for i := range tasks {
+		task := &tasks[i]
+		if !task.Enabled || task.Schedule == "" {
+			continue
+		}
+		taskID := task.ID
+		entryID, err := global.Cron.AddFunc(task.Schedule, func() {
+			global.LOG.Infof("Running scheduled backup task: %s (ID: %d)", task.Name, taskID)
+			_, err := s.RunBackup(taskID)
+			if err != nil {
+				global.LOG.Errorf("Scheduled backup task %d failed: %v", taskID, err)
+			}
+		})
+		if err != nil {
+			global.LOG.Warnf("Failed to load backup task %d (%s): %v", task.ID, task.Name, err)
+			continue
+		}
+		task.Note = fmt.Sprintf("scheduled:entry_%d", entryID)
+		_ = s.repo.UpdateTask(task)
+		global.LOG.Infof("Loaded backup task: %s (%s)", task.Name, task.Schedule)
+	}
+	return nil
+}
+
+func (s *BackupService) Create(task *model.BackupTask) error {
+	if task.TargetDir == "" {
+		task.TargetDir = filepath.Join(global.GetDataDir(), "backups")
+	}
+	if task.KeepCount == 0 {
+		task.KeepCount = 7
+	}
+	if err := os.MkdirAll(task.TargetDir, 0755); err != nil {
+		return fmt.Errorf("create backup dir failed: %w", err)
+	}
+	if err := s.repo.CreateTask(task); err != nil {
+		return err
+	}
+	if task.Enabled && task.Schedule != "" {
+		taskID := task.ID
+		entryID, err := global.Cron.AddFunc(task.Schedule, func() {
+			global.LOG.Infof("Running scheduled backup task: %s (ID: %d)", task.Name, taskID)
+			_, err := s.RunBackup(taskID)
+			if err != nil {
+				global.LOG.Errorf("Scheduled backup task %d failed: %v", taskID, err)
+			}
+		})
+		if err != nil {
+			global.LOG.Warnf("schedule backup task %d failed: %v", task.ID, err)
+		} else {
+			task.Note = fmt.Sprintf("scheduled:entry_%d", entryID)
+			_ = s.repo.UpdateTask(task)
+		}
+	}
+	return nil
+}
+
 func (s *BackupService) ListTasks() ([]model.BackupTask, error) {
 	return s.repo.ListTasks()
 }
 
-func (s *BackupService) CreateTask(item *model.BackupTask) error {
-	if item.TargetDir == "" {
-		item.TargetDir = "/data/backups"
-	}
-	if item.KeepCount <= 0 {
-		item.KeepCount = 7
-	}
-	return s.repo.CreateTask(item)
+func (s *BackupService) GetTaskByID(id uint) (*model.BackupTask, error) {
+	return s.repo.GetTaskByID(id)
 }
 
-func (s *BackupService) UpdateTask(item *model.BackupTask) error {
-	return s.repo.UpdateTask(item)
+func (s *BackupService) UpdateTask(task *model.BackupTask) error {
+	oldTask, err := s.repo.GetTaskByID(task.ID)
+	if err != nil {
+		return err
+	}
+	if strings.HasPrefix(oldTask.Note, "scheduled:entry_") {
+		var entryID int
+		fmt.Sscanf(oldTask.Note, "scheduled:entry_%d", &entryID)
+		if entryID > 0 {
+			global.Cron.Remove(cron.EntryID(entryID))
+		}
+	}
+	if err := s.repo.UpdateTask(task); err != nil {
+		return err
+	}
+	if task.Enabled && task.Schedule != "" {
+		taskID := task.ID
+		entryID, err := global.Cron.AddFunc(task.Schedule, func() {
+			global.LOG.Infof("Running scheduled backup task: %s (ID: %d)", task.Name, taskID)
+			_, err := s.RunBackup(taskID)
+			if err != nil {
+				global.LOG.Errorf("Scheduled backup task %d failed: %v", taskID, err)
+			}
+		})
+		if err != nil {
+			global.LOG.Warnf("schedule backup task %d failed: %v", task.ID, err)
+		} else {
+			task.Note = fmt.Sprintf("scheduled:entry_%d", entryID)
+			_ = s.repo.UpdateTask(task)
+		}
+	}
+	return nil
 }
 
 func (s *BackupService) DeleteTask(id uint) error {
-	return s.repo.DeleteTask(id)
+	task, err := s.repo.GetTaskByID(id)
+	if err != nil {
+		return err
+	}
+	if strings.HasPrefix(task.Note, "scheduled:entry_") {
+		var entryID int
+		fmt.Sscanf(task.Note, "scheduled:entry_%d", &entryID)
+		if entryID > 0 {
+			global.Cron.Remove(cron.EntryID(entryID))
+		}
+	}
+	records, err := s.repo.ListRecordsByTaskID(id)
+	if err == nil {
+		for _, rec := range records {
+			_ = os.Remove(rec.FilePath)
+			_ = s.repo.DeleteRecord(rec.ID)
+		}
+	}
+	return s.repo.DeleteTask(task.ID)
 }
 
 func (s *BackupService) ListRecords(taskID uint) ([]model.BackupRecord, error) {
-	return s.repo.ListRecords(taskID)
-}
-
-func (s *BackupService) DeleteRecord(id uint) error {
-	return s.repo.DeleteRecord(id)
+	if taskID > 0 {
+		return s.repo.ListRecordsByTaskID(taskID)
+	}
+	return s.repo.ListAllRecords()
 }
 
 func (s *BackupService) RunBackup(taskID uint) (*model.BackupRecord, error) {
-	task, err := s.repo.GetTask(taskID)
+	task, err := s.repo.GetTaskByID(taskID)
 	if err != nil {
 		return nil, err
 	}
 
 	record := &model.BackupRecord{
-		TaskID:    taskID,
+		TaskID:    task.ID,
 		Status:    "running",
 		StartedAt: time.Now().Unix(),
 	}
@@ -67,232 +176,325 @@ func (s *BackupService) RunBackup(taskID uint) (*model.BackupRecord, error) {
 		return nil, err
 	}
 
-	task.LastStatus = "running"
-	task.LastRunAt = time.Now().Unix()
-	s.repo.UpdateTask(task)
+	if err := os.MkdirAll(task.TargetDir, 0755); err != nil {
+		s.markFailed(record, err)
+		return record, err
+	}
 
-	go s.doBackup(task, record)
+	var filePath string
+	var size int64
+
+	switch task.Type {
+	case "files":
+		filePath, size, err = s.backupFiles(task, record)
+	case "website":
+		filePath, size, err = s.backupWebsite(task, record)
+	case "database":
+		filePath, size, err = s.backupDatabase(task, record)
+	default:
+		err = fmt.Errorf("unknown backup type: %s", task.Type)
+	}
+
+	if err != nil {
+		s.markFailed(record, err)
+		s.cleanupOld(task)
+		return record, err
+	}
+
+	record.FilePath = filePath
+	record.Size = size
+	record.Status = "success"
+	record.FinishedAt = time.Now().Unix()
+	record.Message = fmt.Sprintf("Backup completed successfully, size: %s", humanSize(size))
+	_ = s.repo.UpdateRecord(record)
+
+	task.LastRunAt = record.StartedAt
+	task.LastStatus = "success"
+	task.LastMsg = record.Message
+	_ = s.repo.UpdateTask(task)
+
+	s.cleanupOld(task)
+
 	return record, nil
 }
 
-func (s *BackupService) doBackup(task *model.BackupTask, record *model.BackupRecord) {
-	defer func() {
-		record.FinishedAt = time.Now().Unix()
-		s.repo.UpdateTask(task)
-		s.repo.CreateRecord(record) // gorm will update existing record
-	}()
+func (s *BackupService) markFailed(record *model.BackupRecord, err error) {
+	record.Status = "failed"
+	record.Message = err.Error()
+	record.FinishedAt = time.Now().Unix()
+	_ = s.repo.UpdateRecord(record)
 
-	if err := os.MkdirAll(task.TargetDir, 0755); err != nil {
-		record.Status = "failed"
-		record.Message = fmt.Sprintf("create target dir failed: %v", err)
+	task, err := s.repo.GetTaskByID(record.TaskID)
+	if err == nil {
+		task.LastRunAt = record.StartedAt
 		task.LastStatus = "failed"
-		task.LastMsg = record.Message
-		return
+		task.LastMsg = err.Error()
+		_ = s.repo.UpdateTask(task)
+	}
+}
+
+func humanSize(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+func (s *BackupService) backupFiles(task *model.BackupTask, record *model.BackupRecord) (string, int64, error) {
+	source := task.SourcePath
+	if source == "" {
+		return "", 0, fmt.Errorf("source path is required")
+	}
+	if _, err := os.Stat(source); os.IsNotExist(err) {
+		return "", 0, fmt.Errorf("source path not found: %s", source)
 	}
 
 	timestamp := time.Now().Format("20060102_150405")
+	fileName := fmt.Sprintf("%s_files_%s.zip", task.Name, timestamp)
+	filePath := filepath.Join(task.TargetDir, fileName)
+
+	f, err := os.Create(filePath)
+	if err != nil {
+		return "", 0, err
+	}
+	defer f.Close()
+
+	w := zip.NewWriter(f)
+	defer w.Close()
+
+	err = filepath.Walk(source, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		relPath, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		header, err := zip.FileInfoHeader(info)
+		if err != nil {
+			return err
+		}
+		header.Name = filepath.ToSlash(relPath)
+		header.Method = zip.Deflate
+
+		writer, err := w.CreateHeader(header)
+		if err != nil {
+			return err
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		_, err = io.Copy(writer, file)
+		return err
+	})
+
+	if err != nil {
+		os.Remove(filePath)
+		return "", 0, err
+	}
+
+	fi, _ := f.Stat()
+	var size int64
+	if fi != nil {
+		size = fi.Size()
+	}
+	return filePath, size, nil
+}
+
+func (s *BackupService) backupWebsite(task *model.BackupTask, record *model.BackupRecord) (string, int64, error) {
+	ws := NewWebsiteService()
+	website, err := ws.GetByID(task.SourceID)
+	if err != nil {
+		return "", 0, fmt.Errorf("website not found: %w", err)
+	}
+	if website.Root == "" {
+		website.Root = filepath.Join(global.GetDataDir(), "www", website.Domain)
+	}
+	task.SourcePath = website.Root
+	return s.backupFiles(task, record)
+}
+
+func (s *BackupService) backupDatabase(task *model.BackupTask, record *model.BackupRecord) (string, int64, error) {
+	dbSvc := NewDatabaseService()
+	db, err := dbSvc.GetByID(task.SourceID)
+	if err != nil {
+		return "", 0, fmt.Errorf("database instance not found: %w", err)
+	}
+
+	if !syscmd.Which("mysqldump") {
+		return "", 0, fmt.Errorf("mysqldump not found, please install mysql client")
+	}
+
+	timestamp := time.Now().Format("20060102_150405")
+	dbName := db.Database
+	if dbName == "" {
+		dbName = "all"
+	}
+	var fileName string
 	var filePath string
-	var cmd *exec.Cmd
+	var dumpFile string
 
-	switch task.Type {
-	case "website":
-		websiteRepo := repository.NewWebsiteRepository(global.DB)
-		website, err := websiteRepo.GetByID(task.SourceID)
-		if err != nil {
-			record.Status = "failed"
-			record.Message = fmt.Sprintf("get website failed: %v", err)
-			task.LastStatus = "failed"
-			task.LastMsg = record.Message
-			return
-		}
-		filePath = filepath.Join(task.TargetDir, fmt.Sprintf("website_%s_%s.tar.gz", website.Domain, timestamp))
-		cmd = exec.Command("tar", "-czf", filePath, "-C", filepath.Dir(website.Root), filepath.Base(website.Root))
+	if runtime.GOOS == "windows" {
+		fileName = fmt.Sprintf("%s_db_%s.sql", task.Name, timestamp)
+		dumpFile = filepath.Join(task.TargetDir, fileName)
+	} else {
+		fileName = fmt.Sprintf("%s_db_%s.sql.gz", task.Name, timestamp)
+		dumpFile = filepath.Join(task.TargetDir, fileName)
+	}
 
-	case "database":
-		dbRepo := repository.NewDatabaseRepository(global.DB)
-		db, err := dbRepo.GetByID(task.SourceID)
+	args := []string{
+		fmt.Sprintf("-h%s", db.Host),
+		fmt.Sprintf("-P%d", db.Port),
+		fmt.Sprintf("-u%s", db.Username),
+	}
+	if db.Password != "" {
+		args = append(args, fmt.Sprintf("-p%s", db.Password))
+	}
+	if db.Database != "" {
+		args = append(args, db.Database)
+	} else {
+		args = append(args, "--all-databases")
+	}
+	args = append(args, "--single-transaction", "--quick", "--lock-tables=false")
+
+	dumpCmd := exec.Command("mysqldump", args...)
+	output, err := dumpCmd.CombinedOutput()
+	if err != nil {
+		return "", 0, fmt.Errorf("mysqldump failed: %s: %v", string(output), err)
+	}
+
+	if strings.HasSuffix(dumpFile, ".gz") && syscmd.Which("gzip") {
+		gzCmd := exec.Command("gzip", "-c")
+		gzCmd.Stdin = strings.NewReader(string(output))
+		outFile, err := os.Create(dumpFile)
 		if err != nil {
-			record.Status = "failed"
-			record.Message = fmt.Sprintf("get database failed: %v", err)
-			task.LastStatus = "failed"
-			task.LastMsg = record.Message
-			return
-		}
-		filePath = filepath.Join(task.TargetDir, fmt.Sprintf("db_%s_%s.sql", db.Name, timestamp))
-		if db.Type == "mysql" {
-			cmd = exec.Command("mysqldump", "-h", db.Host, "-P", strconv.Itoa(db.Port), "-u", db.Username, "-p"+db.Password, db.Database)
-		} else if db.Type == "postgresql" {
-			cmd = exec.Command("pg_dump", "-h", db.Host, "-p", strconv.Itoa(db.Port), "-U", db.Username, "-d", db.Database)
-			cmd.Env = append(os.Environ(), "PGPASSWORD="+db.Password)
-		} else {
-			record.Status = "failed"
-			record.Message = fmt.Sprintf("unsupported database type: %s", db.Type)
-			task.LastStatus = "failed"
-			task.LastMsg = record.Message
-			return
-		}
-		// redirect output to file for database dump
-		outFile, err := os.Create(filePath)
-		if err != nil {
-			record.Status = "failed"
-			record.Message = fmt.Sprintf("create dump file failed: %v", err)
-			task.LastStatus = "failed"
-			task.LastMsg = record.Message
-			return
+			return "", 0, err
 		}
 		defer outFile.Close()
-		cmd.Stdout = outFile
-		cmd.Stderr = outFile
-
-	case "files":
-		if task.SourcePath == "" {
-			record.Status = "failed"
-			record.Message = "source path is empty"
-			task.LastStatus = "failed"
-			task.LastMsg = record.Message
-			return
-		}
-		base := filepath.Base(task.SourcePath)
-		if base == "" || base == "/" {
-			base = "backup"
-		}
-		filePath = filepath.Join(task.TargetDir, fmt.Sprintf("files_%s_%s.tar.gz", base, timestamp))
-		cmd = exec.Command("tar", "-czf", filePath, "-C", filepath.Dir(task.SourcePath), filepath.Base(task.SourcePath))
-
-	default:
-		record.Status = "failed"
-		record.Message = fmt.Sprintf("unknown backup type: %s", task.Type)
-		task.LastStatus = "failed"
-		task.LastMsg = record.Message
-		return
-	}
-
-	if task.Type != "database" {
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			record.Status = "failed"
-			record.Message = fmt.Sprintf("backup failed: %v, output: %s", err, string(out))
-			task.LastStatus = "failed"
-			task.LastMsg = record.Message
-			return
+		gzCmd.Stdout = outFile
+		if err := gzCmd.Run(); err != nil {
+			os.Remove(dumpFile)
+			os.WriteFile(dumpFile, output, 0644)
 		}
 	} else {
-		if err := cmd.Run(); err != nil {
-			record.Status = "failed"
-			record.Message = fmt.Sprintf("database dump failed: %v", err)
-			task.LastStatus = "failed"
-			task.LastMsg = record.Message
-			return
+		if err := os.WriteFile(dumpFile, output, 0644); err != nil {
+			return "", 0, err
 		}
 	}
 
-	stat, err := os.Stat(filePath)
+	filePath = dumpFile
+	fi, err := os.Stat(filePath)
 	if err != nil {
-		record.Status = "failed"
-		record.Message = fmt.Sprintf("stat backup file failed: %v", err)
-		task.LastStatus = "failed"
-		task.LastMsg = record.Message
-		return
+		return "", 0, err
 	}
-
-	record.Status = "success"
-	record.FilePath = filePath
-	record.Size = stat.Size()
-	record.Message = "Backup completed successfully"
-	task.LastStatus = "success"
-	task.LastMsg = record.Message
-
-	// cleanup old backups
-	s.cleanupOldBackups(task)
+	return filePath, fi.Size(), nil
 }
 
-func (s *BackupService) cleanupOldBackups(task *model.BackupTask) {
-	records, err := s.repo.ListRecords(task.ID)
+func (s *BackupService) cleanupOld(task *model.BackupTask) {
+	if task.KeepCount <= 0 {
+		return
+	}
+	records, err := s.repo.ListRecordsByTaskID(task.ID)
 	if err != nil {
 		return
 	}
-	var successRecords []model.BackupRecord
-	for _, r := range records {
-		if r.Status == "success" && r.FilePath != "" {
-			successRecords = append(successRecords, r)
-		}
-	}
-	if len(successRecords) <= task.KeepCount {
+	if len(records) <= task.KeepCount {
 		return
 	}
-	for i := task.KeepCount; i < len(successRecords); i++ {
-		os.Remove(successRecords[i].FilePath)
-		s.repo.DeleteRecord(successRecords[i].ID)
+	toDelete := records[task.KeepCount:]
+	for _, rec := range toDelete {
+		_ = os.Remove(rec.FilePath)
+		_ = s.repo.DeleteRecord(rec.ID)
 	}
 }
 
-func (s *BackupService) RestoreBackup(recordID uint) (string, error) {
-	records, err := s.repo.ListRecords(0)
+func (s *BackupService) DeleteRecord(recordID uint) error {
+	rec, err := s.repo.GetRecord(recordID)
 	if err != nil {
-		return "", err
+		return err
 	}
-	var target *model.BackupRecord
-	for _, r := range records {
-		if r.ID == recordID {
-			target = &r
-			break
-		}
+	_ = os.Remove(rec.FilePath)
+	return s.repo.DeleteRecord(rec.ID)
+}
+
+func (s *BackupService) RestoreBackup(recordID uint) error {
+	rec, err := s.repo.GetRecord(recordID)
+	if err != nil {
+		return err
 	}
-	if target == nil {
-		return "", fmt.Errorf("backup record not found")
-	}
-	if target.Status != "success" {
-		return "", fmt.Errorf("cannot restore from failed backup")
+	task, err := s.repo.GetTaskByID(rec.TaskID)
+	if err != nil {
+		return err
 	}
 
-	task, err := s.repo.GetTask(target.TaskID)
-	if err != nil {
-		return "", err
+	if _, err := os.Stat(rec.FilePath); os.IsNotExist(err) {
+		return fmt.Errorf("backup file not found: %s", rec.FilePath)
 	}
 
-	var cmd *exec.Cmd
 	switch task.Type {
-	case "website", "files":
-		if !strings.HasSuffix(target.FilePath, ".tar.gz") {
-			return "", fmt.Errorf("unsupported backup format")
-		}
-		extractDir := task.SourcePath
-		if task.Type == "website" {
-			websiteRepo := repository.NewWebsiteRepository(global.DB)
-			website, err := websiteRepo.GetByID(task.SourceID)
-			if err != nil {
-				return "", err
-			}
-			extractDir = website.Root
-		}
-		cmd = exec.Command("tar", "-xzf", target.FilePath, "-C", extractDir, "--strip-components=1")
 	case "database":
-		dbRepo := repository.NewDatabaseRepository(global.DB)
-		db, err := dbRepo.GetByID(task.SourceID)
-		if err != nil {
-			return "", err
-		}
-		if db.Type == "mysql" {
-			cmd = exec.Command("mysql", "-h", db.Host, "-P", strconv.Itoa(db.Port), "-u", db.Username, "-p"+db.Password, db.Database)
-		} else if db.Type == "postgresql" {
-			cmd = exec.Command("psql", "-h", db.Host, "-p", strconv.Itoa(db.Port), "-U", db.Username, "-d", db.Database)
-			cmd.Env = append(os.Environ(), "PGPASSWORD="+db.Password)
-		} else {
-			return "", fmt.Errorf("unsupported database type: %s", db.Type)
-		}
-		input, err := os.Open(target.FilePath)
-		if err != nil {
-			return "", err
-		}
-		defer input.Close()
-		cmd.Stdin = input
+		return s.restoreDatabase(task, rec)
+	case "files", "website":
+		return fmt.Errorf("file restore is not supported yet, please extract manually")
 	default:
-		return "", fmt.Errorf("unknown backup type: %s", task.Type)
+		return fmt.Errorf("unsupported backup type for restore")
+	}
+}
+
+func (s *BackupService) restoreDatabase(task *model.BackupTask, rec *model.BackupRecord) error {
+	if !syscmd.Which("mysql") {
+		return fmt.Errorf("mysql client not found")
+	}
+	dbSvc := NewDatabaseService()
+	db, err := dbSvc.GetByID(task.SourceID)
+	if err != nil {
+		return err
 	}
 
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("restore failed: %v, output: %s", err, string(out))
+	source := rec.FilePath
+	var sqlContent []byte
+
+	if strings.HasSuffix(rec.FilePath, ".gz") && syscmd.Which("gunzip") {
+		gunzip := exec.Command("gunzip", "-c", rec.FilePath)
+		sqlContent, err = gunzip.Output()
+		if err != nil {
+			return err
+		}
+	} else {
+		sqlContent, err = os.ReadFile(source)
+		if err != nil {
+			return err
+		}
 	}
-	return "Restore completed successfully", nil
+
+	args := []string{
+		fmt.Sprintf("-h%s", db.Host),
+		fmt.Sprintf("-P%d", db.Port),
+		fmt.Sprintf("-u%s", db.Username),
+	}
+	if db.Password != "" {
+		args = append(args, fmt.Sprintf("-p%s", db.Password))
+	}
+	if db.Database != "" {
+		args = append(args, db.Database)
+	}
+
+	mysqlCmd := exec.Command("mysql", args...)
+	mysqlCmd.Stdin = strings.NewReader(string(sqlContent))
+	output, err := mysqlCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("mysql restore failed: %s: %v", string(output), err)
+	}
+	return nil
 }

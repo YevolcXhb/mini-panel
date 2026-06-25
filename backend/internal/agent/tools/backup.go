@@ -92,11 +92,11 @@ func (t *BackupOpTool) Execute(ctx context.Context, args map[string]interface{})
 		}
 		return SuccessResult(fmt.Sprintf("备份任务已执行，记录ID: %d", record.ID))
 	case "restore":
-		msg, err := svc.RestoreBackup(id)
+		err := svc.RestoreBackup(id)
 		if err != nil {
 			return ErrorErr(err)
 		}
-		return SuccessResult(msg)
+		return SuccessResult("备份恢复成功")
 	case "delete_task":
 		if err := svc.DeleteTask(id); err != nil {
 			return ErrorErr(err)

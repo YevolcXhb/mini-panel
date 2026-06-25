@@ -84,3 +84,93 @@ func (h *DatabaseAPI) TestConnection(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": msg})
 }
+
+func (h *DatabaseAPI) ListDatabases(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 400, "message": "invalid id"})
+		return
+	}
+	item, err := h.service.GetByID(uint(id))
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 404, "message": "instance not found"})
+		return
+	}
+	dbs, err := h.service.ListDatabases(item)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": dbs})
+}
+
+func (h *DatabaseAPI) ListTables(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 400, "message": "invalid id"})
+		return
+	}
+	item, err := h.service.GetByID(uint(id))
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 404, "message": "instance not found"})
+		return
+	}
+	tables, err := h.service.ListTables(item)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": tables})
+}
+
+func (h *DatabaseAPI) CreateDatabase(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 400, "message": "invalid id"})
+		return
+	}
+	var req struct {
+		DBName string `json:"db_name" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 400, "message": err.Error()})
+		return
+	}
+	item, err := h.service.GetByID(uint(id))
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 404, "message": "instance not found"})
+		return
+	}
+	if err := h.service.CreateDatabase(item, req.DBName); err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "Database created successfully"})
+}
+
+func (h *DatabaseAPI) CreateUser(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 400, "message": "invalid id"})
+		return
+	}
+	var req struct {
+		Username string `json:"username" binding:"required"`
+		Password string `json:"password" binding:"required"`
+		PrivDB   string `json:"priv_db"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 400, "message": err.Error()})
+		return
+	}
+	item, err := h.service.GetByID(uint(id))
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 404, "message": "instance not found"})
+		return
+	}
+	if err := h.service.CreateUser(item, req.Username, req.Password, req.PrivDB); err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "User created successfully"})
+}

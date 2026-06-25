@@ -32,7 +32,7 @@ func (h *BackupAPI) CreateTask(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"code": 400, "message": err.Error()})
 		return
 	}
-	if err := h.service.CreateTask(&item); err != nil {
+	if err := h.service.Create(&item); err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
 		return
 	}
@@ -94,10 +94,9 @@ func (h *BackupAPI) DeleteRecord(c *gin.Context) {
 
 func (h *BackupAPI) RestoreBackup(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
-	msg, err := h.service.RestoreBackup(uint(id))
-	if err != nil {
+	if err := h.service.RestoreBackup(uint(id)); err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"code": 200, "message": msg})
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "Backup restored successfully"})
 }

@@ -143,7 +143,11 @@ export const databaseApi = {
   create: (data: any) => api.post('/databases', data),
   update: (id: number, data: any) => api.put(`/databases/${id}`, data),
   delete: (id: number) => api.delete(`/databases/${id}`),
-  test: (data: any) => api.post('/databases/test', data)
+  test: (data: any) => api.post('/databases/test', data),
+  listDatabases: (id: number) => api.get(`/databases/${id}/dbs`),
+  listTables: (id: number) => api.get(`/databases/${id}/tables`),
+  createDatabase: (id: number, dbName: string) => api.post(`/databases/${id}/create-db`, { db_name: dbName }),
+  createUser: (id: number, data: any) => api.post(`/databases/${id}/create-user`, data)
 }
 
 export const firewallApi = {
@@ -151,7 +155,18 @@ export const firewallApi = {
   create: (data: any) => api.post('/firewall/rules', data),
   update: (id: number, data: any) => api.put(`/firewall/rules/${id}`, data),
   delete: (id: number) => api.delete(`/firewall/rules/${id}`),
-  apply: () => api.post('/firewall/apply')
+  apply: () => api.post('/firewall/apply'),
+  status: () => api.get('/firewall/status'),
+  start: () => api.post('/firewall/start'),
+  stop: () => api.post('/firewall/stop')
+}
+
+export const systemApi = {
+  checkServices: () => api.get('/system/services'),
+  installService: (name: string) => api.post(`/system/services/${name}/install`),
+  startService: (name: string) => api.post(`/system/services/${name}/start`),
+  stopService: (name: string) => api.post(`/system/services/${name}/stop`),
+  restartService: (name: string) => api.post(`/system/services/${name}/restart`)
 }
 
 export const userApi = {

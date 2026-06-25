@@ -1,8 +1,8 @@
 package repository
 
 import (
-	"gorm.io/gorm"
 	"github.com/minipanel/minipanel/internal/model"
+	"gorm.io/gorm"
 )
 
 type BackupRepository struct {
@@ -53,4 +53,26 @@ func (r *BackupRepository) ListRecords(taskID uint) ([]model.BackupRecord, error
 
 func (r *BackupRepository) DeleteRecord(id uint) error {
 	return r.db.Delete(&model.BackupRecord{}, id).Error
+}
+
+func (r *BackupRepository) GetTaskByID(id uint) (*model.BackupTask, error) {
+	return r.GetTask(id)
+}
+
+func (r *BackupRepository) ListRecordsByTaskID(taskID uint) ([]model.BackupRecord, error) {
+	return r.ListRecords(taskID)
+}
+
+func (r *BackupRepository) ListAllRecords() ([]model.BackupRecord, error) {
+	return r.ListRecords(0)
+}
+
+func (r *BackupRepository) GetRecord(id uint) (*model.BackupRecord, error) {
+	var item model.BackupRecord
+	err := r.db.First(&item, id).Error
+	return &item, err
+}
+
+func (r *BackupRepository) UpdateRecord(item *model.BackupRecord) error {
+	return r.db.Save(item).Error
 }

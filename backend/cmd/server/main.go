@@ -385,6 +385,15 @@ func run() error {
 		return fmt.Errorf("migrate db: %w", err)
 	}
 
+	cronSvc := service.NewCronjobService()
+	if err := cronSvc.LoadAll(); err != nil {
+		global.LOG.Warnf("load cronjobs failed: %v", err)
+	}
+	backupSvc := service.NewBackupService()
+	if err := backupSvc.LoadAll(); err != nil {
+		global.LOG.Warnf("load backup tasks failed: %v", err)
+	}
+
 	settingService := service.NewSettingService()
 	_ = settingService.InitDefaults()
 	authService := service.NewAuthService()

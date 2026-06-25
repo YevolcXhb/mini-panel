@@ -120,6 +120,10 @@ func NewRouter() *gin.Engine {
 		apiV1.PUT("/databases/:id", db.Update)
 		apiV1.DELETE("/databases/:id", db.Delete)
 		apiV1.POST("/databases/test", db.TestConnection)
+		apiV1.GET("/databases/:id/dbs", db.ListDatabases)
+		apiV1.GET("/databases/:id/tables", db.ListTables)
+		apiV1.POST("/databases/:id/create-db", db.CreateDatabase)
+		apiV1.POST("/databases/:id/create-user", db.CreateUser)
 
 		fw := api.NewFirewallAPI()
 		apiV1.GET("/firewall/rules", fw.List)
@@ -127,6 +131,9 @@ func NewRouter() *gin.Engine {
 		apiV1.PUT("/firewall/rules/:id", fw.Update)
 		apiV1.DELETE("/firewall/rules/:id", fw.Delete)
 		apiV1.POST("/firewall/apply", fw.Apply)
+		apiV1.GET("/firewall/status", fw.Status)
+		apiV1.POST("/firewall/start", fw.Start)
+		apiV1.POST("/firewall/stop", fw.Stop)
 
 		backup := api.NewBackupAPI()
 		apiV1.GET("/backups/tasks", backup.ListTasks)
@@ -140,6 +147,13 @@ func NewRouter() *gin.Engine {
 
 		agentAPI := api.NewAgentAPI()
 		agentAPI.RegisterRoutes(apiV1)
+
+		sysAPI := api.NewSystemAPI()
+		apiV1.GET("/system/services", sysAPI.CheckServices)
+		apiV1.POST("/system/services/:name/install", sysAPI.InstallService)
+		apiV1.POST("/system/services/:name/start", sysAPI.StartService)
+		apiV1.POST("/system/services/:name/stop", sysAPI.StopService)
+		apiV1.POST("/system/services/:name/restart", sysAPI.RestartService)
 
 		user := api.NewUserAPI()
 		adminV1 := apiV1.Group("/")
