@@ -111,20 +111,10 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 		}
 	}
 
-	// lazy extract/resolve image if empty or contains variables
-	if detail != nil && detail.DownloadURL != "" && (detail.Image == "" || strings.Contains(detail.Image, "$")) {
-		global.LOG.Infof("[Install] detail image empty or contains vars, extracting from %s", detail.DownloadURL)
-		detail.Image = s.extractImageFrom1Panel(detail.DownloadURL)
-		if detail.Image != "" {
-			_ = s.detailRepo.Update(detail)
-			global.LOG.Infof("[Install] extracted and saved image=%s", detail.Image)
-		}
-	}
-
 	image := app.Key
 	version := "latest"
 	if detail != nil {
-		if detail.Image != "" {
+		if detail.Image != "" && !strings.Contains(detail.Image, "$") {
 			image = detail.Image
 		}
 		version = detail.Version
