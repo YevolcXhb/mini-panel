@@ -76,6 +76,7 @@ func NewRouter() *gin.Engine {
 		apiV1.POST("/apps/install", app.Install)
 		apiV1.POST("/apps/:id/uninstall", app.Uninstall)
 		apiV1.GET("/apps/installed", app.Installed)
+		apiV1.DELETE("/apps/history", app.ClearHistory)
 		apiV1.POST("/apps/sync", app.Sync)
 		apiV1.GET("/apps/sources", app.Sources)
 		apiV1.POST("/apps/sources", app.AddSource)

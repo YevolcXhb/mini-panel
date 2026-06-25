@@ -178,7 +178,10 @@
     <div v-if="bgTasks.length" class="bg-tasks">
       <div class="bg-tasks-header" @click="bgExpanded = !bgExpanded">
         <span>📦 安装任务 ({{ bgTasks.length }})</span>
-        <span style="cursor:pointer">{{ bgExpanded ? '▼' : '▲' }}</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          <el-button size="small" type="danger" text @click.stop="clearHistory">清空记录</el-button>
+          <span style="cursor:pointer">{{ bgExpanded ? '▼' : '▲' }}</span>
+        </div>
       </div>
       <div v-if="bgExpanded" class="bg-tasks-body">
         <div v-for="t in bgTasks" :key="t.id" class="bg-task-item">
@@ -371,6 +374,17 @@ async function uninstall(row: any) {
     await appApi.uninstall(row.id)
     ElMessage.success('卸载成功')
     loadInstalled()
+  } catch (e) {}
+}
+
+async function clearHistory() {
+  try {
+    await ElMessageBox.confirm('确定清空所有安装任务历史记录吗？（不会影响正在运行的应用）', '确认清空', { confirmButtonClass: 'el-button--danger' })
+    await appApi.clearHistory()
+    bgTasks.value = bgTasks.value.filter((t: any) => t.status === 'installing')
+    saveBgTasks()
+    loadInstalled()
+    ElMessage.success('历史记录已清空')
   } catch (e) {}
 }
 

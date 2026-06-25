@@ -3,6 +3,7 @@ package repository
 import (
 	"github.com/minipanel/minipanel/internal/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type AppRepository struct {
@@ -133,6 +134,21 @@ func (r *AppInstallRepository) GetByName(name string) (*model.AppInstall, error)
 
 func (r *AppInstallRepository) Create(item *model.AppInstall) error {
 	return r.db.Create(item).Error
+}
+
+func (r *AppInstallRepository) Upsert(item *model.AppInstall) error {
+	return r.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "name"}},
+		DoUpdates: clause.AssignmentColumns([]string{"app_id", "app_detail_id", "status", "image", "version", "container", "port", "path", "env", "message", "updated_at"}),
+	}).Create(item).Error
+}
+
+func (r *AppInstallRepository) DeleteByName(name string) error {
+	return r.db.Where("name = ? AND status != ?", name, "running").Delete(&model.AppInstall{}).Error
+}
+
+func (r *AppInstallRepository) ClearHistory() error {
+	return r.db.Where("status != ?", "running").Delete(&model.AppInstall{}).Error
 }
 
 func (r *AppInstallRepository) Update(item *model.AppInstall) error {

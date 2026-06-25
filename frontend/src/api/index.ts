@@ -86,6 +86,7 @@ export const appApi = {
   installed: () => api.get('/apps/installed'),
   install: (data: any) => api.post('/apps/install', data),
   uninstall: (id: number) => api.post(`/apps/${id}/uninstall`),
+  clearHistory: () => api.delete('/apps/history'),
   sync: (source_id: number) => api.post('/apps/sync', { source_id }),
   sources: () => api.get('/apps/sources'),
   addSource: (data: any) => api.post('/apps/sources', data),

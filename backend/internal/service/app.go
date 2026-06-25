@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/minipanel/minipanel/internal/dto"
@@ -32,6 +33,10 @@ type AppService struct {
 	sourceRepo *repository.AppSourceRepository
 	ctnService *ContainerService
 }
+
+var (
+	appInstallMu sync.Mutex
+)
 
 func NewAppService() *AppService {
 	return &AppService{
@@ -71,6 +76,9 @@ func (s *AppService) Installed() ([]model.AppInstall, error) {
 }
 
 func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, error) {
+	appInstallMu.Lock()
+	defer appInstallMu.Unlock()
+
 	global.LOG.Infof("[Install] start install app_id=%d detail_id=%d name=%s", req.AppID, req.AppDetailID, req.Name)
 	defer global.LOG.Infof("[Install] finish install name=%s", req.Name)
 
@@ -148,12 +156,19 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 		if existing.Status == "running" {
 			return nil, fmt.Errorf("应用 %s 已存在且正在运行，请更换实例名称", instName)
 		}
-		global.LOG.Infof("[Install] found existing install record id=%d status=%s, deleting old record", existing.ID, existing.Status)
-		// 删除旧的失败记录，重新创建
+		global.LOG.Infof("[Install] found existing install record id=%d status=%s, cleaning up", existing.ID, existing.Status)
+		// 删除旧的失败记录和容器
 		if s.ctnService.IsAvailable() {
 			_ = s.ctnService.client.Rm(existing.Container)
 		}
-		_ = s.instRepo.Delete(existing.ID)
+		if err := s.instRepo.DeleteByName(instName); err != nil {
+			global.LOG.Warnf("[Install] delete old records by name failed: %v, will try delete by id", err)
+			if err := s.instRepo.Delete(existing.ID); err != nil {
+				global.LOG.Errorf("[Install] failed to delete old record: %v", err)
+				return nil, fmt.Errorf("清理旧安装记录失败: %w", err)
+			}
+		}
+		global.LOG.Infof("[Install] old records cleaned up successfully")
 	}
 
 	if err := s.instRepo.Create(inst); err != nil {
@@ -466,6 +481,24 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 			return inst, fmt.Errorf("run container: %w", err)
 		}
 		global.LOG.Infof("[Install] run container success")
+
+		// 等待2秒后检查容器是否真的在运行
+		time.Sleep(2 * time.Second)
+		pids, psErr := s.ctnService.client.Ps(containerName)
+		if psErr != nil || len(pids) == 0 {
+			// 容器启动后立即退出，读取日志
+			logOut, _ := s.ctnService.client.ReadLog(containerName, 50)
+			errMsg := "容器启动后立即退出"
+			if logOut != "" {
+				errMsg += fmt.Sprintf("\n日志: %s", truncateOutput(logOut))
+			}
+			global.LOG.Errorf("[Install] container exited immediately: %s", errMsg)
+			inst.Status = "failed"
+			inst.Message = errMsg
+			s.instRepo.Update(inst)
+			return inst, fmt.Errorf("container exited immediately after start")
+		}
+		global.LOG.Infof("[Install] container is running with pids: %v", pids)
 	} else {
 		global.LOG.Errorf("[Install] dockroot not available")
 		inst.Status = "not_supported"
@@ -517,6 +550,10 @@ func (s *AppService) Uninstall(id uint) error {
 	}
 	_ = os.RemoveAll(inst.Path)
 	return s.instRepo.Delete(id)
+}
+
+func (s *AppService) ClearHistory() error {
+	return s.instRepo.ClearHistory()
 }
 
 func (s *AppService) SyncFromRemote(sourceID uint) error {

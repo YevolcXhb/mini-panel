@@ -104,6 +104,14 @@ func (a *AppAPI) Uninstall(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "uninstalled"})
 }
 
+func (a *AppAPI) ClearHistory(c *gin.Context) {
+	if err := a.service.ClearHistory(); err != nil {
+		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "cleared"})
+}
+
 func (a *AppAPI) Sync(c *gin.Context) {
 	var req dto.AppSyncRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
