@@ -2,6 +2,7 @@ package api
 
 import (
 	"bufio"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -27,17 +28,36 @@ type LogEntry struct {
 }
 
 func (a *LogAPI) List(c *gin.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			global.LOG.Errorf("[Logs] panic: %v", r)
+			c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: fmt.Sprintf("日志接口 panic: %v", r)})
+		}
+	}()
+
 	logFile := filepath.Join(global.GetDataDir(), "logs", "panel.log")
+	global.LOG.Infof("[Logs] request levels=%s lines=%s file=%s", c.Query("levels"), c.Query("lines"), logFile)
+
 	file, err := os.Open(logFile)
 	if err != nil {
 		if os.IsNotExist(err) {
+			global.LOG.Infof("[Logs] log file not found, return empty")
 			c.JSON(http.StatusOK, dto.Response{Code: 200, Data: []LogEntry{}})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		global.LOG.Errorf("[Logs] open file failed: %v", err)
+		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: "打开日志文件失败: " + err.Error()})
 		return
 	}
 	defer file.Close()
+
+	stat, err := file.Stat()
+	if err != nil {
+		global.LOG.Errorf("[Logs] stat file failed: %v", err)
+		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: "获取日志文件信息失败: " + err.Error()})
+		return
+	}
+	global.LOG.Infof("[Logs] file size=%d", stat.Size())
 
 	// 支持按级别过滤，例如 ?levels=info,error,warning
 	levelsParam := c.Query("levels")
@@ -57,12 +77,17 @@ func (a *LogAPI) List(c *gin.Context) {
 	}
 
 	var entries []LogEntry
+	var lineCount int
 	scanner := bufio.NewScanner(file)
 	// 防止单条日志过长（如包含命令输出）导致 scanner token too long
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	global.LOG.Infof("[Logs] reading log file %s with max token size 1MB", logFile)
 	for scanner.Scan() {
+		lineCount++
 		line := scanner.Text()
+		if len(line) > 1024*1024 {
+			global.LOG.Warnf("[Logs] skip oversized line %d, length=%d", lineCount, len(line))
+			continue
+		}
 		entry := parseLogLine(line)
 		if levelsFilter != nil && !levelsFilter[strings.ToLower(entry.Level)] {
 			continue
@@ -73,16 +98,26 @@ func (a *LogAPI) List(c *gin.Context) {
 		}
 	}
 
+	if err := scanner.Err(); err != nil {
+		global.LOG.Errorf("[Logs] scanner error after %d lines: %v", lineCount, err)
+		// 返回已读取的部分数据，并附带错误说明
+		if len(entries) > maxLines {
+			entries = entries[len(entries)-maxLines:]
+		}
+		c.JSON(http.StatusInternalServerError, dto.Response{
+			Code:    500,
+			Message: fmt.Sprintf("扫描日志失败: %v (已读取 %d 行)", err, lineCount),
+			Data:    entries,
+		})
+		return
+	}
+
 	// 只保留最后 maxLines 行
 	if len(entries) > maxLines {
 		entries = entries[len(entries)-maxLines:]
 	}
 
-	if err := scanner.Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
-		return
-	}
-
+	global.LOG.Infof("[Logs] return entries=%d total_scanned=%d", len(entries), lineCount)
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: entries})
 }
 
