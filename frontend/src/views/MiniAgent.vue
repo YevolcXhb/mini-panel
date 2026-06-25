@@ -265,8 +265,19 @@ async function loadConfig() {
 
 async function saveConfig() {
   try {
-    const payload: any = { ...config.value }
-    payload.skills = JSON.stringify(config.value.skills)
+    const payload: any = {
+      provider: config.value.provider,
+      base_url: config.value.base_url,
+      model: config.value.model,
+      temperature: config.value.temperature,
+      max_tokens: config.value.max_tokens,
+      enabled: config.value.enabled,
+      system_prompt: config.value.system_prompt,
+      skills: JSON.stringify(config.value.skills)
+    }
+    if (config.value.apiKey && config.value.apiKey.trim()) {
+      payload.api_key = config.value.apiKey.trim()
+    }
     const res: any = await agentApi.updateConfig(payload)
     if (res.code === 200) {
       ElMessage.success('设置已保存')
