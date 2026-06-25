@@ -50,33 +50,33 @@ func (s *FirewallService) getAvailableBackends() []string {
 	var backends []string
 
 	// 优先级: nftables > iptables > firewalld > ufw
+	// 只要二进制存在就加入列表，实际启动时再逐个尝试是否可用
+	// 不做预测试，因为空规则集/未初始化状态下预测试可能返回错误导致误判
+
 	// nftables直接操作内核规则集，在精简内核/嵌入式环境兼容性最好
 	if syscmd.Which("nft") {
-		// 测试nft是否能正常工作
-		if err := exec.Command("nft", "list", "ruleset").Run(); err == nil {
-			backends = append(backends, "nftables")
-		}
+		backends = append(backends, "nftables")
 	}
 
 	// iptables 直接操作，比ufw依赖少
 	if syscmd.Which("iptables") {
-		// 测试iptables是否能正常工作
-		if err := exec.Command("iptables", "-L", "-n").Run(); err == nil {
-			backends = append(backends, "iptables")
-		}
+		backends = append(backends, "iptables")
 	}
 
-	// firewalld 如果正在运行则使用
+	// firewalld 如果正在运行则优先使用
 	if syscmd.Which("firewall-cmd") {
 		out, err := exec.Command("firewall-cmd", "--state").CombinedOutput()
 		if err == nil && strings.TrimSpace(string(out)) == "running" {
+			// 已经在运行，放最前面
+			backends = append([]string{"firewalld"}, backends...)
+		} else {
+			// 没运行放后面
 			backends = append(backends, "firewalld")
 		}
 	}
 
 	// ufw放最后，依赖最多，在精简内核下经常无法使用
 	if syscmd.Which("ufw") {
-		// 不预先测试ufw，因为ufw status在未启用时也能返回结果，实际enable才会失败
 		backends = append(backends, "ufw")
 	}
 
@@ -140,6 +140,7 @@ func (s *FirewallService) GetStatus() (map[string]interface{}, error) {
 
 func (s *FirewallService) Start() error {
 	backends := s.getAvailableBackends()
+	global.LOG.Infof("[Firewall] available backends: %v", backends)
 	if backends[0] == "none" {
 		return fmt.Errorf("未检测到可用的防火墙后端 (nftables/iptables/firewalld/ufw)")
 	}
@@ -150,12 +151,14 @@ func (s *FirewallService) Start() error {
 		var err error
 		switch backend {
 		case "firewalld":
-			if out, err := exec.Command("systemctl", "start", "firewalld").CombinedOutput(); err != nil {
+			if out, startErr := exec.Command("systemctl", "start", "firewalld").CombinedOutput(); startErr != nil {
 				if out2, err2 := exec.Command("service", "firewalld", "start").CombinedOutput(); err2 != nil {
-					err = fmt.Errorf("%s | %s", strings.TrimSpace(string(out)), strings.TrimSpace(string(out2)))
+					err = fmt.Errorf("systemctl: %s | service: %s", strings.TrimSpace(string(out)), strings.TrimSpace(string(out2)))
 				} else {
 					err = nil
 				}
+			} else {
+				err = nil
 			}
 		case "ufw":
 			cmd := exec.Command("ufw", "--force", "enable")
@@ -164,26 +167,60 @@ func (s *FirewallService) Start() error {
 				// 如果是内核模块缺失，直接跳过这个后端
 				if strings.Contains(outStr, "missing kernel module") ||
 					strings.Contains(outStr, "Could not fetch rule set") ||
-					strings.Contains(outStr, "Problem running") {
+					strings.Contains(outStr, "Problem running") ||
+					strings.Contains(outStr, "couldn't load") ||
+					strings.Contains(outStr, "invalid port/service") {
 					lastErr = fmt.Errorf("ufw: %s", outStr)
 					global.LOG.Warnf("[Firewall] ufw not usable, trying next backend: %v", lastErr)
 					continue
 				}
 				err = fmt.Errorf("ufw: %s", outStr)
 			}
-		case "nftables", "iptables":
+		case "nftables":
+			// nftables需要先确保基础表存在，再应用规则
+			if ensureErr := s.ensureNftablesBase(); ensureErr != nil {
+				global.LOG.Warnf("[Firewall] ensure nftables base failed: %v", ensureErr)
+				err = ensureErr
+			} else {
+				_, err = s.ApplyRulesForBackend(backend)
+			}
+		case "iptables":
 			_, err = s.ApplyRulesForBackend(backend)
 		}
 
 		if err == nil {
-			global.LOG.Infof("[Firewall] successfully started with backend: %s", backend)
-			return nil
+			// 再次验证后端是否真的可用
+			if s.checkBackendRunning(backend) {
+				global.LOG.Infof("[Firewall] successfully started with backend: %s", backend)
+				return nil
+			}
+			global.LOG.Warnf("[Firewall] backend %s returned success but not running, trying next", backend)
+			lastErr = fmt.Errorf("%s 启动后未检测到运行状态", backend)
+		} else {
+			lastErr = err
+			global.LOG.Warnf("[Firewall] backend %s failed: %v, trying next", backend, err)
 		}
-		lastErr = err
-		global.LOG.Warnf("[Firewall] backend %s failed: %v, trying next", backend, err)
 	}
 
 	return fmt.Errorf("所有防火墙后端启动均失败: %v", lastErr)
+}
+
+func (s *FirewallService) checkBackendRunning(backend string) bool {
+	switch backend {
+	case "firewalld":
+		out, err := exec.Command("firewall-cmd", "--state").CombinedOutput()
+		return err == nil && strings.TrimSpace(string(out)) == "running"
+	case "ufw":
+		out, err := exec.Command("ufw", "status").CombinedOutput()
+		return err == nil && strings.Contains(string(out), "Status: active")
+	case "nftables":
+		out, err := exec.Command("nft", "list", "ruleset").CombinedOutput()
+		return err == nil && strings.Contains(string(out), "table inet filter")
+	case "iptables":
+		out, err := exec.Command("iptables", "-L", "-n").CombinedOutput()
+		return err == nil && len(out) > 0
+	}
+	return false
 }
 
 func (s *FirewallService) Stop() error {
