@@ -31,7 +31,7 @@ func (a *LogAPI) List(c *gin.Context) {
 	defer func() {
 		if r := recover(); r != nil {
 			global.LOG.Errorf("[Logs] panic: %v", r)
-			c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: fmt.Sprintf("日志接口 panic: %v", r)})
+			c.JSON(http.StatusOK, dto.Response{Code: 200, Data: []LogEntry{}, Message: fmt.Sprintf("日志接口错误: %v", r)})
 		}
 	}()
 
@@ -46,7 +46,7 @@ func (a *LogAPI) List(c *gin.Context) {
 			return
 		}
 		global.LOG.Errorf("[Logs] open file failed: %v", err)
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: "打开日志文件失败: " + err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 200, Data: []LogEntry{}, Message: "打开日志文件失败: " + err.Error()})
 		return
 	}
 	defer file.Close()
@@ -54,22 +54,23 @@ func (a *LogAPI) List(c *gin.Context) {
 	stat, err := file.Stat()
 	if err != nil {
 		global.LOG.Errorf("[Logs] stat file failed: %v", err)
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: "获取日志文件信息失败: " + err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 200, Data: []LogEntry{}, Message: "获取日志文件信息失败: " + err.Error()})
 		return
 	}
 	global.LOG.Infof("[Logs] file size=%d", stat.Size())
 
-	// 支持按级别过滤，例如 ?levels=info,error,warning
 	levelsParam := c.Query("levels")
 	var levelsFilter map[string]bool
 	if levelsParam != "" {
 		levelsFilter = make(map[string]bool)
 		for _, lv := range strings.Split(levelsParam, ",") {
-			levelsFilter[strings.ToLower(strings.TrimSpace(lv))] = true
+			trimmed := strings.TrimSpace(lv)
+			if trimmed != "" {
+				levelsFilter[strings.ToLower(trimmed)] = true
+			}
 		}
 	}
 
-	// 支持限制返回行数 ?lines=200
 	linesParam := c.DefaultQuery("lines", "500")
 	maxLines, _ := strconv.Atoi(linesParam)
 	if maxLines <= 0 || maxLines > 5000 {
@@ -79,12 +80,11 @@ func (a *LogAPI) List(c *gin.Context) {
 	var entries []LogEntry
 	var lineCount int
 	scanner := bufio.NewScanner(file)
-	// 防止单条日志过长（如包含命令输出）导致 scanner token too long
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
 	for scanner.Scan() {
 		lineCount++
 		line := scanner.Text()
-		if len(line) > 1024*1024 {
+		if len(line) > 10*1024*1024 {
 			global.LOG.Warnf("[Logs] skip oversized line %d, length=%d", lineCount, len(line))
 			continue
 		}
@@ -100,19 +100,8 @@ func (a *LogAPI) List(c *gin.Context) {
 
 	if err := scanner.Err(); err != nil {
 		global.LOG.Errorf("[Logs] scanner error after %d lines: %v", lineCount, err)
-		// 返回已读取的部分数据，并附带错误说明
-		if len(entries) > maxLines {
-			entries = entries[len(entries)-maxLines:]
-		}
-		c.JSON(http.StatusInternalServerError, dto.Response{
-			Code:    500,
-			Message: fmt.Sprintf("扫描日志失败: %v (已读取 %d 行)", err, lineCount),
-			Data:    entries,
-		})
-		return
 	}
 
-	// 只保留最后 maxLines 行
 	if len(entries) > maxLines {
 		entries = entries[len(entries)-maxLines:]
 	}
@@ -123,28 +112,41 @@ func (a *LogAPI) List(c *gin.Context) {
 
 func parseLogLine(line string) LogEntry {
 	entry := LogEntry{Raw: line, Level: "info", Message: line}
+	if len(line) == 0 {
+		return entry
+	}
 	// logrus text format: time="..." level=info msg="..."
 	if idx := strings.Index(line, `level=`); idx >= 0 {
 		start := idx + 6
-		end := strings.IndexAny(line[start:], ` 	"`)
-		if end < 0 {
-			end = len(line) - start
+		if start < len(line) {
+			rest := line[start:]
+			end := strings.IndexAny(rest, ` 	"`+"\n\r")
+			if end < 0 {
+				end = len(rest)
+			}
+			if end > 0 {
+				entry.Level = strings.ToLower(rest[:end])
+			}
 		}
-		entry.Level = strings.ToLower(line[start : start+end])
 	}
 	if idx := strings.Index(line, `time="`); idx >= 0 {
 		start := idx + 6
-		end := strings.Index(line[start:], `"`)
-		if end >= 0 {
-			entry.Time = line[start : start+end]
+		if start < len(line) {
+			rest := line[start:]
+			end := strings.Index(rest, `"`)
+			if end > 0 {
+				entry.Time = rest[:end]
+			}
 		}
 	}
 	if idx := strings.Index(line, `msg="`); idx >= 0 {
 		start := idx + 5
-		// 找到对应的闭合引号（简单处理）
-		end := strings.LastIndex(line[start:], `"`)
-		if end >= 0 {
-			entry.Message = line[start : start+end]
+		if start < len(line) {
+			rest := line[start:]
+			end := strings.LastIndex(rest, `"`)
+			if end > 0 {
+				entry.Message = rest[:end]
+			}
 		}
 	}
 	return entry

@@ -3,11 +3,11 @@
     <h2>面板运行日志</h2>
     <div class="toolbar">
       <el-checkbox-group v-model="selectedLevels">
-        <el-checkbox label="info">Info</el-checkbox>
-        <el-checkbox label="warning">Warning</el-checkbox>
-        <el-checkbox label="error">Error</el-checkbox>
-        <el-checkbox label="debug">Debug</el-checkbox>
-        <el-checkbox label="fatal">Fatal</el-checkbox>
+        <el-checkbox value="info" label="Info" />
+        <el-checkbox value="warning" label="Warning" />
+        <el-checkbox value="error" label="Error" />
+        <el-checkbox value="debug" label="Debug" />
+        <el-checkbox value="fatal" label="Fatal" />
       </el-checkbox-group>
       <el-button :icon="Refresh" @click="fetchLogs" :loading="loading">刷新</el-button>
     </div>
@@ -92,6 +92,7 @@ watch(selectedLevels, (v) => {
 h2 {
   margin: 0 0 16px;
   font-size: 20px;
+  color: var(--txt);
 }
 .toolbar {
   display: flex;
@@ -101,13 +102,14 @@ h2 {
 }
 .log-container {
   flex: 1;
-  background: #0d1117;
+  background: var(--card);
   border-radius: 8px;
   padding: 12px;
   overflow-y: auto;
   font-family: 'Consolas', 'Monaco', monospace;
   font-size: 13px;
   line-height: 1.6;
+  border: 1px solid var(--bg2);
 }
 .log-line {
   white-space: pre-wrap;
@@ -115,7 +117,7 @@ h2 {
   padding: 2px 0;
 }
 .log-time {
-  color: #8b949e;
+  color: var(--txt2);
   margin-right: 8px;
 }
 .log-level {
@@ -124,16 +126,28 @@ h2 {
   font-weight: bold;
   margin-right: 8px;
 }
-.level-info .log-level { color: #58a6ff; }
-.level-warning .log-level { color: #d29922; }
-.level-error .log-level { color: #f85149; }
-.level-debug .log-level { color: #a5d6ff; }
-.level-fatal .log-level { color: #da3633; }
+:deep(.dark) .level-info .log-level,
+.dark .level-info .log-level { color: #58a6ff; }
+:deep(.dark) .level-warning .log-level,
+.dark .level-warning .log-level { color: #d29922; }
+:deep(.dark) .level-error .log-level,
+.dark .level-error .log-level { color: #f85149; }
+:deep(.dark) .level-debug .log-level,
+.dark .level-debug .log-level { color: #a5d6ff; }
+:deep(.dark) .level-fatal .log-level,
+.dark .level-fatal .log-level { color: #da3633; }
+:deep(.dark) .log-msg,
+.dark .log-msg { color: #c9d1d9; }
+.level-info .log-level { color: #0969da; }
+.level-warning .log-level { color: #9a6700; }
+.level-error .log-level { color: #cf222e; }
+.level-debug .log-level { color: #1a7f37; }
+.level-fatal .log-level { color: #82071e; }
 .log-msg {
-  color: #c9d1d9;
+  color: var(--txt);
 }
 .log-empty {
-  color: #8b949e;
+  color: var(--txt2);
   text-align: center;
   padding: 40px 0;
 }

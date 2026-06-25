@@ -18,7 +18,7 @@ api.interceptors.response.use(
   (res) => {
     if (res.data.code !== 200) {
       ElMessage.error(res.data.message || '请求失败')
-      return Promise.reject(new Error(res.data.message))
+      return Promise.reject(new Error(res.data.message || '请求失败'))
     }
     return res.data
   },
@@ -27,8 +27,10 @@ api.interceptors.response.use(
       const auth = useAuthStore()
       auth.clearAuth()
       window.location.href = '/login'
+      return Promise.reject(err)
     }
-    ElMessage.error(err.message || '网络错误')
+    const errorMsg = err.response?.data?.message || err.message || '网络错误'
+    ElMessage.error(errorMsg)
     return Promise.reject(err)
   }
 )
