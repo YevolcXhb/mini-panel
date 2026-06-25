@@ -109,7 +109,6 @@ func (s *FirewallService) Start() error {
 	switch backend {
 	case "firewalld":
 		if out, err := exec.Command("systemctl", "start", "firewalld").CombinedOutput(); err != nil {
-			// 尝试service命令
 			if out2, err2 := exec.Command("service", "firewalld", "start").CombinedOutput(); err2 != nil {
 				return fmt.Errorf("启动firewalld失败: %s | %s", strings.TrimSpace(string(out)), strings.TrimSpace(string(out2)))
 			}
@@ -117,7 +116,11 @@ func (s *FirewallService) Start() error {
 	case "ufw":
 		cmd := exec.Command("ufw", "--force", "enable")
 		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("启动ufw失败: %s", strings.TrimSpace(string(out)))
+			outStr := strings.TrimSpace(string(out))
+			if strings.Contains(outStr, "missing kernel module") || strings.Contains(outStr, "Could not fetch rule set") {
+				return fmt.Errorf("启动ufw失败: 系统内核缺少必要的netfilter模块，请检查内核配置或尝试使用nftables/iptables后端。原始错误: %s", outStr)
+			}
+			return fmt.Errorf("启动ufw失败: %s", outStr)
 		}
 	case "nftables", "iptables":
 		_, err := s.ApplyRules()
@@ -233,13 +236,26 @@ func (s *FirewallService) ApplyRules() (string, error) {
 	if backend == "ufw" {
 		exec.Command("ufw", "--force", "default", "deny", "incoming").Run()
 		exec.Command("ufw", "--force", "default", "allow", "outgoing").Run()
+		// reset后ufw被禁用，先enable让基础框架成功加载，再逐个添加规则
+		enableCmd := exec.Command("ufw", "--force", "enable")
+		if out, err := enableCmd.CombinedOutput(); err != nil {
+			outStr := strings.TrimSpace(string(out))
+			if strings.Contains(outStr, "missing kernel module") || strings.Contains(outStr, "Could not fetch rule set") {
+				return strings.Join(output, "\n"), fmt.Errorf("ufw启动失败: 系统内核缺少必要的netfilter模块，建议使用nftables后端。错误: %s", outStr)
+			}
+			return strings.Join(output, "\n"), fmt.Errorf("ufw enable失败: %s", outStr)
+		}
+		// ufw enable后会自动加载before.rules，其中已包含回环和已建立连接允许规则
 	}
 
 	if backend == "nftables" {
 		s.ensureNftablesBase()
 	}
 
-	s.allowLoopbackAndEstablished(backend)
+	// 对于nftables/iptables需要手动添加基础规则，ufw已自动处理
+	if backend != "ufw" {
+		s.allowLoopbackAndEstablished(backend)
+	}
 
 	for _, rule := range rules {
 		if !rule.Enabled {
@@ -267,11 +283,6 @@ func (s *FirewallService) ApplyRules() (string, error) {
 		} else {
 			output = append(output, fmt.Sprintf("rule %d (%s) applied", rule.ID, rule.Name))
 		}
-	}
-
-	// ufw reset后会禁用，需要重新启用
-	if backend == "ufw" {
-		exec.Command("ufw", "--force", "enable").Run()
 	}
 
 	if backend == "firewalld" {
@@ -347,38 +358,45 @@ func (s *FirewallService) applyUfwRule(rule *model.FirewallRule) error {
 	if rule.Direction == "out" {
 		direction = "out"
 	}
+	action := "allow"
+	if rule.Action == "deny" {
+		action = "deny"
+	}
 
 	if rule.Type == "port" && rule.Port != "" {
 		proto := rule.Protocol
 		if proto == "" || proto == "all" {
 			proto = "tcp"
 		}
-		action := "allow"
-		if rule.Action == "deny" {
-			action = "deny"
-		}
-		port := normalizePort(rule.Port, false)
-		args := []string{"--force", action, direction, "proto", proto, "to", "any", "port", port}
-		cmd := exec.Command("ufw", args...)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			outStr := string(out)
-			if !strings.Contains(outStr, "Skipping adding existing rule") &&
-				!strings.Contains(outStr, "already exists") &&
-				!strings.Contains(outStr, "Rules updated") {
-				return fmt.Errorf("%s", strings.TrimSpace(outStr))
+		portStr := normalizePort(rule.Port, false)
+		// 拆分逗号分隔的多端口为单独规则，避免依赖multiport内核模块
+		ports := strings.Split(portStr, ",")
+		for _, port := range ports {
+			port = strings.TrimSpace(port)
+			if port == "" {
+				continue
+			}
+			args := []string{"--force", action, direction, "proto", proto, "to", "any", "port", port}
+			cmd := exec.Command("ufw", args...)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				outStr := strings.TrimSpace(string(out))
+				if !strings.Contains(outStr, "Skipping adding existing rule") &&
+					!strings.Contains(outStr, "already exists") &&
+					!strings.Contains(outStr, "Rules updated") &&
+					!strings.Contains(outStr, "Rule added") {
+					return fmt.Errorf("端口 %s 添加失败: %s", port, outStr)
+				}
 			}
 		}
 	} else if rule.Type == "ip" && rule.IP != "" {
-		action := "allow"
-		if rule.Action == "deny" {
-			action = "deny"
-		}
 		args := []string{"--force", action, direction, "from", rule.IP}
 		cmd := exec.Command("ufw", args...)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			outStr := string(out)
 			if !strings.Contains(outStr, "Skipping adding existing rule") &&
-				!strings.Contains(outStr, "already exists") {
+				!strings.Contains(outStr, "already exists") &&
+				!strings.Contains(outStr, "Rules updated") &&
+				!strings.Contains(outStr, "Rule added") {
 				return fmt.Errorf("%s", strings.TrimSpace(outStr))
 			}
 		}
@@ -443,21 +461,30 @@ func (s *FirewallService) applyIptablesRule(rule *model.FirewallRule) error {
 		if proto == "" || proto == "all" {
 			proto = "tcp"
 		}
-		port := normalizePort(rule.Port, false)
-
-		var addCmd *exec.Cmd
-		if strings.Contains(port, ",") {
-			addCmd = exec.Command("iptables", "-A", chain, "-p", proto, "-m", "multiport", "--dports", port, "-j", action)
-		} else {
-			addCmd = exec.Command("iptables", "-A", chain, "-p", proto, "--dport", port, "-j", action)
-		}
-		if out, err := addCmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+		portStr := normalizePort(rule.Port, false)
+		// 拆分逗号分隔多端口为单独规则，避免依赖multiport内核模块
+		ports := strings.Split(portStr, ",")
+		for _, port := range ports {
+			port = strings.TrimSpace(port)
+			if port == "" {
+				continue
+			}
+			// 检查是否是已存在规则（简单判断，忽略错误继续添加）
+			checkCmd := exec.Command("iptables", "-C", chain, "-p", proto, "--dport", port, "-j", action)
+			if err := checkCmd.Run(); err != nil {
+				addCmd := exec.Command("iptables", "-A", chain, "-p", proto, "--dport", port, "-j", action)
+				if out, err := addCmd.CombinedOutput(); err != nil {
+					return fmt.Errorf("端口 %s 添加失败: %s", port, strings.TrimSpace(string(out)))
+				}
+			}
 		}
 	} else if rule.Type == "ip" && rule.IP != "" {
-		addCmd := exec.Command("iptables", "-A", chain, "-s", rule.IP, "-j", action)
-		if out, err := addCmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+		checkCmd := exec.Command("iptables", "-C", chain, "-s", rule.IP, "-j", action)
+		if err := checkCmd.Run(); err != nil {
+			addCmd := exec.Command("iptables", "-A", chain, "-s", rule.IP, "-j", action)
+			if out, err := addCmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+			}
 		}
 	}
 	return nil
