@@ -157,8 +157,22 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 	toolDefs := e.registry.ToDefinitions()
 	consecutiveErrors := 0
 	var recentCalls []recentToolCall
+	finalMessageSent := false
+
+	defer func() {
+		if !finalMessageSent {
+			stream <- StreamChunk{Type: "message", Content: "操作已执行完成，请查看上方结果。如果有其他问题，请随时告诉我。"}
+			stream <- StreamChunk{Type: "done", Success: true}
+		}
+	}()
 
 	for step := 0; step < e.maxSteps; step++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		global.LOG.Debugf("[Engine] ReAct step %d/%d, errors=%d", step+1, e.maxSteps, consecutiveErrors)
 
 		resp, err := e.chatWithRetry(ctx, messages, toolDefs, 3)
@@ -176,6 +190,7 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 			stream <- StreamChunk{Type: "message", Content: content}
 			messages = append(messages, provider.LLMMessage{Role: "assistant", Content: content})
 			_ = e.sessionMgr.SaveAssistantMessage(sessionID, content, nil)
+			finalMessageSent = true
 			stream <- StreamChunk{Type: "done", Success: true}
 			return nil
 		}
@@ -238,6 +253,7 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 					ToolName:   tc.Function.Name,
 					Message:    toolResult.Error,
 				}
+				finalMessageSent = true
 				stream <- StreamChunk{Type: "done", Success: false, Error: "等待用户确认"}
 				return nil
 			}
@@ -270,9 +286,10 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 			}
 		}
 
+		messages = append(messages, toolResults...)
+
 		if consecutiveErrors >= e.maxErrors {
-			global.LOG.Warnf("[Engine] 连续 %d 次错误，尝试强制总结", consecutiveErrors)
-			messages = append(messages, toolResults...)
+			global.LOG.Warnf("[Engine] 连续 %d 次错误，强制总结", consecutiveErrors)
 			messages = append(messages, provider.LLMMessage{
 				Role:    "user",
 				Content: "工具连续执行多次失败。请停止调用工具，直接总结当前已获取的信息，说明遇到的问题，并给用户建议。不要继续调用工具。",
@@ -280,28 +297,15 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 			break
 		}
 
-		if step >= 15 && step < e.maxSteps-1 {
-			global.LOG.Infof("[Engine] 已执行 %d 步，提示模型尽快收尾", step+1)
-			messages = append(messages, toolResults...)
+		if step >= e.maxSteps-2 {
+			global.LOG.Warnf("[Engine] 达到步数限制，强制总结")
 			messages = append(messages, provider.LLMMessage{
 				Role:    "user",
-				Content: "注意：你已经执行了多个步骤。如果核心任务已经完成，请立即总结结果回复用户，不要做过多无关的检查和验证步骤。如果还需要关键工具才能完成，可以继续，但请尽快收尾。",
-			})
-			messages = e.sessionMgr.CompressIfNeeded(messages)
-			continue
-		}
-
-		if step >= e.maxSteps-1 {
-			global.LOG.Warnf("[Engine] 达到最大步数 %d，强制总结", e.maxSteps)
-			messages = append(messages, toolResults...)
-			messages = append(messages, provider.LLMMessage{
-				Role:    "user",
-				Content: "已达到最大思考步数。请立即停止调用工具，对当前执行结果给出总结，说明完成了什么，还有什么没完成，给用户建议。",
+				Content: "请立即停止调用工具，对当前执行结果给出总结，说明完成了什么，给用户明确的答复。",
 			})
 			break
 		}
 
-		messages = append(messages, toolResults...)
 		messages = e.sessionMgr.CompressIfNeeded(messages)
 	}
 
@@ -309,17 +313,16 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 	finalResp, err := e.chatWithRetry(ctx, messages, toolDefsEmpty, 2)
 	if err != nil {
 		global.LOG.Errorf("[Engine] 最终总结调用失败: %v", err)
-		stream <- StreamChunk{Type: "message", Content: "操作已执行，但生成总结时遇到问题。请查看上方工具执行结果。"}
-		stream <- StreamChunk{Type: "done", Success: true}
-		return nil
+		stream <- StreamChunk{Type: "message", Content: "操作已执行，但生成总结时遇到问题。请查看上方工具执行结果。如果需要进一步分析，请告诉我。"}
+	} else {
+		content := finalResp.Content
+		if strings.TrimSpace(content) == "" {
+			content = "工具执行完成，结果已展示。如果需要进一步操作，请告诉我。"
+		}
+		stream <- StreamChunk{Type: "message", Content: content}
+		_ = e.sessionMgr.SaveAssistantMessage(sessionID, content, nil)
 	}
-
-	content := finalResp.Content
-	if strings.TrimSpace(content) == "" {
-		content = "工具执行完成，结果已展示。如果需要进一步操作，请告诉我。"
-	}
-	stream <- StreamChunk{Type: "message", Content: content}
-	_ = e.sessionMgr.SaveAssistantMessage(sessionID, content, nil)
+	finalMessageSent = true
 	stream <- StreamChunk{Type: "done", Success: true}
 	return nil
 }
