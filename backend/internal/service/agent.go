@@ -41,6 +41,11 @@ func (s *AgentService) UpdateConfig(userID uint, cfg *model.AgentConfig) error {
 	return s.configRepo.Update(userID, updates)
 }
 
+// UpdateAPIKey 单独更新 API Key（支持清空）
+func (s *AgentService) UpdateAPIKey(userID uint, apiKey string) error {
+	return s.configRepo.Update(userID, map[string]interface{}{"api_key": apiKey})
+}
+
 // CreateSession 创建会话
 func (s *AgentService) CreateSession(userID uint, title string) (*model.AgentSession, error) {
 	return s.sessionRepo.CreateSession(userID, title)

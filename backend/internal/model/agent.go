@@ -6,7 +6,7 @@ type AgentConfig struct {
 	UserID       uint    `json:"-" gorm:"uniqueIndex"`
 	Provider     string  `json:"provider" gorm:"default:openai"` // openai / anthropic / deepseek / ollama / custom
 	BaseURL      string  `json:"base_url"`
-	APIKey       string  `json:"-"` // 不在 JSON 中暴露
+	APIKey       string  `json:"api_key"` // 写入时接收，读取时不返回（由 API 层控制）
 	Model        string  `json:"model" gorm:"default:gpt-4o-mini"`
 	Temperature  float64 `json:"temperature" gorm:"default:0.3"`
 	MaxTokens    int     `json:"max_tokens" gorm:"default:4096"`
