@@ -276,6 +276,17 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 			break
 		}
 
+		if step >= 15 && step < e.maxSteps-1 {
+			global.LOG.Infof("[Engine] 已执行 %d 步，提示模型尽快收尾", step+1)
+			messages = append(messages, toolResults...)
+			messages = append(messages, provider.LLMMessage{
+				Role:    "user",
+				Content: "注意：你已经执行了多个步骤。如果核心任务已经完成，请立即总结结果回复用户，不要做过多无关的检查和验证步骤。如果还需要关键工具才能完成，可以继续，但请尽快收尾。",
+			})
+			messages = e.sessionMgr.CompressIfNeeded(messages)
+			continue
+		}
+
 		if step >= e.maxSteps-1 {
 			global.LOG.Warnf("[Engine] 达到最大步数 %d，强制总结", e.maxSteps)
 			messages = append(messages, toolResults...)
