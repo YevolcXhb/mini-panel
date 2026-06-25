@@ -68,13 +68,14 @@ func (s *ContainerService) Create(req dto.ContainerCreateRequest) error {
 			return fmt.Errorf("cannot extract container name from image %q", req.Image)
 		}
 	}
-	if err := s.client.Pull(req.Image, req.Name); err != nil {
+	if _, err := s.client.Pull(req.Image, req.Name); err != nil {
 		return fmt.Errorf("pull image: %w", err)
 	}
 	if req.Command != "" {
 		return fmt.Errorf("custom command not supported in dockroot mode")
 	}
-	return s.client.Run(req.Name, req.Detach, req.Env, req.Volumes)
+	_, err := s.client.Run(req.Name, req.Detach, req.Env, req.Volumes)
+	return err
 }
 
 func (s *ContainerService) Start(name string) error {
@@ -88,7 +89,8 @@ func (s *ContainerService) Start(name string) error {
 	if st.Status == "running" {
 		return fmt.Errorf("container already running")
 	}
-	return s.client.Run(name, true, nil, nil)
+	_, err = s.client.Run(name, true, nil, nil)
+	return err
 }
 
 func (s *ContainerService) Stop(name string) error {
@@ -131,7 +133,8 @@ func (s *ContainerService) Pull(image, name string) error {
 	if s.client == nil {
 		return fmt.Errorf("dockroot not available")
 	}
-	return s.client.Pull(image, name)
+	_, err := s.client.Pull(image, name)
+	return err
 }
 
 func (s *ContainerService) IsAvailable() bool {

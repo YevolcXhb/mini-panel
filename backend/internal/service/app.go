@@ -275,9 +275,14 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 					resolved := resolveEnvVars(v, envMap)
 					parts := strings.Split(resolved, ":")
 					if len(parts) >= 2 {
-						hostPath := filepath.Join(inst.Path, filepath.Base(parts[0]))
+						hostPath := parts[0]
+						if !filepath.IsAbs(hostPath) {
+							// 相对路径挂载到实例目录下，保留原目录结构
+							hostPath = filepath.Join(inst.Path, filepath.Clean(hostPath))
+						}
 						os.MkdirAll(hostPath, 0755)
 						composeVolumes = append(composeVolumes, fmt.Sprintf("%s:%s", hostPath, parts[1]))
+						global.LOG.Infof("[Install] volume: %s -> %s", parts[0], parts[1])
 					}
 				}
 
@@ -351,6 +356,13 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 
 	global.LOG.Infof("[Install] final params image=%s container=%s envs=%d volumes=%d", image, instName, len(envs), len(volumes))
 
+	if image == "" {
+		global.LOG.Errorf("[Install] image is empty after parsing compose")
+		inst.Status = "failed"
+		inst.Message = "未能从应用包中解析出镜像名，请检查应用源或 docker-compose.yml"
+		s.instRepo.Update(inst)
+		return inst, fmt.Errorf("image is empty")
+	}
 	if strings.Contains(image, "$") {
 		global.LOG.Errorf("[Install] image contains unresolved variables: %s", image)
 		inst.Status = "failed"
@@ -360,28 +372,33 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 	}
 
 	if s.ctnService.IsAvailable() {
-		global.LOG.Infof("[Install] pulling image %s ...", image)
-		if err := s.ctnService.client.Pull(image, instName); err != nil {
-			global.LOG.Errorf("[Install] pull image failed: %v", err)
+		global.LOG.Infof("[Install] pulling image %s for container %s ...", image, instName)
+		pullOut, err := s.ctnService.client.Pull(image, instName)
+		if err != nil {
+			global.LOG.Errorf("[Install] pull image failed: %v\noutput:\n%s", err, pullOut)
 			inst.Status = "failed"
-			inst.Message = err.Error()
+			inst.Message = fmt.Sprintf("拉取镜像失败: %v\n%s", err, pullOut)
 			s.instRepo.Update(inst)
 			return inst, fmt.Errorf("pull image: %w", err)
 		}
-		global.LOG.Infof("[Install] pull image success")
+		global.LOG.Infof("[Install] pull image success\noutput:\n%s", pullOut)
 
-		global.LOG.Infof("[Install] running container %s ...", instName)
-		if err := s.ctnService.client.Run(instName, true, envs, volumes); err != nil {
-			global.LOG.Errorf("[Install] run container failed: %v", err)
+		global.LOG.Infof("[Install] running container %s with envs=%d volumes=%d ...", instName, len(envs), len(volumes))
+		global.LOG.Infof("[Install] envs=%v", envs)
+		global.LOG.Infof("[Install] volumes=%v", volumes)
+		runOut, err := s.ctnService.client.Run(instName, true, envs, volumes)
+		if err != nil {
+			global.LOG.Errorf("[Install] run container failed: %v\noutput:\n%s", err, runOut)
 			inst.Status = "failed"
-			inst.Message = err.Error()
+			inst.Message = fmt.Sprintf("启动容器失败: %v\n%s", err, runOut)
 			s.instRepo.Update(inst)
 			return inst, fmt.Errorf("run container: %w", err)
 		}
-		global.LOG.Infof("[Install] run container success")
+		global.LOG.Infof("[Install] run container success\noutput:\n%s", runOut)
 	} else {
 		global.LOG.Errorf("[Install] dockroot not available")
 		inst.Status = "not_supported"
+		inst.Message = "dockroot 不可用"
 		s.instRepo.Update(inst)
 		return inst, fmt.Errorf("dockroot not available")
 	}

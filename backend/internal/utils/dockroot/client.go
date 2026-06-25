@@ -68,10 +68,10 @@ func readRegistryInfo(binaryDir string) (*RegistryInfo, error) {
 	return &info, nil
 }
 
-func (c *Client) Pull(image, name string) error {
+func (c *Client) Pull(image, name string) (string, error) {
 	image = NormalizeImageRef(image)
 	if image == "" {
-		return fmt.Errorf("invalid image reference")
+		return "", fmt.Errorf("invalid image reference")
 	}
 	if !strings.HasPrefix(image, "docker://") && !isExternalRegistry(image) {
 		image = "docker://docker.io/" + image
@@ -79,9 +79,9 @@ func (c *Client) Pull(image, name string) error {
 	cmd := exec.Command(c.BinaryPath, "pull", image, name)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("dockroot pull: %w, output: %s", err, string(output))
+		return string(output), fmt.Errorf("dockroot pull: %w, output: %s", err, string(output))
 	}
-	return nil
+	return string(output), nil
 }
 
 func isExternalRegistry(image string) bool {
@@ -94,7 +94,7 @@ func isExternalRegistry(image string) bool {
 	return strings.Contains(firstSegment, ".") || strings.Contains(firstSegment, ":")
 }
 
-func (c *Client) Run(name string, detach bool, envs, volumes []string) error {
+func (c *Client) Run(name string, detach bool, envs, volumes []string) (string, error) {
 	args := []string{"run"}
 	if detach {
 		args = append(args, "-d")
@@ -112,9 +112,9 @@ func (c *Client) Run(name string, detach bool, envs, volumes []string) error {
 	cmd := exec.Command(c.BinaryPath, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("dockroot run: %w, output: %s", err, string(output))
+		return string(output), fmt.Errorf("dockroot run: %w, output: %s", err, string(output))
 	}
-	return nil
+	return string(output), nil
 }
 
 func (c *Client) Stop(name string) error {

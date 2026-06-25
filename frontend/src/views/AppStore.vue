@@ -191,7 +191,7 @@
           <div v-if="t.status === 'installing'" style="margin-top:6px">
             <el-progress :percentage="100" :indeterminate="true" :duration="2" :stroke-width="4" />
           </div>
-          <div v-if="t.message" style="font-size:12px;color:var(--dim);margin-top:4px">{{ t.message }}</div>
+          <div v-if="t.message" style="font-size:12px;color:var(--dim);margin-top:4px;white-space:pre-wrap;word-break:break-word;max-height:120px;overflow:auto">{{ t.message }}</div>
         </div>
       </div>
     </div>
@@ -358,9 +358,10 @@ async function doInstall() {
     loadInstalled()
   } catch (e: any) {
     task.status = 'error'
-    task.message = e?.message || '安装失败'
+    const backendMsg = e?.response?.data?.message || e?.response?.data?.data?.message || ''
+    task.message = backendMsg || e?.message || '安装失败'
     saveBgTasks()
-    ElMessage.error(e?.message || '安装失败')
+    ElMessage.error(backendMsg || e?.message || '安装失败')
   }
 }
 
