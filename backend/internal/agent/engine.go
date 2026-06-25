@@ -23,7 +23,7 @@ const (
 	StepStateCompleted
 )
 
-const maxToolOutputLength = 8000
+const maxToolOutputLength = 4000
 
 type recentToolCall struct {
 	Name string

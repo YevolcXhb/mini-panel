@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
 )
 
 // AnthropicProvider Claude API
@@ -28,7 +27,7 @@ func NewAnthropicProvider(baseURL, apiKey, model string, temperature float32, ma
 		maxTokens = 4096
 	}
 	return &AnthropicProvider{
-		client:      &http.Client{Timeout: 120 * time.Second},
+		client:      defaultHTTPClient,
 		baseURL:     baseURL,
 		apiKey:      apiKey,
 		model:       model,

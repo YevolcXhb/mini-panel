@@ -10,6 +10,8 @@ import (
 	"github.com/minipanel/minipanel/internal/global"
 )
 
+const maxOutputLength = 4000
+
 type ToolExecResult struct {
 	Output string
 	Error  string
@@ -57,6 +59,13 @@ func (r *Registry) List() []Tool {
 
 func normalizeName(name string) string {
 	return strings.ToLower(strings.ReplaceAll(name, "_", ""))
+}
+
+func truncateOutput(s string) string {
+	if len(s) > maxOutputLength {
+		return s[:maxOutputLength] + fmt.Sprintf("\n... [输出过长已截断，原长度 %d 字符]", len(s))
+	}
+	return s
 }
 
 func (r *Registry) ToDefinitions() []provider.ToolDefinition {
@@ -151,13 +160,13 @@ func (e *Executor) executeSafely(ctx context.Context, tool Tool, args map[string
 	if execRes.Error != "" {
 		return ToolResult{
 			Success: false,
-			Result:  execRes.Output,
+			Result:  truncateOutput(execRes.Output),
 			Error:   execRes.Error,
 		}
 	}
 	return ToolResult{
 		Success: true,
-		Result:  execRes.Output,
+		Result:  truncateOutput(execRes.Output),
 	}
 }
 

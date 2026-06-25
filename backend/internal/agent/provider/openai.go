@@ -6,9 +6,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"time"
 )
+
+var defaultHTTPClient = &http.Client{
+	Timeout: 180 * time.Second,
+	Transport: &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   10,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	},
+}
 
 // OpenAIProvider 支持 OpenAI / DeepSeek / Ollama 等兼容格式
 type OpenAIProvider struct {
@@ -28,7 +44,7 @@ func NewOpenAIProvider(baseURL, apiKey, model string, temperature float32, maxTo
 		maxTokens = 4096
 	}
 	return &OpenAIProvider{
-		client:      &http.Client{Timeout: 120 * time.Second},
+		client:      defaultHTTPClient,
 		baseURL:     baseURL,
 		apiKey:      apiKey,
 		model:       model,
