@@ -107,12 +107,16 @@ func NewRouter() *gin.Engine {
 
 		website := api.NewWebsiteAPI()
 		apiV1.GET("/websites", website.List)
+		apiV1.GET("/websites/nginx/status", website.GetNginxStatus)
+		apiV1.POST("/websites/nginx/start", website.StartNginx)
+		apiV1.POST("/websites/nginx/stop", website.StopNginx)
+		apiV1.POST("/websites/nginx/restart", website.RestartNginx)
+		apiV1.POST("/websites/nginx/reload", website.ReloadNginx)
 		apiV1.POST("/websites", website.Create)
 		apiV1.GET("/websites/:id", website.GetByID)
 		apiV1.PUT("/websites/:id", website.Update)
 		apiV1.DELETE("/websites/:id", website.Delete)
 		apiV1.PUT("/websites/:id/toggle", website.Toggle)
-		apiV1.POST("/websites/reload-nginx", website.ReloadNginx)
 
 		db := api.NewDatabaseAPI()
 		apiV1.GET("/databases", db.List)

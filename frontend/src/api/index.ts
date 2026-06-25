@@ -135,7 +135,11 @@ export const websiteApi = {
   update: (id: number, data: any) => api.put(`/websites/${id}`, data),
   delete: (id: number) => api.delete(`/websites/${id}`),
   toggle: (id: number, enabled: boolean) => api.put(`/websites/${id}/toggle`, { enabled }),
-  reloadNginx: () => api.post('/websites/reload-nginx')
+  getNginxStatus: () => api.get('/websites/nginx/status'),
+  startNginx: () => api.post('/websites/nginx/start'),
+  stopNginx: () => api.post('/websites/nginx/stop'),
+  restartNginx: () => api.post('/websites/nginx/restart'),
+  reloadNginx: () => api.post('/websites/nginx/reload')
 }
 
 export const databaseApi = {

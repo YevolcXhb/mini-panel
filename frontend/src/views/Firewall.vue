@@ -140,7 +140,13 @@ const isEdit = ref(false)
 const formRef = ref<any>(null)
 const serviceStatus = ref<any>({ installed: false, running: false, version: '', name: 'firewalld' })
 
-const firewallType = computed(() => serviceStatus.value.name === 'ufw' ? 'ufw' : 'firewalld')
+const firewallType = computed(() => {
+  const name = serviceStatus.value.backend || serviceStatus.value.name || 'firewalld'
+  if (name === 'ufw') return 'UFW'
+  if (name === 'nftables') return 'nftables'
+  if (name === 'iptables') return 'iptables'
+  return 'firewalld'
+})
 
 const form = reactive({
   id: 0,
@@ -187,8 +193,8 @@ function openDialog(row?: any) {
 
 async function checkStatus() {
   try {
-    const res: any = await systemApi.checkServices()
-    serviceStatus.value = res.data?.firewalld || { installed: false, running: false }
+    const res: any = await firewallApi.status()
+    serviceStatus.value = res.data || { installed: false, running: false, name: 'firewalld' }
   } catch (e: any) {
     ElMessage.error(e?.message || '检查服务状态失败')
   }

@@ -97,3 +97,36 @@ func (a *WebsiteAPI) ReloadNginx(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "nginx reloaded"})
 }
+
+func (a *WebsiteAPI) GetNginxStatus(c *gin.Context) {
+	status, err := a.service.GetNginxStatus()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: status})
+}
+
+func (a *WebsiteAPI) StartNginx(c *gin.Context) {
+	if err := a.service.StartNginx(); err != nil {
+		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "nginx started"})
+}
+
+func (a *WebsiteAPI) StopNginx(c *gin.Context) {
+	if err := a.service.StopNginx(); err != nil {
+		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "nginx stopped"})
+}
+
+func (a *WebsiteAPI) RestartNginx(c *gin.Context) {
+	if err := a.service.RestartNginx(); err != nil {
+		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "nginx restarted"})
+}

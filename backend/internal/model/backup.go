@@ -1,9 +1,7 @@
 package model
 
-import "gorm.io/gorm"
-
 type BackupTask struct {
-	gorm.Model
+	BaseModel
 	Name       string `json:"name" gorm:"not null"`
 	Type       string `json:"type" gorm:"not null"` // website, database, files
 	SourceID   uint   `json:"source_id"`            // website_id or database_id
@@ -19,7 +17,7 @@ type BackupTask struct {
 }
 
 type BackupRecord struct {
-	gorm.Model
+	BaseModel
 	TaskID     uint   `json:"task_id" gorm:"index;not null"`
 	FilePath   string `json:"file_path"`
 	Size       int64  `json:"size"`

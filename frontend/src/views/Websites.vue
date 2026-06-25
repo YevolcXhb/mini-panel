@@ -45,7 +45,7 @@
           <el-table-column prop="port" label="端口" width="80" />
           <el-table-column label="类型" width="100">
             <template #default="{ row }">
-              <el-tag size="small" :type="row.type === 'proxy' ? 'warning' : 'success'">{{ row.type === 'proxy' ? '反向代理' : '静态' }}</el-tag>
+              <el-tag size="small" :type="row.managed ? 'primary' : 'info'">{{ row.managed ? '面板托管' : '外部站点' }}</el-tag>
             </template>
           </el-table-column>
           <el-table-column label="SSL" width="80">
@@ -58,11 +58,23 @@
               <el-tag size="small" :type="row.enabled ? 'success' : 'danger'">{{ row.enabled ? '启用' : '停用' }}</el-tag>
             </template>
           </el-table-column>
+          <el-table-column label="根目录" min-width="200" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span style="color: #909399; font-family: monospace">{{ row.root || '-' }}</span>
+            </template>
+          </el-table-column>
           <el-table-column label="操作" width="240" fixed="right">
             <template #default="{ row }">
-              <el-button size="small" @click="editWebsite(row)">编辑</el-button>
-              <el-button size="small" @click="toggleWebsite(row)">{{ row.enabled ? '停用' : '启用' }}</el-button>
-              <el-button size="small" type="danger" @click="deleteWebsite(row)">删除</el-button>
+              <template v-if="row.managed">
+                <el-button size="small" @click="editWebsite(row)">编辑</el-button>
+                <el-button size="small" @click="toggleWebsite(row)">{{ row.enabled ? '停用' : '启用' }}</el-button>
+                <el-button size="small" type="danger" @click="deleteWebsite(row)">删除</el-button>
+              </template>
+              <template v-else>
+                <el-tooltip content="外部创建的网站，无法在面板中编辑/删除">
+                  <el-button size="small" disabled>外部站点</el-button>
+                </el-tooltip>
+              </template>
             </template>
           </el-table-column>
         </el-table>
@@ -132,10 +144,16 @@ const form = ref<any>({ name: '', domain: '', port: 80, root: '', type: 'static'
 
 async function checkStatus() {
   try {
-    const res: any = await systemApi.checkServices()
-    serviceStatus.value = res.data?.nginx || { installed: false, running: false }
+    const res: any = await websiteApi.getNginxStatus()
+    serviceStatus.value = res.data || { installed: false, running: false }
   } catch (e: any) {
-    ElMessage.error(e?.message || '检查服务状态失败')
+    // 如果新接口失败，回退到旧接口
+    try {
+      const res: any = await systemApi.checkServices()
+      serviceStatus.value = res.data?.nginx || { installed: false, running: false }
+    } catch (e2: any) {
+      ElMessage.error(e2?.message || '检查服务状态失败')
+    }
   }
 }
 
@@ -158,7 +176,7 @@ async function installService() {
 async function startService() {
   actionLoading.value = true
   try {
-    await systemApi.startService('nginx')
+    await websiteApi.startNginx()
     ElMessage.success('Nginx 启动成功')
     await checkStatus()
   } catch (e: any) {
@@ -171,7 +189,7 @@ async function startService() {
 async function stopService() {
   actionLoading.value = true
   try {
-    await systemApi.stopService('nginx')
+    await websiteApi.stopNginx()
     ElMessage.success('Nginx 停止成功')
     await checkStatus()
   } catch (e: any) {
@@ -184,7 +202,7 @@ async function stopService() {
 async function restartService() {
   actionLoading.value = true
   try {
-    await systemApi.restartService('nginx')
+    await websiteApi.restartNginx()
     ElMessage.success('Nginx 重启成功')
     await checkStatus()
   } catch (e: any) {

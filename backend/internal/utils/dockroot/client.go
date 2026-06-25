@@ -95,6 +95,10 @@ func isExternalRegistry(image string) bool {
 }
 
 func (c *Client) Run(name string, detach bool, envs, volumes []string) (string, error) {
+	return c.RunWithCommand(name, detach, envs, volumes, nil)
+}
+
+func (c *Client) RunWithCommand(name string, detach bool, envs, volumes, command []string) (string, error) {
 	args := []string{"run"}
 	if detach {
 		args = append(args, "-d")
@@ -109,6 +113,9 @@ func (c *Client) Run(name string, detach bool, envs, volumes []string) (string, 
 		args = append(args, "-e", e)
 	}
 	args = append(args, name)
+	if len(command) > 0 {
+		args = append(args, command...)
+	}
 	cmd := exec.Command(c.BinaryPath, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {

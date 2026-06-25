@@ -1,9 +1,7 @@
 package model
 
-import "gorm.io/gorm"
-
 type DatabaseInstance struct {
-	gorm.Model
+	BaseModel
 	Name     string `json:"name" gorm:"uniqueIndex;not null"`
 	Type     string `json:"type" gorm:"not null"` // mysql, postgresql, redis, mongodb
 	Host     string `json:"host" gorm:"not null"`

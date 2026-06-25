@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,6 +21,7 @@ import (
 	"github.com/minipanel/minipanel/internal/global"
 	"github.com/minipanel/minipanel/internal/model"
 	"github.com/minipanel/minipanel/internal/repository"
+	"github.com/minipanel/minipanel/internal/utils/dockroot"
 	"gopkg.in/yaml.v3"
 )
 
@@ -119,6 +122,14 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 	if instName == "" {
 		instName = app.Key
 	}
+	instName = strings.ToLower(instName)
+	instName = regexp.MustCompile(`[^a-z0-9_-]`).ReplaceAllString(instName, "-")
+
+	// 添加随机后缀避免容器名冲突
+	rand.Seed(time.Now().UnixNano())
+	suffix := fmt.Sprintf("%04d", rand.Intn(10000))
+	containerName := fmt.Sprintf("%s-%s", instName, suffix)
+	global.LOG.Infof("[Install] using container name: %s", containerName)
 
 	inst := &model.AppInstall{
 		AppID:       req.AppID,
@@ -127,37 +138,40 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 		Status:      "installing",
 		Image:       image,
 		Version:     version,
-		Container:   instName,
+		Container:   containerName,
 		Path:        filepath.Join(global.GetDataDir(), "apps", instName),
 	}
 
+	// 处理已存在的安装记录
 	existing, _ := s.instRepo.GetByName(instName)
 	if existing != nil {
 		if existing.Status == "running" {
 			return nil, fmt.Errorf("应用 %s 已存在且正在运行，请更换实例名称", instName)
 		}
-		global.LOG.Infof("[Install] found existing install record id=%d status=%s, reusing", existing.ID, existing.Status)
-		inst.ID = existing.ID
-		inst.CreatedAt = existing.CreatedAt
-		if err := s.instRepo.Update(inst); err != nil {
-			global.LOG.Errorf("[Install] update existing install record failed: %v", err)
-			return nil, err
+		global.LOG.Infof("[Install] found existing install record id=%d status=%s, deleting old record", existing.ID, existing.Status)
+		// 删除旧的失败记录，重新创建
+		if s.ctnService.IsAvailable() {
+			_ = s.ctnService.client.Rm(existing.Container)
 		}
-	} else {
-		if err := s.instRepo.Create(inst); err != nil {
-			global.LOG.Errorf("[Install] create install record failed: %v", err)
-			return nil, err
-		}
-		global.LOG.Infof("[Install] install record created id=%d path=%s", inst.ID, inst.Path)
+		_ = s.instRepo.Delete(existing.ID)
 	}
+
+	if err := s.instRepo.Create(inst); err != nil {
+		global.LOG.Errorf("[Install] create install record failed: %v", err)
+		return nil, err
+	}
+	global.LOG.Infof("[Install] install record created id=%d path=%s", inst.ID, inst.Path)
 
 	// ========== 解析 docker-compose.yml ==========
 	var composeEnvs []string
 	var composeVolumes []string
+	var composeCommand []string
 
 	composePath := filepath.Join(inst.Path, "docker-compose.yml")
 	if detail != nil && detail.DownloadURL != "" {
 		global.LOG.Infof("[Install] downloading package from %s", detail.DownloadURL)
+		// 清理旧目录
+		os.RemoveAll(inst.Path)
 		if err := downloadAppPackage(detail.DownloadURL, inst.Path); err != nil {
 			global.LOG.Warnf("[Install] download package failed: %v", err)
 		} else {
@@ -170,129 +184,182 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 		global.LOG.Infof("[Install] searching compose file, found: %s", composePath)
 	}
 
-	if data, err := os.ReadFile(composePath); err == nil {
-		var compose struct {
-			Services map[string]struct {
-				Image       string      `yaml:"image"`
-				Ports       []string    `yaml:"ports"`
-				Environment interface{} `yaml:"environment"`
-				Volumes     []string    `yaml:"volumes"`
-				Networks    interface{} `yaml:"networks"`
-			} `yaml:"services"`
-		}
-		if err := yaml.Unmarshal(data, &compose); err != nil {
-			global.LOG.Warnf("[Install] unmarshal compose failed: %v", err)
-		} else {
-			composeDir := filepath.Dir(composePath)
+	if composePath != "" {
+		if data, err := os.ReadFile(composePath); err == nil {
+			var compose struct {
+				Services map[string]struct {
+					Image       string      `yaml:"image"`
+					Ports       []string    `yaml:"ports"`
+					Environment interface{} `yaml:"environment"`
+					Volumes     []string    `yaml:"volumes"`
+					Command     interface{} `yaml:"command"`
+					Networks    interface{} `yaml:"networks"`
+					Restart     string      `yaml:"restart"`
+				} `yaml:"services"`
+			}
+			if err := yaml.Unmarshal(data, &compose); err != nil {
+				global.LOG.Warnf("[Install] unmarshal compose failed: %v", err)
+			} else {
+				composeDir := filepath.Dir(composePath)
 
-			// 构建环境变量表：data.yml 默认值 > .env > data.json > 扫描文件
-			envMap := make(map[string]string)
-			for k, v := range parseDataYML(composeDir) {
-				envMap[k] = v
-			}
-			for k, v := range parseDotFile(composeDir) {
-				envMap[k] = v
-			}
-			for k, v := range scanAllEnvFiles(composeDir) {
-				if _, exists := envMap[k]; !exists {
+				// 构建环境变量表：data.yml 默认值 > .env > data.json > 扫描文件
+				envMap := make(map[string]string)
+				for k, v := range parseDataYML(composeDir) {
 					envMap[k] = v
 				}
-			}
-			dataJSONImage := parseDataJSON(composeDir)
-			if dataJSONImage != "" {
-				envMap["IMAGE_NAME"] = dataJSONImage
-			}
-			// 注入容器名变量
-			envMap["CONTAINER_NAME"] = instName
+				for k, v := range parseDotFile(composeDir) {
+					envMap[k] = v
+				}
+				for k, v := range scanAllEnvFiles(composeDir) {
+					if _, exists := envMap[k]; !exists {
+						envMap[k] = v
+					}
+				}
+				dataJSONImage := parseDataJSON(composeDir)
+				if dataJSONImage != "" {
+					envMap["IMAGE_NAME"] = dataJSONImage
+				}
 
-			// 合并 detail.Params 中的 formFields 默认值（用户输入稍后覆盖）
-			if detail != nil && detail.Params != "" {
-				var fields []panelFormField
-				if err := json.Unmarshal([]byte(detail.Params), &fields); err == nil {
-					for _, f := range fields {
-						if f.EnvKey == "" {
-							continue
-						}
-						if _, exists := envMap[f.EnvKey]; !exists {
-							if f.Default != nil {
-								envMap[f.EnvKey] = fmt.Sprintf("%v", f.Default)
-							} else {
-								envMap[f.EnvKey] = ""
+				// 注入默认环境变量
+				envMap["CONTAINER_NAME"] = containerName
+				envMap["INSTALL_DIR"] = inst.Path
+
+				// 自动分配端口给 PANEL_APP_PORT 变量
+				for k := range envMap {
+					if strings.HasPrefix(k, "PANEL_APP_PORT") {
+						if envMap[k] == "" || strings.Contains(envMap[k], "$") {
+							port, err := getAvailablePort()
+							if err == nil {
+								envMap[k] = strconv.Itoa(port)
+								global.LOG.Infof("[Install] auto allocated port for %s: %d", k, port)
 							}
-							global.LOG.Infof("[Install] formField default: %s=%s", f.EnvKey, envMap[f.EnvKey])
 						}
 					}
-					global.LOG.Infof("[Install] detail params loaded count=%d", len(fields))
-				} else {
-					global.LOG.Warnf("[Install] unmarshal detail params failed: %v", err)
 				}
-			}
 
-			global.LOG.Infof("[Install] env sources: dataYML=%v dotEnv=%d dataJSON=%s scanEnv prepared", envMap, len(parseDotFile(composeDir)), dataJSONImage)
-
-			for _, svc := range compose.Services {
-				// 解析 image
-				if svc.Image != "" {
-					resolved := resolveEnvVars(svc.Image, envMap)
-					if resolved != "" && !strings.Contains(resolved, "$") {
-						image = resolved
-						inst.Image = image
-						global.LOG.Infof("[Install] resolved image: %s", image)
-					} else if dataJSONImage != "" && !strings.Contains(dataJSONImage, "$") {
-						image = dataJSONImage
-						inst.Image = image
-						global.LOG.Infof("[Install] using data.json image: %s", image)
+				// 合并 detail.Params 中的 formFields 默认值（用户输入稍后覆盖）
+				if detail != nil && detail.Params != "" {
+					var fields []panelFormField
+					if err := json.Unmarshal([]byte(detail.Params), &fields); err == nil {
+						for _, f := range fields {
+							if f.EnvKey == "" {
+								continue
+							}
+							if _, exists := envMap[f.EnvKey]; !exists {
+								if f.Default != nil {
+									envMap[f.EnvKey] = fmt.Sprintf("%v", f.Default)
+								} else {
+									envMap[f.EnvKey] = ""
+								}
+								global.LOG.Infof("[Install] formField default: %s=%s", f.EnvKey, envMap[f.EnvKey])
+							}
+						}
+						global.LOG.Infof("[Install] detail params loaded count=%d", len(fields))
 					} else {
-						global.LOG.Warnf("[Install] image unresolved: %s", svc.Image)
+						global.LOG.Warnf("[Install] unmarshal detail params failed: %v", err)
 					}
 				}
 
-				// dockroot 不支持端口映射，仅记录日志并跳过
-				if len(svc.Ports) > 0 {
-					global.LOG.Infof("[Install] dockroot does not support port mapping, ignoring ports: %v", svc.Ports)
+				// 处理用户传入的环境变量
+				if req.Env != nil {
+					for k, v := range req.Env {
+						envMap[k] = v
+					}
 				}
 
-				// 解析 environment（支持 map 和 list 两种形式）
-				switch env := svc.Environment.(type) {
-				case map[string]interface{}:
-					for k, v := range env {
-						resolved := resolveEnvVars(fmt.Sprintf("%v", v), envMap)
-						composeEnvs = append(composeEnvs, fmt.Sprintf("%s=%s", k, resolved))
-					}
-				case []interface{}:
-					for _, item := range env {
-						s := fmt.Sprintf("%v", item)
-						if idx := strings.Index(s, "="); idx > 0 {
-							key := s[:idx]
-							val := resolveEnvVars(s[idx+1:], envMap)
-							composeEnvs = append(composeEnvs, fmt.Sprintf("%s=%s", key, val))
+				global.LOG.Infof("[Install] env prepared with %d variables", len(envMap))
+
+				for svcName, svc := range compose.Services {
+					global.LOG.Infof("[Install] processing service: %s", svcName)
+					// 解析 image
+					if svc.Image != "" {
+						resolved := resolveEnvVars(svc.Image, envMap)
+						if resolved != "" && !strings.Contains(resolved, "$") {
+							image = resolved
+							inst.Image = image
+							global.LOG.Infof("[Install] resolved image: %s", image)
+						} else if dataJSONImage != "" && !strings.Contains(dataJSONImage, "$") {
+							image = dataJSONImage
+							inst.Image = image
+							global.LOG.Infof("[Install] using data.json image: %s", image)
+						} else {
+							global.LOG.Warnf("[Install] image unresolved: %s", svc.Image)
 						}
 					}
-				}
 
-				// 解析 volumes
-				for _, v := range svc.Volumes {
-					resolved := resolveEnvVars(v, envMap)
-					parts := strings.Split(resolved, ":")
-					if len(parts) >= 2 {
-						hostPath := parts[0]
-						if !filepath.IsAbs(hostPath) {
-							// 相对路径挂载到实例目录下，保留原目录结构
-							hostPath = filepath.Join(inst.Path, filepath.Clean(hostPath))
+					// dockroot 不支持端口映射，记录日志
+					if len(svc.Ports) > 0 {
+						global.LOG.Infof("[Install] dockroot does not support port mapping, ignoring ports: %v (ports are automatically allocated in host network)", svc.Ports)
+						// 提取容器端口作为主端口
+						if inst.Port == 0 {
+							inst.Port = extractContainerPort(svc.Ports)
 						}
-						os.MkdirAll(hostPath, 0755)
-						composeVolumes = append(composeVolumes, fmt.Sprintf("%s:%s", hostPath, parts[1]))
-						global.LOG.Infof("[Install] volume: %s -> %s", parts[0], parts[1])
 					}
-				}
 
-				// 每个 service 处理一次即可（dockroot 单容器运行）
-				break
+					// 解析 environment（支持 map 和 list 两种形式）
+					switch env := svc.Environment.(type) {
+					case map[string]interface{}:
+						for k, v := range env {
+							resolved := resolveEnvVars(fmt.Sprintf("%v", v), envMap)
+							if !strings.Contains(resolved, "${") {
+								composeEnvs = append(composeEnvs, fmt.Sprintf("%s=%s", k, resolved))
+							}
+						}
+					case []interface{}:
+						for _, item := range env {
+							s := fmt.Sprintf("%v", item)
+							if idx := strings.Index(s, "="); idx > 0 {
+								key := s[:idx]
+								val := resolveEnvVars(s[idx+1:], envMap)
+								if !strings.Contains(val, "${") {
+									composeEnvs = append(composeEnvs, fmt.Sprintf("%s=%s", key, val))
+								}
+							}
+						}
+					}
+
+					// 解析 volumes
+					for _, v := range svc.Volumes {
+						resolved := resolveEnvVars(v, envMap)
+						parts := strings.Split(resolved, ":")
+						if len(parts) >= 2 {
+							hostPath := parts[0]
+							if !filepath.IsAbs(hostPath) {
+								// 相对路径挂载到实例目录下，保留原目录结构
+								hostPath = filepath.Join(inst.Path, filepath.Clean(hostPath))
+							}
+							os.MkdirAll(hostPath, 0755)
+							composeVolumes = append(composeVolumes, fmt.Sprintf("%s:%s", hostPath, parts[1]))
+							global.LOG.Infof("[Install] volume: %s -> %s", hostPath, parts[1])
+						}
+					}
+
+					// 解析 command
+					switch cmd := svc.Command.(type) {
+					case string:
+						if cmd != "" {
+							resolved := resolveEnvVars(cmd, envMap)
+							composeCommand = strings.Fields(resolved)
+							global.LOG.Infof("[Install] command: %s", resolved)
+						}
+					case []interface{}:
+						for _, item := range cmd {
+							s := resolveEnvVars(fmt.Sprintf("%v", item), envMap)
+							composeCommand = append(composeCommand, s)
+						}
+						global.LOG.Infof("[Install] command: %v", composeCommand)
+					}
+
+					// 每个 service 处理一次即可（dockroot 单容器运行，取第一个服务）
+					break
+				}
+				global.LOG.Infof("[Install] compose parsed image=%s envs=%d volumes=%d command=%v", image, len(composeEnvs), len(composeVolumes), composeCommand)
 			}
-			global.LOG.Infof("[Install] compose parsed image=%s envs=%d volumes=%d", image, len(composeEnvs), len(composeVolumes))
+		} else {
+			global.LOG.Infof("[Install] failed to read compose file: %v", err)
 		}
 	} else {
-		global.LOG.Infof("[Install] no docker-compose.yml found at %s", composePath)
+		global.LOG.Infof("[Install] no docker-compose.yml found")
 	}
 
 	var envs []string
@@ -301,7 +368,7 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 		if idx := strings.Index(e, "="); idx >= 0 {
 			key := e[:idx]
 			val := e[idx+1:]
-			if strings.Contains(val, "${") || (strings.Contains(val, "$") && strings.IndexByte(val, '$') == 0) {
+			if strings.Contains(val, "${") || (strings.Contains(val, "$") && len(val) > 1 && val[0] == '$') {
 				global.LOG.Infof("[Install] skip env with unresolved var: %s", e)
 				continue
 			}
@@ -354,7 +421,9 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 		global.LOG.Infof("[Install] user volumes count=%d", len(req.Volumes))
 	}
 
-	global.LOG.Infof("[Install] final params image=%s container=%s envs=%d volumes=%d", image, instName, len(envs), len(volumes))
+	// 规范化镜像名
+	image = dockroot.NormalizeImageRef(image)
+	global.LOG.Infof("[Install] final params image=%s container=%s envs=%d volumes=%d", image, containerName, len(envs), len(volumes))
 
 	if image == "" {
 		global.LOG.Errorf("[Install] image is empty after parsing compose")
@@ -366,35 +435,37 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 	if strings.Contains(image, "$") {
 		global.LOG.Errorf("[Install] image contains unresolved variables: %s", image)
 		inst.Status = "failed"
-		inst.Message = fmt.Sprintf("镜像名包含未解析的变量: %s，该应用可能需要在 1Panel 中安装", image)
+		inst.Message = fmt.Sprintf("镜像名包含未解析的变量: %s", image)
 		s.instRepo.Update(inst)
 		return inst, fmt.Errorf("image contains unresolved variables: %s", image)
 	}
 
 	if s.ctnService.IsAvailable() {
-		global.LOG.Infof("[Install] pulling image %s for container %s ...", image, instName)
-		pullOut, err := s.ctnService.client.Pull(image, instName)
+		// 先清理已存在的同名容器
+		global.LOG.Infof("[Install] cleaning up existing container %s", containerName)
+		_ = s.ctnService.client.Rm(containerName)
+
+		global.LOG.Infof("[Install] pulling image %s for container %s ...", image, containerName)
+		pullOut, err := s.ctnService.client.Pull(image, containerName)
 		if err != nil {
-			global.LOG.Errorf("[Install] pull image failed: %v, output length=%d", err, len(pullOut))
+			global.LOG.Errorf("[Install] pull image failed: %v, output: %s", err, pullOut)
 			inst.Status = "failed"
-			inst.Message = fmt.Sprintf("拉取镜像失败: %v\n%s", err, pullOut)
+			inst.Message = fmt.Sprintf("拉取镜像失败: %v\n%s", err, truncateOutput(pullOut))
 			s.instRepo.Update(inst)
 			return inst, fmt.Errorf("pull image: %w", err)
 		}
-		global.LOG.Infof("[Install] pull image success, output length=%d", len(pullOut))
+		global.LOG.Infof("[Install] pull image success")
 
-		global.LOG.Infof("[Install] running container %s with envs=%d volumes=%d ...", instName, len(envs), len(volumes))
-		global.LOG.Infof("[Install] envs=%v", envs)
-		global.LOG.Infof("[Install] volumes=%v", volumes)
-		runOut, err := s.ctnService.client.Run(instName, true, envs, volumes)
+		global.LOG.Infof("[Install] running container %s ...", containerName)
+		runOut, err := s.ctnService.client.RunWithCommand(containerName, true, envs, volumes, composeCommand)
 		if err != nil {
-			global.LOG.Errorf("[Install] run container failed: %v, output length=%d", err, len(runOut))
+			global.LOG.Errorf("[Install] run container failed: %v, output: %s", err, runOut)
 			inst.Status = "failed"
-			inst.Message = fmt.Sprintf("启动容器失败: %v\n%s", err, runOut)
+			inst.Message = fmt.Sprintf("启动容器失败: %v\n%s", err, truncateOutput(runOut))
 			s.instRepo.Update(inst)
 			return inst, fmt.Errorf("run container: %w", err)
 		}
-		global.LOG.Infof("[Install] run container success, output length=%d", len(runOut))
+		global.LOG.Infof("[Install] run container success")
 	} else {
 		global.LOG.Errorf("[Install] dockroot not available")
 		inst.Status = "not_supported"
@@ -404,9 +475,36 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 	}
 
 	inst.Status = "running"
-	s.instRepo.Update(inst)
+	if err := s.instRepo.Update(inst); err != nil {
+		global.LOG.Errorf("[Install] update install status failed: %v", err)
+	}
 	global.LOG.Infof("[Install] install success id=%d status=running", inst.ID)
 	return inst, nil
+}
+
+func truncateOutput(s string) string {
+	if len(s) > 2000 {
+		return s[:2000] + "\n... (truncated)"
+	}
+	return s
+}
+
+func getAvailablePort() (int, error) {
+	// 尝试从 10000 以上找可用端口
+	for port := 10000 + rand.Intn(10000); port < 65535; port++ {
+		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		if err == nil {
+			ln.Close()
+			return port, nil
+		}
+	}
+	// 随机找一个
+	ln, err := net.Listen("tcp", ":0")
+	if err != nil {
+		return 0, err
+	}
+	defer ln.Close()
+	return ln.Addr().(*net.TCPAddr).Port, nil
 }
 
 func (s *AppService) Uninstall(id uint) error {
