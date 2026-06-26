@@ -2,7 +2,10 @@ package api
 
 import (
 	"net/http"
+	"net/url"
+	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/minipanel/minipanel/internal/dto"
@@ -103,11 +106,29 @@ func (a *FileAPI) Upload(c *gin.Context) {
 
 func (a *FileAPI) Download(c *gin.Context) {
 	path := c.Query("path")
-	data, err := a.service.GetContent(path)
+	resolvedPath, err := a.service.ResolvePath(path)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
-	c.Header("Content-Disposition", "attachment; filename="+filepath.Base(path))
-	c.Data(http.StatusOK, "application/octet-stream", data)
+	file, err := os.Open(resolvedPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		return
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		return
+	}
+	if info.IsDir() {
+		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "不能下载目录"})
+		return
+	}
+
+	c.Header("Content-Disposition", "attachment; filename*=utf-8''"+url.PathEscape(info.Name()))
+	c.Header("Content-Length", strconv.FormatInt(info.Size(), 10))
+	http.ServeContent(c.Writer, c.Request, info.Name(), info.ModTime(), file)
 }

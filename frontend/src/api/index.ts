@@ -16,6 +16,9 @@ api.interceptors.request.use((config) => {
 
 api.interceptors.response.use(
   (res) => {
+    if (res.config.responseType === 'blob') {
+      return res
+    }
     if (res.data.code !== 200) {
       ElMessage.error(res.data.message || '请求失败')
       return Promise.reject(new Error(res.data.message || '请求失败'))
@@ -53,10 +56,13 @@ export const fileApi = {
   create: (data: any) => api.post('/files', data),
   update: (data: any) => api.put('/files', data),
   delete: (path: string) => api.delete('/files', { data: { path } }),
-  upload: (path: string, file: File) => {
+  upload: (data: FormData | string, file?: File) => {
+    if (data instanceof FormData) {
+      return api.post('/files/upload', data)
+    }
     const form = new FormData()
-    form.append('path', path)
-    form.append('file', file)
+    form.append('path', data)
+    form.append('file', file!)
     return api.post('/files/upload', form)
   },
   download: (path: string) => api.get('/files/download', { params: { path }, responseType: 'blob' })

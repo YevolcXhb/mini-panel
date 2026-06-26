@@ -47,6 +47,10 @@ func (s *FileService) resolvePath(path string) (string, error) {
 	return absPath, nil
 }
 
+func (s *FileService) ResolvePath(path string) (string, error) {
+	return s.resolvePath(path)
+}
+
 func (s *FileService) List(path string) ([]FileInfo, error) {
 	fullPath, err := s.resolvePath(path)
 	if err != nil {
