@@ -5,14 +5,52 @@
       <div class="login-logo">🍔</div>
       <h1 class="login-title">MiniPanel</h1>
       <p class="login-subtitle">服务器管理面板</p>
-      <form @submit.prevent="handleLogin">
+      <form @submit.prevent="handleLogin" autocomplete="off">
         <div class="input-group">
           <label>用户名</label>
-          <el-input v-model="form.username" placeholder="输入用户名" :prefix-icon="User" size="large" />
+          <el-input
+            v-model="form.username"
+            placeholder="输入用户名"
+            :prefix-icon="User"
+            size="large"
+            name="username"
+            autocomplete="off"
+            readonly
+            @focus="removeReadonly($event, 'username')"
+          />
         </div>
         <div class="input-group">
           <label>密码</label>
-          <el-input v-model="form.password" type="password" placeholder="输入密码" :prefix-icon="Lock" size="large" @keyup.enter="handleLogin" />
+          <el-input
+            v-model="form.password"
+            type="password"
+            placeholder="输入密码"
+            :prefix-icon="Lock"
+            size="large"
+            name="password"
+            autocomplete="new-password"
+            readonly
+            @focus="removeReadonly($event, 'password')"
+            @keyup.enter="handleLogin"
+          />
+        </div>
+        <div v-if="showCaptcha" class="input-group">
+          <label>验证码</label>
+          <div class="captcha-row">
+            <el-input
+              v-model="form.captcha"
+              placeholder="输入验证码"
+              size="large"
+              autocomplete="off"
+              style="flex:1"
+            />
+            <img
+              :src="captchaImg"
+              class="captcha-img"
+              @click="loadCaptcha"
+              title="点击刷新验证码"
+            />
+          </div>
         </div>
         <div v-if="error" class="login-error">{{ error }}</div>
         <el-button type="primary" :loading="loading" @click="handleLogin" class="btn-block" size="large">登 录</el-button>
@@ -22,7 +60,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { User, Lock } from '@element-plus/icons-vue'
 import { useAuthStore } from '../store'
@@ -32,26 +70,72 @@ const router = useRouter()
 const auth = useAuthStore()
 const loading = ref(false)
 const error = ref('')
+const showCaptcha = ref(false)
+const captchaImg = ref('')
+const captchaID = ref('')
 
-const form = reactive({ username: 'admin', password: 'admin123' })
+const form = reactive({ username: '', password: '', captcha: '' })
+
+function removeReadonly(e: FocusEvent, field: string) {
+  const target = e.target as HTMLInputElement
+  target.removeAttribute('readonly')
+  target.focus()
+}
+
+async function loadCaptcha() {
+  try {
+    const res: any = await authApi.captcha()
+    captchaImg.value = 'data:image/png;base64,' + res.data.image
+    captchaID.value = res.data.captcha_id
+    showCaptcha.value = true
+  } catch {
+    // 验证码接口不可用时静默处理
+  }
+}
 
 async function handleLogin() {
   if (!form.username || !form.password) {
     error.value = '请输入用户名和密码'
     return
   }
+  if (showCaptcha.value && !form.captcha) {
+    error.value = '请输入验证码'
+    return
+  }
   error.value = ''
   loading.value = true
   try {
-    const res: any = await authApi.login(form)
+    const res: any = await authApi.login({
+      username: form.username,
+      password: form.password,
+      captcha: form.captcha,
+      captcha_id: captchaID.value
+    })
     auth.setAuth(res.data.token, res.data.username)
     router.push('/')
   } catch (e: any) {
-    error.value = e?.response?.data?.message || '登录失败'
+    const msg = e?.response?.data?.message || e?.message || '登录失败'
+    error.value = msg
+    // 失败后可能需要验证码
+    if (!showCaptcha.value) {
+      loadCaptcha()
+    } else {
+      loadCaptcha()
+    }
+    form.captcha = ''
   } finally {
     loading.value = false
   }
 }
+
+onMounted(() => {
+  loadCaptcha()
+  // 清除浏览器可能记住的密码
+  setTimeout(() => {
+    form.password = ''
+    form.username = ''
+  }, 100)
+})
 </script>
 
 <style scoped>
@@ -103,6 +187,18 @@ async function handleLogin() {
   color: var(--dim);
   margin-bottom: 6px;
   font-weight: 500;
+}
+.captcha-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.captcha-img {
+  height: 40px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid var(--bdr);
+  background: #fff;
 }
 .login-error {
   color: var(--red);

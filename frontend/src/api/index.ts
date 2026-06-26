@@ -2,6 +2,13 @@ import axios from 'axios'
 import { useAuthStore } from '../store'
 import { ElMessage } from 'element-plus'
 
+function getCookie(name: string): string {
+  const value = `; ${document.cookie}`
+  const parts = value.split(`; ${name}=`)
+  if (parts.length === 2) return parts.pop()?.split(';').shift() || ''
+  return ''
+}
+
 const api = axios.create({
   baseURL: '/api/v1'
 })
@@ -10,6 +17,10 @@ api.interceptors.request.use((config) => {
   const auth = useAuthStore()
   if (auth.token) {
     config.headers.Authorization = `Bearer ${auth.token}`
+  }
+  const entrance = getCookie('SecurityEntrance')
+  if (entrance) {
+    config.headers.EntranceCode = entrance
   }
   return config
 })
@@ -42,7 +53,8 @@ export default api
 
 export const authApi = {
   login: (data: any) => api.post('/login', data),
-  logout: () => api.post('/logout')
+  logout: () => api.post('/logout'),
+  captcha: () => api.get('/captcha')
 }
 
 export const dashboardApi = {

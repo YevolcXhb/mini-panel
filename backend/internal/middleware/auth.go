@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/minipanel/minipanel/internal/dto"
 	"github.com/minipanel/minipanel/internal/global"
 	"github.com/minipanel/minipanel/internal/repository"
 )
@@ -16,6 +17,19 @@ func SecurityEntranceMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
 		if strings.HasPrefix(path, "/api/") {
+			// 登录接口也需要校验安全入口
+			if path == "/api/v1/login" || path == "/api/v1/captcha" {
+				entrance := getSecurityEntrance()
+				if entrance != "" {
+					entranceCode := c.GetHeader("EntranceCode")
+					decoded, err := base64.StdEncoding.DecodeString(entranceCode)
+					if err != nil || string(decoded) != entrance {
+						c.JSON(http.StatusNotFound, dto.Response{Code: 404, Message: "not found"})
+						c.Abort()
+						return
+					}
+				}
+			}
 			c.Next()
 			return
 		}

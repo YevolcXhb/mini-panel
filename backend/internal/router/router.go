@@ -13,6 +13,8 @@ func NewRouter() *gin.Engine {
 	r.Use(middleware.LoggerMiddleware())
 	r.Use(gin.Recovery())
 	r.Use(middleware.CORSMiddleware())
+	r.Use(middleware.BindDomainMiddleware())
+	r.Use(middleware.AllowIPsMiddleware())
 	r.Use(middleware.SecurityEntranceMiddleware())
 
 	if _, err := os.Stat("static/index.html"); err == nil {
@@ -29,6 +31,7 @@ func NewRouter() *gin.Engine {
 	{
 		authGroup.POST("/login", auth.Login)
 		authGroup.POST("/logout", auth.Logout)
+		authGroup.GET("/captcha", auth.Captcha)
 
 		ver := api.NewVersionAPI()
 		authGroup.GET("/version", ver.Get)
