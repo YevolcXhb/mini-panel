@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
@@ -320,6 +319,19 @@ func (s *WebsiteService) scanNginxWebsites() []model.Website {
 	var sites []model.Website
 	seen := make(map[string]bool)
 
+	// 优先通过 nginx -T 拿到合并后的完整配置（包含所有 include 的文件）
+	if mergedSites := s.parseNginxMergedConfig(); len(mergedSites) > 0 {
+		for _, site := range mergedSites {
+			key := fmt.Sprintf("%s:%d", site.Domain, site.Port)
+			if !seen[key] {
+				sites = append(sites, site)
+				seen[key] = true
+			}
+		}
+		return sites
+	}
+
+	// 退路：直接遍历常见配置目录
 	configDirs := []string{
 		"/etc/nginx/conf.d",
 		"/etc/nginx/sites-enabled",
@@ -367,146 +379,317 @@ func (s *WebsiteService) scanNginxWebsites() []model.Website {
 	return sites
 }
 
+// parseNginxMergedConfig 通过 nginx -T 获取合并后的完整配置并解析
+func (s *WebsiteService) parseNginxMergedConfig() []model.Website {
+	if !syscmd.Which("nginx") {
+		return nil
+	}
+	output, err := exec.Command("nginx", "-T").CombinedOutput()
+	if err != nil {
+		return nil
+	}
+	content := string(output)
+	if len(strings.TrimSpace(content)) == 0 {
+		return nil
+	}
+
+	// 优先用 # configuration file 注释拆分（nginx -T 自带标记）
+	parts := expandNginxMergedConfig(content)
+	if len(parts) > 1 {
+		var sites []model.Website
+		seen := make(map[string]bool)
+		for file, body := range parts {
+			if file == "__main__" {
+				continue
+			}
+			fileSites := s.parseNginxConfigContent(body, file)
+			for _, site := range fileSites {
+				key := fmt.Sprintf("%s:%d", site.Domain, site.Port)
+				if !seen[key] {
+					sites = append(sites, site)
+					seen[key] = true
+				}
+			}
+		}
+		if len(sites) > 0 {
+			return sites
+		}
+	}
+	// 回退：当作单一文件解析
+	return s.parseNginxConfigContent(content, "")
+}
+
 // parseNginxConfig 解析nginx配置文件，提取所有server块信息
 func (s *WebsiteService) parseNginxConfig(configPath string) []model.Website {
-	var sites []model.Website
-	file, err := os.Open(configPath)
+	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return sites
+		return nil
 	}
-	defer file.Close()
+	fileName := filepath.Base(configPath)
+	fileName = strings.TrimSuffix(fileName, ".conf")
+	return s.parseNginxConfigContent(string(data), fileName)
+}
 
-	configFileName := filepath.Base(configPath)
-	configFileName = strings.TrimSuffix(configFileName, ".conf")
+// parseNginxConfigContent 解析nginx配置内容，使用栈跟踪 server 块和 include 上下文
+func (s *WebsiteService) parseNginxConfigContent(content string, defaultName string) []model.Website {
+	var sites []model.Website
 
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	// 先去掉注释
+	noComments := stripNginxComments(content)
 
-	var (
-		inServerBlock bool
-		braceDepth    int
-		serverName    string
-		listenPorts   []int
-		rootDir       string
-		proxyPass     string
-		hasSSL        bool
-	)
+	blocks := extractServerBlocks(noComments, defaultName)
 
-	commentRe := regexp.MustCompile(`#.*$`)
-	serverNameRe := regexp.MustCompile(`server_name\s+([^;]+);`)
-	listenRe := regexp.MustCompile(`listen\s+(\d+)(.*);`)
-	rootRe := regexp.MustCompile(`root\s+([^;]+);`)
-	proxyPassRe := regexp.MustCompile(`proxy_pass\s+([^;]+);`)
+	for _, b := range blocks {
+		site := extractSiteFromServerBlock(noComments[b.start:b.end], b.filename, defaultName)
+		if site != nil {
+			sites = append(sites, *site)
+		}
+	}
+	return sites
+}
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		line = commentRe.ReplaceAllString(line, "")
-		line = strings.TrimSpace(line)
-
-		if line == "" {
+// expandNginxMergedConfig 将 nginx -T 输出按 # configuration file 注释拆分，
+// 解决嵌套 include 中 server 块归属问题
+func expandNginxMergedConfig(content string) map[string]string {
+	result := make(map[string]string)
+	lines := strings.Split(content, "\n")
+	confRe := regexp.MustCompile(`^#\s*configuration file\s+(\S+):`)
+	var currentFile string
+	var sb strings.Builder
+	flush := func() {
+		if currentFile != "" {
+			result[currentFile] = sb.String()
+		} else {
+			result["__main__"] = sb.String()
+		}
+		sb.Reset()
+	}
+	for _, line := range lines {
+		if m := confRe.FindStringSubmatch(line); len(m) >= 2 {
+			flush()
+			currentFile = m[1]
 			continue
 		}
+		sb.WriteString(line)
+		sb.WriteString("\n")
+	}
+	flush()
+	return result
+}
 
-		if !inServerBlock {
-			if strings.Contains(line, "server") && strings.Contains(line, "{") {
-				inServerBlock = true
-				braceDepth = strings.Count(line, "{") - strings.Count(line, "}")
-				serverName = ""
-				listenPorts = nil
-				rootDir = ""
-				proxyPass = ""
-				hasSSL = false
+// stripNginxComments 去掉 # 后的行尾注释（保留引号内的 #）
+func stripNginxComments(s string) string {
+	var sb strings.Builder
+	sb.Grow(len(s))
+	inSingle := false
+	inDouble := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '\\' && i+1 < len(s) {
+			sb.WriteByte(c)
+			sb.WriteByte(s[i+1])
+			i++
+			continue
+		}
+		if c == '\'' && !inDouble {
+			inSingle = !inSingle
+			sb.WriteByte(c)
+			continue
+		}
+		if c == '"' && !inSingle {
+			inDouble = !inDouble
+			sb.WriteByte(c)
+			continue
+		}
+		if c == '#' && !inSingle && !inDouble {
+			// 跳过到行尾
+			for i < len(s) && s[i] != '\n' {
+				i++
+			}
+			if i < len(s) {
+				sb.WriteByte('\n')
 			}
 			continue
 		}
+		sb.WriteByte(c)
+	}
+	return sb.String()
+}
 
-		braceDepth += strings.Count(line, "{") - strings.Count(line, "}")
-
-		if matches := serverNameRe.FindStringSubmatch(line); len(matches) >= 2 {
-			names := strings.Fields(matches[1])
-			for _, name := range names {
-				name = strings.TrimSpace(name)
-				if name != "" && name != "_" && !strings.HasPrefix(name, "*.") && !strings.HasPrefix(name, "~") {
-					serverName = name
-					break
+// extractServerBlocks 提取所有 server { ... } 块的位置
+func extractServerBlocks(content string, defaultFile string) []struct {
+	start, end int
+	filename   string
+} {
+	var result []struct {
+		start, end int
+		filename   string
+	}
+	serverRe := regexp.MustCompile(`(?is)server\s*\{`)
+	locs := serverRe.FindAllStringIndex(content, -1)
+	for _, loc := range locs {
+		openIdx := loc[1] - 1
+		depth := 1
+		pos := openIdx + 1
+		inSingle := false
+		inDouble := false
+		for pos < len(content) {
+			c := content[pos]
+			if c == '\\' && pos+1 < len(content) {
+				pos += 2
+				continue
+			}
+			if c == '\'' && !inDouble {
+				inSingle = !inSingle
+			} else if c == '"' && !inSingle {
+				inDouble = !inDouble
+			} else if !inSingle && !inDouble {
+				if c == '{' {
+					depth++
+				} else if c == '}' {
+					depth--
+					if depth == 0 {
+						result = append(result, struct {
+							start, end int
+							filename   string
+						}{start: loc[0], end: pos + 1, filename: defaultFile})
+						break
+					}
 				}
 			}
-			if serverName == "" && len(names) > 0 {
-				first := strings.TrimSpace(names[0])
-				if first != "_" {
-					serverName = first
-				}
+			pos++
+		}
+	}
+	return result
+}
+
+// extractSiteFromServerBlock 从 server 块内容中提取 site 信息
+func extractSiteFromServerBlock(block, fileName, defaultName string) *model.Website {
+	if fileName == "" {
+		fileName = defaultName
+		if fileName == "nginx" {
+			fileName = "default"
+		}
+	}
+	if fileName == "" {
+		fileName = "default"
+	}
+
+	// 收集 server_name
+	serverName := ""
+	serverNameRe := regexp.MustCompile(`(?m)server_name\s+([^;]+);`)
+	if m := serverNameRe.FindStringSubmatch(block); len(m) >= 2 {
+		names := strings.Fields(m[1])
+		for _, name := range names {
+			name = strings.TrimSpace(name)
+			if name != "" && name != "_" && !strings.HasPrefix(name, "*.") && !strings.HasPrefix(name, "~") {
+				serverName = name
+				break
 			}
 		}
-
-		if matches := listenRe.FindStringSubmatch(line); len(matches) >= 2 {
-			portStr := strings.TrimSpace(matches[1])
-			port, err := strconv.Atoi(portStr)
-			if err == nil {
-				listenPorts = append(listenPorts, port)
+		if serverName == "" && len(names) > 0 {
+			first := strings.TrimSpace(names[0])
+			if first != "_" {
+				serverName = first
 			}
-			if strings.Contains(matches[2], "ssl") {
+		}
+	}
+
+	// 收集 listen 端口
+	var listenPorts []int
+	hasSSL := false
+	listenRe := regexp.MustCompile(`(?m)listen\s+([^;]+);`)
+	listenMatches := listenRe.FindAllStringSubmatch(block, -1)
+	for _, m := range listenMatches {
+		if len(m) < 2 {
+			continue
+		}
+		args := strings.Fields(m[1])
+		port := 0
+		defaultPort := false
+		ssl := false
+		for _, a := range args {
+			if a == "default_server" {
+				defaultPort = true
+			}
+			if a == "ssl" {
+				ssl = true
+			}
+			if p, err := strconv.Atoi(a); err == nil {
+				port = p
+			}
+		}
+		if port == 0 && defaultPort {
+			port = 80
+		}
+		if port > 0 {
+			listenPorts = append(listenPorts, port)
+			if ssl {
 				hasSSL = true
 			}
 		}
+	}
+	if len(listenPorts) == 0 {
+		// 没有 listen 指令的 server 块跳过
+		return nil
+	}
 
-		if matches := rootRe.FindStringSubmatch(line); len(matches) >= 2 {
-			rootDir = strings.TrimSpace(matches[1])
+	// root
+	rootDir := ""
+	if m := regexp.MustCompile(`(?m)root\s+([^;]+);`).FindStringSubmatch(block); len(m) >= 2 {
+		rootDir = strings.TrimSpace(m[1])
+	}
+
+	// proxy_pass
+	proxyPass := ""
+	if m := regexp.MustCompile(`(?m)proxy_pass\s+([^;]+);`).FindStringSubmatch(block); len(m) >= 2 {
+		proxyPass = strings.TrimSpace(m[1])
+	}
+
+	if serverName == "" || serverName == "_" {
+		serverName = fileName
+		if serverName == "nginx" {
+			serverName = "default"
 		}
+	}
+	if serverName == "" {
+		serverName = "default"
+	}
 
-		if matches := proxyPassRe.FindStringSubmatch(line); len(matches) >= 2 {
-			proxyPass = strings.TrimSpace(matches[1])
-		}
-
-		if braceDepth <= 0 {
-			inServerBlock = false
-
-			if len(listenPorts) > 0 {
-				if serverName == "" || serverName == "_" {
-					serverName = configFileName
-					if serverName == "nginx" {
-						serverName = "default"
-					}
-				}
-
-				port := listenPorts[0]
-				if hasSSL && len(listenPorts) > 1 {
-					for _, p := range listenPorts {
-						if p != 443 {
-							port = p
-							break
-						}
-					}
-				}
-
-				siteType := "static"
-				if proxyPass != "" {
-					siteType = "proxy"
-				}
-
-				name := serverName
-				if serverName == "default" {
-					name = "默认站点"
-				}
-
-				sites = append(sites, model.Website{
-					Name:        name,
-					Domain:      serverName,
-					Port:        port,
-					Root:        rootDir,
-					Type:        siteType,
-					ProxyTarget: proxyPass,
-					SSL:         hasSSL,
-					Enabled:     true,
-					Managed:     false,
-					ConfigFile:  configPath,
-					Remark:      "检测到外部创建的网站",
-				})
+	port := listenPorts[0]
+	// 如果同时有 80 和 443，优先 80
+	if hasSSL {
+		for _, p := range listenPorts {
+			if p == 80 || p == 8080 {
+				port = p
+				break
 			}
 		}
 	}
 
-	return sites
+	siteType := "static"
+	if proxyPass != "" {
+		siteType = "proxy"
+	}
+
+	name := serverName
+	if serverName == "default" {
+		name = "默认站点"
+	}
+
+	return &model.Website{
+		Name:        name,
+		Domain:      serverName,
+		Port:        port,
+		Root:        rootDir,
+		Type:        siteType,
+		ProxyTarget: proxyPass,
+		SSL:         hasSSL,
+		Enabled:     true,
+		Managed:     false,
+		ConfigFile:  fileName,
+		Remark:      "检测到外部创建的网站",
+	}
 }
 
 func testWritable(dir string) bool {
