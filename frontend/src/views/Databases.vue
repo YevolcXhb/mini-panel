@@ -304,6 +304,7 @@ async function handleDelete(id: number) {
 async function testConnection(row: any) {
   try {
     const res: any = await databaseApi.test({
+      type: row.type || 'mysql',
       host: row.host,
       port: row.port,
       username: row.username,

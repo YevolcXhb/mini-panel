@@ -302,6 +302,10 @@ func StopService(name string) error {
 	if cmd.Which("systemctl") {
 		for _, svc := range getServiceNames(name) {
 			exec.Command("systemctl", "stop", svc).Run()
+			time.Sleep(500 * time.Millisecond)
+			if !checkServiceRunning(name) {
+				return nil
+			}
 		}
 	}
 
@@ -309,12 +313,20 @@ func StopService(name string) error {
 	if cmd.Which("service") {
 		for _, svc := range getServiceNames(name) {
 			exec.Command("service", svc, "stop").Run()
+			time.Sleep(500 * time.Millisecond)
+			if !checkServiceRunning(name) {
+				return nil
+			}
 		}
 	}
 
-	// 最后直接杀死进程
+	// 直接杀死进程
 	directStopService(name)
-	return nil
+	time.Sleep(1 * time.Second)
+	if !checkServiceRunning(name) {
+		return nil
+	}
+	return fmt.Errorf("停止服务失败: 进程 %s 仍在运行，请检查服务状态", name)
 }
 
 func directStopService(name string) {

@@ -29,6 +29,12 @@ func (r *DatabaseRepository) GetByID(id uint) (*model.DatabaseInstance, error) {
 	return &item, err
 }
 
+func (r *DatabaseRepository) GetByName(name string) (*model.DatabaseInstance, error) {
+	var item model.DatabaseInstance
+	err := r.db.Where("name = ?", name).First(&item).Error
+	return &item, err
+}
+
 func (r *DatabaseRepository) Update(item *model.DatabaseInstance) error {
 	return r.db.Save(item).Error
 }

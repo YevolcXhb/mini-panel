@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -31,6 +32,11 @@ func (s *DatabaseService) Create(item *model.DatabaseInstance) error {
 	if item.Type == "" {
 		item.Type = "mysql"
 	}
+	// 检查重名
+	existing, _ := s.repo.GetByName(item.Name)
+	if existing != nil {
+		return fmt.Errorf("数据库实例名称 '%s' 已存在", item.Name)
+	}
 	return s.repo.Create(item)
 }
 
@@ -56,13 +62,19 @@ func (s *DatabaseService) getMysqlArgs(item *model.DatabaseInstance, dbName stri
 		fmt.Sprintf("-P%d", item.Port),
 		fmt.Sprintf("-u%s", item.Username),
 	}
-	if item.Password != "" {
-		args = append(args, fmt.Sprintf("-p%s", item.Password))
-	}
 	if dbName != "" {
 		args = append(args, dbName)
 	}
 	return args
+}
+
+// runMysqlCmd 安全执行 mysql 命令（通过环境变量传密码，避免命令行暴露）
+func (s *DatabaseService) runMysqlCmd(item *model.DatabaseInstance, args ...string) ([]byte, error) {
+	cmd := exec.Command("mysql", args...)
+	if item.Password != "" {
+		cmd.Env = append(os.Environ(), fmt.Sprintf("MYSQL_PWD=%s", item.Password))
+	}
+	return cmd.CombinedOutput()
 }
 
 func (s *DatabaseService) TestConnection(item *model.DatabaseInstance) (string, error) {
@@ -76,8 +88,7 @@ func (s *DatabaseService) TestConnection(item *model.DatabaseInstance) (string, 
 	if item.Type == "mysql" && item.Username != "" && syscmd.Which("mysql") {
 		args := s.getMysqlArgs(item, "")
 		args = append(args, "-e", "SELECT 1")
-		mysqlCmd := exec.Command("mysql", args...)
-		if out, err := mysqlCmd.CombinedOutput(); err != nil {
+		if out, err := s.runMysqlCmd(item, args...); err != nil {
 			return "", fmt.Errorf("mysql auth failed: %s: %v", string(out), err)
 		}
 		return "Connection successful", nil
@@ -95,8 +106,7 @@ func (s *DatabaseService) CreateDatabase(item *model.DatabaseInstance, dbName st
 	args := s.getMysqlArgs(item, "")
 	query := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", dbName)
 	args = append(args, "-e", query)
-	mysqlCmd := exec.Command("mysql", args...)
-	if out, err := mysqlCmd.CombinedOutput(); err != nil {
+	if out, err := s.runMysqlCmd(item, args...); err != nil {
 		return fmt.Errorf("create database failed: %s: %v", string(out), err)
 	}
 	return nil
@@ -122,8 +132,7 @@ func (s *DatabaseService) CreateUser(item *model.DatabaseInstance, username, pas
 	fullQuery := strings.Join(queries, "; ")
 	args := s.getMysqlArgs(item, "")
 	args = append(args, "-e", fullQuery)
-	mysqlCmd := exec.Command("mysql", args...)
-	if out, err := mysqlCmd.CombinedOutput(); err != nil {
+	if out, err := s.runMysqlCmd(item, args...); err != nil {
 		return fmt.Errorf("create user failed: %s: %v", string(out), err)
 	}
 	return nil
@@ -138,8 +147,7 @@ func (s *DatabaseService) ListDatabases(item *model.DatabaseInstance) ([]string,
 	}
 	args := s.getMysqlArgs(item, "")
 	args = append(args, "-N", "-e", "SHOW DATABASES")
-	mysqlCmd := exec.Command("mysql", args...)
-	out, err := mysqlCmd.CombinedOutput()
+	out, err := s.runMysqlCmd(item, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list databases failed: %s: %v", string(out), err)
 	}
@@ -163,8 +171,7 @@ func (s *DatabaseService) ListTables(item *model.DatabaseInstance) ([]string, er
 	}
 	args := s.getMysqlArgs(item, item.Database)
 	args = append(args, "-N", "-e", "SHOW TABLES")
-	mysqlCmd := exec.Command("mysql", args...)
-	out, err := mysqlCmd.CombinedOutput()
+	out, err := s.runMysqlCmd(item, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list tables failed: %s: %v", string(out), err)
 	}
@@ -180,8 +187,17 @@ func (s *DatabaseService) ListTables(item *model.DatabaseInstance) ([]string, er
 }
 
 func (s *DatabaseService) ChangePassword(item *model.DatabaseInstance, newPassword string) error {
+	if item.Type != "mysql" {
+		return fmt.Errorf("only mysql password change is supported currently")
+	}
 	if !syscmd.Which("mysql") {
 		return fmt.Errorf("mysql client not found")
+	}
+	args := s.getMysqlArgs(item, "")
+	query := fmt.Sprintf("ALTER USER '%s'@'%%' IDENTIFIED BY '%s'", item.Username, newPassword)
+	args = append(args, "-e", query)
+	if out, err := s.runMysqlCmd(item, args...); err != nil {
+		return fmt.Errorf("change password failed: %s: %v", string(out), err)
 	}
 	return nil
 }
