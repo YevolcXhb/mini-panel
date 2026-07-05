@@ -92,6 +92,11 @@ func (a *WebsiteAPI) Toggle(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: err.Error()})
 		return
 	}
+	// id=0 表示外部站点（未入库），需要先创建记录
+	if id == 0 {
+		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "外部站点请先在面板中编辑保存后再操作"})
+		return
+	}
 	if err := a.service.ToggleEnable(uint(id), req.Enabled); err != nil {
 		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
 		return

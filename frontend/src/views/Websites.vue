@@ -242,6 +242,13 @@ async function saveWebsite() {
 
 async function toggleWebsite(row: any) {
   try {
+    // 外部站点(id=0)先入库再切换
+    if (!row.id) {
+      await websiteApi.update(0, { ...row, managed: true })
+      ElMessage.success('站点已纳入面板管理')
+      loadWebsites()
+      return
+    }
     await websiteApi.toggle(row.id, !row.enabled)
     ElMessage.success('状态已更新')
     loadWebsites()
@@ -253,7 +260,12 @@ async function toggleWebsite(row: any) {
 async function deleteWebsite(row: any) {
   try {
     await ElMessageBox.confirm(`确定删除 ${row.name} (${row.domain}) 吗？`, '确认删除', { confirmButtonClass: 'el-button--danger' })
-    await websiteApi.delete(row.id)
+    if (row.id) {
+      await websiteApi.delete(row.id)
+    } else {
+      // 外部站点：通过 update 0 触发 removeConfig
+      await websiteApi.update(0, { ...row, enabled: false })
+    }
     ElMessage.success('删除成功')
     loadWebsites()
   } catch (e) {}

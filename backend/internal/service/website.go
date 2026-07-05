@@ -79,26 +79,36 @@ func (s *WebsiteService) List() ([]model.Website, error) {
 	// 2. 扫描nginx配置中的网站
 	scannedSites := s.scanNginxWebsites()
 
-	// 3. 合并：数据库中已有的不重复添加，扫描到的新网站自动保存到数据库
+	// 3. 合并：数据库中已有的不重复添加，新发现的外部站点也展示
 	existing := make(map[string]bool)
 	for _, site := range dbSites {
 		key := fmt.Sprintf("%s:%d", site.Domain, site.Port)
 		existing[key] = true
 	}
 
+	// 收集已存在的"启用状态"作为权威数据：DB 中有记录就以 DB 为准
+	dbByKey := make(map[string]model.Website)
+	for _, site := range dbSites {
+		key := fmt.Sprintf("%s:%d", site.Domain, site.Port)
+		dbByKey[key] = site
+	}
+
 	for _, site := range scannedSites {
 		key := fmt.Sprintf("%s:%d", site.Domain, site.Port)
 		if !existing[key] {
+			// 纯外部站点：标记 Managed=false、ID=0，只展示不持久化
 			site.Managed = false
-			// 自动保存到数据库，后续可正常编辑/启停/删除
-			if err := s.repo.Create(&site); err == nil {
-				dbSites = append(dbSites, site)
-			} else {
-				// 保存失败也显示，但操作会受限
-				global.LOG.Warnf("auto-save external site %s failed: %v", key, err)
-				dbSites = append(dbSites, site)
-			}
+			site.ID = 0
+			dbSites = append(dbSites, site)
 			existing[key] = true
+		} else {
+			// DB 中已有该域名+端口的记录，以 DB 为权威，但用扫描结果补充 ConfigFile/类型
+			if dbSite, ok := dbByKey[key]; ok {
+				if dbSite.ConfigFile == "" && site.ConfigFile != "" {
+					dbSite.ConfigFile = site.ConfigFile
+					_ = s.repo.Update(&dbSite)
+				}
+			}
 		}
 	}
 
@@ -108,7 +118,10 @@ func (s *WebsiteService) List() ([]model.Website, error) {
 func (s *WebsiteService) ToggleEnable(id uint, enabled bool) error {
 	w, err := s.repo.GetByID(id)
 	if err != nil {
-		// 外部站点可能不在数据库中，无法切换状态
+		// 外部站点（id=0）不存在于DB，无需切换
+		if id == 0 {
+			return fmt.Errorf("外部站点请先在面板中编辑保存后再操作")
+		}
 		return err
 	}
 	w.Enabled = enabled
@@ -365,37 +378,44 @@ func (s *WebsiteService) StopNginx() error {
 	if !syscmd.Which("nginx") {
 		return fmt.Errorf("nginx 未安装")
 	}
-	// 尝试systemctl停止
+
+	// 收集所有要杀的 PID，避免 pid 文件在 kill 过程中被覆盖
+	pidToKill := s.findRunningNginxPID()
+	if pidToKill <= 0 {
+		return nil
+	}
+
+	// 尝试 systemctl
 	if err := exec.Command("systemctl", "stop", "nginx").Run(); err == nil {
-		return nil
-	}
-	// 尝试service停止
-	if err := exec.Command("service", "nginx", "stop").Run(); err == nil {
-		return nil
-	}
-	// 发送stop信号
-	output, err := exec.Command("nginx", "-s", "stop").CombinedOutput()
-	if err != nil {
-		// 尝试quit信号
-		if output2, err2 := exec.Command("nginx", "-s", "quit").CombinedOutput(); err2 != nil {
-			// 最后尝试kill进程
-			pidFile := s.findNginxPidFile()
-			if pidFile != "" {
-				pidData, err := os.ReadFile(pidFile)
-				if err == nil {
-					pidStr := strings.TrimSpace(string(pidData))
-					if pid, err := strconv.Atoi(pidStr); err == nil {
-						process, err := os.FindProcess(pid)
-						if err == nil {
-							return process.Kill()
-						}
-					}
-				}
-			}
-			return fmt.Errorf("停止nginx失败: stop=%s quit=%s", string(output), string(output2))
+		if s.waitForNginxStopped(5) {
+			return nil
 		}
 	}
-	return nil
+	// 尝试 service
+	if err := exec.Command("service", "nginx", "stop").Run(); err == nil {
+		if s.waitForNginxStopped(5) {
+			return nil
+		}
+	}
+	// 发送 stop 信号（优雅关闭）
+	_ = exec.Command("nginx", "-s", "stop").Run()
+	if s.waitForNginxStopped(3) {
+		return nil
+	}
+	// 发送 quit 信号
+	_ = exec.Command("nginx", "-s", "quit").Run()
+	if s.waitForNginxStopped(3) {
+		return nil
+	}
+	// 最后直接用 kill 杀进程
+	cmd := exec.Command("kill", "-9", strconv.Itoa(pidToKill))
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("停止nginx失败: kill -9 %d 失败", pidToKill)
+	}
+	if s.waitForNginxStopped(3) {
+		return nil
+	}
+	return fmt.Errorf("停止nginx失败: 进程 %d 无法被杀死", pidToKill)
 }
 
 // RestartNginx 重启Nginx
@@ -403,34 +423,27 @@ func (s *WebsiteService) RestartNginx() error {
 	if !syscmd.Which("nginx") {
 		return fmt.Errorf("nginx 未安装")
 	}
-	// 先尝试 reload（如果已经在运行）
-	if pid := s.findRunningNginxPID(); pid > 0 {
-		_ = exec.Command("systemctl", "reload", "nginx").Run()
-		_ = exec.Command("service", "nginx", "reload").Run()
-		_ = exec.Command("nginx", "-s", "reload").Run()
-		// 验证 reload 后进程仍存活
-		if s.waitForNginxRunning(2) {
-			return nil
-		}
-	}
 
-	// 否则尝试 restart
+	// 尝试 systemctl restart
 	if err := exec.Command("systemctl", "restart", "nginx").Run(); err == nil {
 		if s.waitForNginxRunning(3) {
 			return nil
 		}
 	}
+	// 尝试 service restart
 	if err := exec.Command("service", "nginx", "restart").Run(); err == nil {
 		if s.waitForNginxRunning(3) {
 			return nil
 		}
 	}
 	// 手动 stop + start
-	_ = s.StopNginx()
-	if s.waitForNginxStopped(2) {
-		return s.StartNginx()
+	if err := s.StopNginx(); err != nil {
+		return fmt.Errorf("重启失败(停止阶段): %w", err)
 	}
-	return s.StartNginx()
+	if err := s.StartNginx(); err != nil {
+		return fmt.Errorf("重启失败(启动阶段): %w", err)
+	}
+	return nil
 }
 
 // waitForNginxStopped 等待 nginx 停止
@@ -979,13 +992,32 @@ func (s *WebsiteService) applyConfig(w *model.Website) error {
 
 	sb.WriteString("}\n")
 
-	path := s.nginxConfPath(w)
+	path := s.resolveConfigPath(w)
+	// 确保父目录存在
+	if dir := filepath.Dir(path); dir != "" {
+		_ = os.MkdirAll(dir, 0755)
+	}
 	if err := os.WriteFile(path, []byte(sb.String()), 0644); err != nil {
 		return fmt.Errorf("write nginx config failed: %w", err)
+	}
+
+	// 写完文件后更新记录中的 ConfigFile，以便后续操作能找到
+	if w.ConfigFile != path {
+		w.ConfigFile = path
+		_ = s.repo.Update(w)
 	}
 
 	if err := s.ReloadNginx(); err != nil {
 		global.LOG.Warnf("nginx reload failed: %v", err)
 	}
 	return nil
+}
+
+// resolveConfigPath 确定配置文件最终写入路径
+// 优先级：已有的 ConfigFile > 扫描时记录的路径 > 面板默认配置目录
+func (s *WebsiteService) resolveConfigPath(w *model.Website) string {
+	if w.ConfigFile != "" {
+		return w.ConfigFile
+	}
+	return s.nginxConfPath(w)
 }
