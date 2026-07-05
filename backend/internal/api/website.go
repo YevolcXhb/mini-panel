@@ -39,6 +39,15 @@ func (a *WebsiteAPI) Update(c *gin.Context) {
 		return
 	}
 	w.ID = uint(id)
+	// 外部站点（id=0）当作新建处理
+	if id == 0 {
+		if err := a.service.Create(&w); err != nil {
+			c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "created"})
+		return
+	}
 	if err := a.service.Update(&w); err != nil {
 		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
 		return

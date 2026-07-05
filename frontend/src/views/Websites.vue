@@ -43,11 +43,6 @@
           <el-table-column prop="name" label="名称" width="140" />
           <el-table-column prop="domain" label="域名" />
           <el-table-column prop="port" label="端口" width="80" />
-          <el-table-column label="类型" width="100">
-            <template #default="{ row }">
-              <el-tag size="small" :type="row.managed ? 'primary' : 'info'">{{ row.managed ? '面板托管' : '外部站点' }}</el-tag>
-            </template>
-          </el-table-column>
           <el-table-column label="SSL" width="80">
             <template #default="{ row }">
               <el-tag size="small" :type="row.ssl ? 'success' : 'info'">{{ row.ssl ? '启用' : '关闭' }}</el-tag>
@@ -65,16 +60,9 @@
           </el-table-column>
           <el-table-column label="操作" width="240" fixed="right">
             <template #default="{ row }">
-              <template v-if="row.managed">
-                <el-button size="small" @click="editWebsite(row)">编辑</el-button>
-                <el-button size="small" @click="toggleWebsite(row)">{{ row.enabled ? '停用' : '启用' }}</el-button>
-                <el-button size="small" type="danger" @click="deleteWebsite(row)">删除</el-button>
-              </template>
-              <template v-else>
-                <el-tooltip content="外部创建的网站，无法在面板中编辑/删除">
-                  <el-button size="small" disabled>外部站点</el-button>
-                </el-tooltip>
-              </template>
+              <el-button size="small" @click="editWebsite(row)">编辑</el-button>
+              <el-button size="small" @click="toggleWebsite(row)">{{ row.enabled ? '停用' : '启用' }}</el-button>
+              <el-button size="small" type="danger" @click="deleteWebsite(row)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
