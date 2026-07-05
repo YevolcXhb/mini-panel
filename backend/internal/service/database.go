@@ -32,12 +32,22 @@ func (s *DatabaseService) Create(item *model.DatabaseInstance) error {
 	if item.Type == "" {
 		item.Type = "mysql"
 	}
+	item.Name = strings.TrimSpace(item.Name)
+	if item.Name == "" {
+		return fmt.Errorf("数据库实例名称不能为空")
+	}
 	// 检查重名
 	existing, _ := s.repo.GetByName(item.Name)
-	if existing != nil {
+	if existing != nil && existing.ID > 0 {
 		return fmt.Errorf("数据库实例名称 '%s' 已存在", item.Name)
 	}
-	return s.repo.Create(item)
+	if err := s.repo.Create(item); err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint") {
+			return fmt.Errorf("数据库实例名称 '%s' 已存在", item.Name)
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *DatabaseService) List() ([]model.DatabaseInstance, error) {
