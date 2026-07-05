@@ -26,6 +26,16 @@ func NewWebsiteService() *WebsiteService {
 
 func (s *WebsiteService) Create(w *model.Website) error {
 	w.Managed = true
+	// 检查 Domain:Port 是否已存在，存在则改为更新
+	existing, _ := s.repo.GetByDomainPort(w.Domain, w.Port)
+	if existing != nil {
+		w.ID = existing.ID
+		w.ConfigFile = existing.ConfigFile
+		if err := s.repo.Update(w); err != nil {
+			return err
+		}
+		return s.applyConfig(w)
+	}
 	if err := s.repo.Create(w); err != nil {
 		return err
 	}
@@ -37,12 +47,12 @@ func (s *WebsiteService) Update(w *model.Website) error {
 	if err != nil {
 		return err
 	}
-	if !old.Managed {
-		return fmt.Errorf("外部创建的网站不可通过面板修改配置")
-	}
 	if old.Domain != w.Domain {
 		_ = s.removeConfig(old)
+		// 域名变了，清除旧 ConfigFile 让 applyConfig 生成新路径
+		w.ConfigFile = ""
 	}
+	w.Managed = true
 	if err := s.repo.Update(w); err != nil {
 		return err
 	}
@@ -54,14 +64,90 @@ func (s *WebsiteService) Delete(id uint) error {
 	if err != nil {
 		return err
 	}
-	// 无论托管与否，都删除配置文件
 	_ = s.removeConfig(w)
-	// 外部站点可能不在数据库中，直接删除配置即可
-	if err := s.repo.Delete(id); err != nil && err.Error() != "record not found" {
+	if err := s.repo.Delete(id); err != nil {
 		return err
 	}
 	_ = s.ReloadNginx()
 	return nil
+}
+
+// DeleteExternal 删除外部站点（仅删除配置文件，不入库）
+func (s *WebsiteService) DeleteExternal(domain string, port int) error {
+	_ = s.repo.DeleteByDomainPort(domain, port)
+	confDirs := []string{
+		"/etc/nginx/conf.d",
+		"/etc/nginx/sites-enabled",
+		"/usr/local/nginx/conf/conf.d",
+		"/usr/local/nginx/conf/vhost",
+	}
+	confDirs = append(confDirs, s.GetNginxConfigDir())
+	candidates := []string{
+		fmt.Sprintf("%s.conf", domain),
+		fmt.Sprintf("%d-%s.conf", port, domain),
+	}
+	for _, dir := range confDirs {
+		if _, err := os.Stat(dir); err != nil {
+			continue
+		}
+		for _, name := range candidates {
+			path := filepath.Join(dir, name)
+			_ = os.Remove(path)
+		}
+	}
+	_ = s.ReloadNginx()
+	return nil
+}
+
+// ToggleExternal 切换外部站点状态
+func (s *WebsiteService) ToggleExternal(domain string, port int, enabled bool) error {
+	existing, _ := s.repo.GetByDomainPort(domain, port)
+	if existing != nil {
+		existing.Enabled = enabled
+		if err := s.repo.Update(existing); err != nil {
+			return err
+		}
+		return s.applyConfig(existing)
+	}
+	if enabled {
+		// 启用：先扫描查找原始配置信息
+		scannedSites := s.scanNginxWebsites()
+		var info *model.Website
+		for i := range scannedSites {
+			if scannedSites[i].Domain == domain && scannedSites[i].Port == port {
+				info = &scannedSites[i]
+				break
+			}
+		}
+		if info == nil {
+			return fmt.Errorf("找不到该外部站点的配置信息")
+		}
+		// 入库并启用
+		info.Enabled = true
+		info.Managed = true
+		if err := s.repo.Create(info); err != nil {
+			return err
+		}
+		return s.applyConfig(info)
+	}
+	// 停用：扫描找到配置文件，删除
+	confPath := s.findExternalConfigFile(domain, port)
+	if confPath != "" {
+		_ = os.Remove(confPath)
+	}
+	_ = s.ReloadNginx()
+	return nil
+}
+
+// findExternalConfigFile 查找外部站点的配置文件路径
+func (s *WebsiteService) findExternalConfigFile(domain string, port int) string {
+	scannedSites := s.scanNginxWebsites()
+	for _, site := range scannedSites {
+		if site.Domain == domain && site.Port == port {
+			return site.ConfigFile
+		}
+	}
+	return ""
 }
 
 func (s *WebsiteService) GetByID(id uint) (*model.Website, error) {
@@ -86,13 +172,6 @@ func (s *WebsiteService) List() ([]model.Website, error) {
 		existing[key] = true
 	}
 
-	// 收集已存在的"启用状态"作为权威数据：DB 中有记录就以 DB 为准
-	dbByKey := make(map[string]model.Website)
-	for _, site := range dbSites {
-		key := fmt.Sprintf("%s:%d", site.Domain, site.Port)
-		dbByKey[key] = site
-	}
-
 	for _, site := range scannedSites {
 		key := fmt.Sprintf("%s:%d", site.Domain, site.Port)
 		if !existing[key] {
@@ -102,11 +181,12 @@ func (s *WebsiteService) List() ([]model.Website, error) {
 			dbSites = append(dbSites, site)
 			existing[key] = true
 		} else {
-			// DB 中已有该域名+端口的记录，以 DB 为权威，但用扫描结果补充 ConfigFile/类型
-			if dbSite, ok := dbByKey[key]; ok {
-				if dbSite.ConfigFile == "" && site.ConfigFile != "" {
-					dbSite.ConfigFile = site.ConfigFile
-					_ = s.repo.Update(&dbSite)
+			// DB 中已有该域名+端口的记录，以 DB 为权威，但用扫描结果补充 ConfigFile
+			for i := range dbSites {
+				if fmt.Sprintf("%s:%d", dbSites[i].Domain, dbSites[i].Port) == key && dbSites[i].ConfigFile == "" && site.ConfigFile != "" {
+					dbSites[i].ConfigFile = site.ConfigFile
+					_ = s.repo.Update(&dbSites[i])
+					break
 				}
 			}
 		}

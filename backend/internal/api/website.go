@@ -57,6 +57,22 @@ func (a *WebsiteAPI) Update(c *gin.Context) {
 
 func (a *WebsiteAPI) Delete(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
+	if id == 0 {
+		// 外部站点：使用 query 参数 domain+port
+		domain := c.Query("domain")
+		portStr := c.Query("port")
+		port, _ := strconv.Atoi(portStr)
+		if domain == "" || port == 0 {
+			c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "缺少 domain/port 参数"})
+			return
+		}
+		if err := a.service.DeleteExternal(domain, port); err != nil {
+			c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "deleted"})
+		return
+	}
 	if err := a.service.Delete(uint(id)); err != nil {
 		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
 		return
@@ -92,9 +108,20 @@ func (a *WebsiteAPI) Toggle(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: err.Error()})
 		return
 	}
-	// id=0 表示外部站点（未入库），需要先创建记录
 	if id == 0 {
-		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "外部站点请先在面板中编辑保存后再操作"})
+		// 外部站点：用 domain+port
+		domain := c.Query("domain")
+		portStr := c.Query("port")
+		port, _ := strconv.Atoi(portStr)
+		if domain == "" || port == 0 {
+			c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "缺少 domain/port 参数"})
+			return
+		}
+		if err := a.service.ToggleExternal(domain, port, req.Enabled); err != nil {
+			c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "toggled"})
 		return
 	}
 	if err := a.service.ToggleEnable(uint(id), req.Enabled); err != nil {
