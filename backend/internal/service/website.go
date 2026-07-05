@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/minipanel/minipanel/internal/global"
 	"github.com/minipanel/minipanel/internal/model"
@@ -144,54 +145,142 @@ func (s *WebsiteService) GetNginxStatus() (*model.NginxStatus, error) {
 		}
 	}
 
-	// 检查是否运行
-	pidFile := s.findNginxPidFile()
-	if pidFile != "" {
-		pidData, err := os.ReadFile(pidFile)
-		if err == nil {
-			pidStr := strings.TrimSpace(string(pidData))
-			pid, err := strconv.Atoi(pidStr)
-			if err == nil {
-				// 检查进程是否存在
-				process, err := os.FindProcess(pid)
-				if err == nil {
-					// 发送信号0检查进程是否存在
-					if err := process.Signal(os.Signal(nil)); err == nil {
-						status.Running = true
-						status.Pid = pid
-					}
-				}
-			}
-		}
-	}
-
-	// 如果pid文件方式没找到，尝试ps命令
-	if !status.Running {
-		output, err := exec.Command("ps", "aux").CombinedOutput()
-		if err == nil {
-			if strings.Contains(string(output), "nginx: master") {
-				status.Running = true
-				// 尝试提取pid
-				lines := strings.Split(string(output), "\n")
-				for _, line := range lines {
-					if strings.Contains(line, "nginx: master") && !strings.Contains(line, "grep") {
-						fields := strings.Fields(line)
-						for i, f := range fields {
-							if i == 1 {
-								if pid, err := strconv.Atoi(f); err == nil {
-									status.Pid = pid
-								}
-								break
-							}
-						}
-						break
-					}
-				}
-			}
-		}
+	// 检查是否运行 - 多种方式交叉验证
+	pid := s.findRunningNginxPID()
+	if pid > 0 {
+		status.Running = true
+		status.Pid = pid
 	}
 
 	return status, nil
+}
+
+// findRunningNginxPID 通过多种方式查找正在运行的nginx master PID
+func (s *WebsiteService) findRunningNginxPID() int {
+	// 方式1: ps 命令查找 master 进程
+	if pid := s.findNginxPIDByPS(); pid > 0 {
+		return pid
+	}
+	// 方式2: pgrep
+	if pid := s.findNginxPIDByPGrep(); pid > 0 {
+		return pid
+	}
+	// 方式3: pid 文件 + kill -0 验证
+	if pid := s.findNginxPIDByPidFile(); pid > 0 {
+		return pid
+	}
+	// 方式4: 检查端口监听（80/443）
+	if s.isNginxListening() {
+		return -1
+	}
+	return 0
+}
+
+func (s *WebsiteService) findNginxPIDByPS() int {
+	output, err := exec.Command("ps", "-eo", "pid,comm,args").CombinedOutput()
+	if err != nil {
+		// 尝试 ps aux
+		output, err = exec.Command("ps", "aux").CombinedOutput()
+		if err != nil {
+			return 0
+		}
+	}
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "grep") {
+			continue
+		}
+		// 匹配 nginx: master process
+		if !strings.Contains(line, "nginx") {
+			continue
+		}
+		// 排除 worker 进程（含 "worker"）
+		if strings.Contains(line, "worker") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		pidStr := fields[0]
+		pid, err := strconv.Atoi(pidStr)
+		if err != nil {
+			// ps aux 格式不同
+			pid, err = strconv.Atoi(fields[1])
+			if err != nil {
+				continue
+			}
+		}
+		// 验证进程确实存在
+		if s.isProcessAlive(pid) {
+			return pid
+		}
+	}
+	return 0
+}
+
+func (s *WebsiteService) findNginxPIDByPGrep() int {
+	output, err := exec.Command("pgrep", "-f", "nginx: master").CombinedOutput()
+	if err != nil {
+		return 0
+	}
+	pidStr := strings.TrimSpace(string(output))
+	lines := strings.Split(pidStr, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		pid, err := strconv.Atoi(line)
+		if err == nil && s.isProcessAlive(pid) {
+			return pid
+		}
+	}
+	return 0
+}
+
+func (s *WebsiteService) findNginxPIDByPidFile() int {
+	pidFile := s.findNginxPidFile()
+	if pidFile == "" {
+		return 0
+	}
+	pidData, err := os.ReadFile(pidFile)
+	if err != nil {
+		return 0
+	}
+	pidStr := strings.TrimSpace(string(pidData))
+	pid, err := strconv.Atoi(pidStr)
+	if err != nil {
+		return 0
+	}
+	if s.isProcessAlive(pid) {
+		return pid
+	}
+	return 0
+}
+
+// isProcessAlive 跨平台检查进程是否存活
+func (s *WebsiteService) isProcessAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	// 使用 kill -0 检查（Linux/macOS）
+	cmd := exec.Command("kill", "-0", strconv.Itoa(pid))
+	if err := cmd.Run(); err == nil {
+		return true
+	}
+	return false
+}
+
+// isNginxListening 检查 nginx 是否在监听 80/443 端口
+func (s *WebsiteService) isNginxListening() bool {
+	for _, port := range []string{"80", "443", "8080"} {
+		cmd := exec.Command("sh", "-c", "ss -tln 2>/dev/null | grep ':"+port+" ' || netstat -tln 2>/dev/null | grep ':"+port+" '")
+		if output, err := cmd.CombinedOutput(); err == nil && len(strings.TrimSpace(string(output))) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *WebsiteService) findNginxPidFile() string {
@@ -224,8 +313,7 @@ func (s *WebsiteService) StartNginx() error {
 	}
 
 	// 先检查是否已经在运行
-	status, _ := s.GetNginxStatus()
-	if status != nil && status.Running {
+	if pid := s.findRunningNginxPID(); pid > 0 {
 		return nil
 	}
 
@@ -238,18 +326,38 @@ func (s *WebsiteService) StartNginx() error {
 	// 尝试多种方式启动
 	// 方式1: systemctl
 	if err := exec.Command("systemctl", "start", "nginx").Run(); err == nil {
-		return nil
+		if s.waitForNginxRunning(3) {
+			return nil
+		}
 	}
 	// 方式2: service
 	if err := exec.Command("service", "nginx", "start").Run(); err == nil {
-		return nil
+		if s.waitForNginxRunning(3) {
+			return nil
+		}
 	}
 	// 方式3: 直接启动
 	cmd := exec.Command("nginx")
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("启动nginx失败: %w (config test: %s)", err, string(configOutput))
+		// nginx 默认是 daemon 模式，Run() 立即返回，需要等待检查
+		global.LOG.Warnf("direct nginx start returned: %v", err)
 	}
-	return nil
+	if s.waitForNginxRunning(3) {
+		return nil
+	}
+	return fmt.Errorf("启动nginx失败，进程未运行 (config test: %s)", string(configOutput))
+}
+
+// waitForNginxRunning 轮询等待 nginx 运行起来
+func (s *WebsiteService) waitForNginxRunning(timeoutSec int) bool {
+	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
+	for time.Now().Before(deadline) {
+		if pid := s.findRunningNginxPID(); pid > 0 {
+			return true
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return false
 }
 
 // StopNginx 停止Nginx
@@ -295,21 +403,46 @@ func (s *WebsiteService) RestartNginx() error {
 	if !syscmd.Which("nginx") {
 		return fmt.Errorf("nginx 未安装")
 	}
-	// 先尝试 reload
-	_ = exec.Command("systemctl", "reload", "nginx").Run()
-	_ = exec.Command("service", "nginx", "reload").Run()
-	_ = exec.Command("nginx", "-s", "reload").Run()
+	// 先尝试 reload（如果已经在运行）
+	if pid := s.findRunningNginxPID(); pid > 0 {
+		_ = exec.Command("systemctl", "reload", "nginx").Run()
+		_ = exec.Command("service", "nginx", "reload").Run()
+		_ = exec.Command("nginx", "-s", "reload").Run()
+		// 验证 reload 后进程仍存活
+		if s.waitForNginxRunning(2) {
+			return nil
+		}
+	}
 
-	// 然后尝试 restart
+	// 否则尝试 restart
 	if err := exec.Command("systemctl", "restart", "nginx").Run(); err == nil {
-		return nil
+		if s.waitForNginxRunning(3) {
+			return nil
+		}
 	}
 	if err := exec.Command("service", "nginx", "restart").Run(); err == nil {
-		return nil
+		if s.waitForNginxRunning(3) {
+			return nil
+		}
 	}
 	// 手动 stop + start
 	_ = s.StopNginx()
+	if s.waitForNginxStopped(2) {
+		return s.StartNginx()
+	}
 	return s.StartNginx()
+}
+
+// waitForNginxStopped 等待 nginx 停止
+func (s *WebsiteService) waitForNginxStopped(timeoutSec int) bool {
+	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
+	for time.Now().Before(deadline) {
+		if pid := s.findRunningNginxPID(); pid == 0 {
+			return true
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return false
 }
 
 func (s *WebsiteService) ReloadNginx() error {
