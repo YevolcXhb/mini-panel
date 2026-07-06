@@ -148,7 +148,11 @@ func (s *DatabaseService) CreateUser(item *model.DatabaseInstance, username, pas
 	return nil
 }
 
-func (s *DatabaseService) ListDatabases(item *model.DatabaseInstance) ([]string, error) {
+type DBInfo struct {
+	Name string `json:"name"`
+}
+
+func (s *DatabaseService) ListDatabases(item *model.DatabaseInstance) ([]DBInfo, error) {
 	if item.Type != "mysql" {
 		return nil, fmt.Errorf("only mysql list databases is supported currently")
 	}
@@ -156,23 +160,33 @@ func (s *DatabaseService) ListDatabases(item *model.DatabaseInstance) ([]string,
 		return nil, fmt.Errorf("mysql client not found, please install mysql first")
 	}
 	args := s.getMysqlArgs(item, "")
-	args = append(args, "-N", "-e", "SHOW DATABASES")
+	args = append(args, "-N", "-B", "-e", "SHOW DATABASES")
 	out, err := s.runMysqlCmd(item, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list databases failed: %s: %v", string(out), err)
 	}
+	skip := map[string]bool{
+		"information_schema": true,
+		"performance_schema": true,
+		"sys":                true,
+	}
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	var dbs []string
+	var dbs []DBInfo
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if line != "" {
-			dbs = append(dbs, line)
+		if line == "" || skip[line] {
+			continue
 		}
+		dbs = append(dbs, DBInfo{Name: line})
 	}
 	return dbs, nil
 }
 
-func (s *DatabaseService) ListTables(item *model.DatabaseInstance) ([]string, error) {
+type TableInfo struct {
+	Name string `json:"name"`
+}
+
+func (s *DatabaseService) ListTables(item *model.DatabaseInstance) ([]TableInfo, error) {
 	if item.Type != "mysql" || item.Database == "" {
 		return nil, fmt.Errorf("please select a database first")
 	}
@@ -180,17 +194,17 @@ func (s *DatabaseService) ListTables(item *model.DatabaseInstance) ([]string, er
 		return nil, fmt.Errorf("mysql client not found, please install mysql first")
 	}
 	args := s.getMysqlArgs(item, item.Database)
-	args = append(args, "-N", "-e", "SHOW TABLES")
+	args = append(args, "-N", "-B", "-e", "SHOW TABLES")
 	out, err := s.runMysqlCmd(item, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list tables failed: %s: %v", string(out), err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	var tables []string
+	var tables []TableInfo
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line != "" {
-			tables = append(tables, line)
+			tables = append(tables, TableInfo{Name: line})
 		}
 	}
 	return tables, nil
