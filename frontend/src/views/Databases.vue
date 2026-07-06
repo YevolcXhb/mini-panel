@@ -92,20 +92,82 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="dbDialogVisible" title="数据库管理" width="700px">
-      <div style="margin-bottom: 16px; display: flex; gap: 8px">
-        <el-button type="primary" size="small" @click="openCreateDbDialog">创建数据库</el-button>
-        <el-button size="small" @click="loadDbs">刷新</el-button>
-      </div>
-      <el-table :data="dbList" v-loading="dbLoading" size="small">
-        <el-table-column prop="name" label="数据库名" />
-        <el-table-column label="操作" width="120">
-          <template #default="{ row }">
-            <el-button size="small" type="danger" @click="dropDb(row.name)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-dialog>
+    <el-dialog v-model="dbDialogVisible" :title="`数据库管理 - ${currentDbInstance?.name || ''}`" width="750px">
+	      <div style="margin-bottom: 16px; display: flex; gap: 8px">
+	        <el-button type="primary" size="small" @click="openCreateDbDialog">创建数据库</el-button>
+	        <el-button size="small" @click="openQueryDialog">SQL 查询</el-button>
+	        <el-button size="small" @click="loadDbs">刷新</el-button>
+	      </div>
+	      <el-table :data="dbList" v-loading="dbLoading" size="small">
+	        <el-table-column prop="name" label="数据库名" />
+	        <el-table-column label="操作" width="320">
+	          <template #default="{ row }">
+	            <el-button size="small" @click="openTableDialog(row.name)">查看表</el-button>
+	            <el-button size="small" @click="backupDb(row.name)">备份</el-button>
+	            <el-button size="small" @click="restoreDb(row.name)">恢复</el-button>
+	            <el-button size="small" type="danger" @click="dropDb(row.name)">删除</el-button>
+	          </template>
+	        </el-table-column>
+	      </el-table>
+	    </el-dialog>
+
+	    <el-dialog v-model="tableDialogVisible" :title="`表列表 - ${currentTableDb}`" width="700px">
+	      <el-table :data="tableList" v-loading="tableLoading" size="small">
+	        <el-table-column prop="name" label="表名" />
+	        <el-table-column label="操作" width="120">
+	          <template #default="{ row }">
+	            <el-button size="small" @click="viewTableStructure(row.name)">结构</el-button>
+	          </template>
+	        </el-table-column>
+	      </el-table>
+	    </el-dialog>
+
+	    <el-dialog v-model="columnsDialogVisible" :title="`表结构 - ${currentTableName}`" width="800px">
+	      <el-table :data="columns" v-loading="columnsLoading" size="small" max-height="400">
+	        <el-table-column prop="name" label="列名" width="140" />
+	        <el-table-column prop="type" label="类型" width="140" />
+	        <el-table-column prop="null" label="允许空" width="80">
+	          <template #default="{ row }">
+	            <el-tag size="small" :type="row.null === 'YES' ? 'warning' : 'info'">{{ row.null }}</el-tag>
+	          </template>
+	        </el-table-column>
+	        <el-table-column prop="key" label="键" width="80">
+	          <template #default="{ row }">
+	            <el-tag v-if="row.key" size="small" :type="row.key === 'PRI' ? 'danger' : 'success'">{{ row.key }}</el-tag>
+	            <span v-else style="color: #c0c4cc">-</span>
+	          </template>
+	        </el-table-column>
+	        <el-table-column prop="default" label="默认值" min-width="120">
+	          <template #default="{ row }">
+	            <span v-if="row.default" style="font-family: monospace; font-size: 12px">{{ row.default }}</span>
+	            <span v-else style="color: #c0c4cc">NULL</span>
+	          </template>
+	        </el-table-column>
+	        <el-table-column prop="extra" label="额外" width="100" />
+	      </el-table>
+	    </el-dialog>
+
+	    <el-dialog v-model="queryDialogVisible" title="SQL 查询" width="850px">
+	      <div style="display: flex; gap: 8px; margin-bottom: 12px; align-items: center">
+	        <span style="font-size: 13px; color: #909399">数据库：</span>
+	        <el-select v-model="queryDbName" placeholder="选择数据库" size="small" style="width: 200px">
+	          <el-option v-for="db in dbList" :key="db.name" :label="db.name" :value="db.name" />
+	        </el-select>
+	      </div>
+	      <el-input v-model="sqlQuery" type="textarea" :rows="5" placeholder="SELECT * FROM table_name LIMIT 10" style="margin-bottom: 12px; font-family: monospace" />
+	      <div style="display: flex; gap: 8px; margin-bottom: 12px">
+	        <el-button type="primary" size="small" @click="executeQuery" :loading="queryLoading">执行 (Ctrl+Enter)</el-button>
+	        <el-button size="small" @click="sqlQuery = ''; queryResult = null">清空</el-button>
+	      </div>
+	      <div v-if="queryResult" style="overflow-x: auto">
+	        <div style="margin-bottom: 8px; font-size: 12px; color: #909399">
+	          返回 {{ queryResult.rows?.length || 0 }} 行
+	        </div>
+	        <el-table :data="queryResult.rows" size="small" max-height="300" border stripe>
+	          <el-table-column v-for="(col, idx) in queryResult.columns" :key="idx" :prop="String(idx)" :label="col" min-width="120" show-overflow-tooltip />
+	        </el-table>
+	      </div>
+	    </el-dialog>
 
     <el-dialog v-model="createDbDialogVisible" title="创建数据库" width="400px">
       <el-form label-width="80px">
@@ -140,6 +202,22 @@ const currentDbInstance = ref<any>(null)
 const dbList = ref<any[]>([])
 const dbLoading = ref(false)
 const newDbName = ref('')
+// 表结构查看
+const tableDialogVisible = ref(false)
+const tableList = ref<any[]>([])
+const tableLoading = ref(false)
+const currentTableDb = ref('')
+// 列信息
+const columnsDialogVisible = ref(false)
+const columns = ref<any[]>([])
+const columnsLoading = ref(false)
+const currentTableName = ref('')
+// SQL 查询
+const queryDialogVisible = ref(false)
+const queryDbName = ref('')
+const sqlQuery = ref('')
+const queryResult = ref<any>(null)
+const queryLoading = ref(false)
 
 const form = reactive({
   id: 0,
@@ -356,13 +434,94 @@ async function createDb() {
 }
 
 async function dropDb(dbName: string) {
-  try {
-    await ElMessageBox.confirm(`确定要删除数据库 ${dbName} 吗？此操作不可恢复！`, '危险操作', { type: 'error' })
-    ElMessage.info('暂不支持删除数据库操作')
-  } catch (e) {}
-}
+	  try {
+	    await ElMessageBox.confirm(`确定要删除数据库 ${dbName} 吗？此操作不可恢复！`, '危险操作', { type: 'error' })
+	    ElMessage.info('暂不支持删除数据库操作')
+	  } catch (e) {}
+	}
 
-onMounted(async () => {
+	async function openTableDialog(dbName: string) {
+	  currentTableDb.value = dbName
+	  tableDialogVisible.value = true
+	  tableLoading.value = true
+	  try {
+	    const res: any = await databaseApi.listTables(currentDbInstance.value.id, dbName)
+	    tableList.value = res.data || []
+	  } catch (e: any) {
+	    ElMessage.error(e?.message || '加载表列表失败')
+	  } finally {
+	    tableLoading.value = false
+	  }
+	}
+
+	async function viewTableStructure(tableName: string) {
+	  currentTableName.value = tableName
+	  columnsDialogVisible.value = true
+	  columnsLoading.value = true
+	  try {
+	    const res: any = await databaseApi.describeTable(currentDbInstance.value.id, currentTableDb.value, tableName)
+	    columns.value = res.data || []
+	  } catch (e: any) {
+	    ElMessage.error(e?.message || '加载表结构失败')
+	  } finally {
+	    columnsLoading.value = false
+	  }
+	}
+
+	function openQueryDialog() {
+	  queryDbName.value = dbList.value[0]?.name || ''
+	  sqlQuery.value = ''
+	  queryResult.value = null
+	  queryDialogVisible.value = true
+	}
+
+	async function executeQuery() {
+	  if (!queryDbName.value) {
+	    ElMessage.warning('请选择数据库')
+	    return
+	  }
+	  if (!sqlQuery.value.trim()) {
+	    ElMessage.warning('请输入 SQL 语句')
+	    return
+	  }
+	  queryLoading.value = true
+	  try {
+	    const res: any = await databaseApi.executeQuery(currentDbInstance.value.id, queryDbName.value, sqlQuery.value.trim())
+	    queryResult.value = res.data || { columns: [], rows: [] }
+	  } catch (e: any) {
+	    ElMessage.error(e?.message || '查询失败')
+	  } finally {
+	    queryLoading.value = false
+	  }
+	}
+
+	async function backupDb(dbName: string) {
+	  try {
+	    const res: any = await databaseApi.backup(currentDbInstance.value.id, dbName)
+	    ElMessage.success(`备份成功：${res.data?.file_path || ''}`)
+	  } catch (e: any) {
+	    ElMessage.error(e?.message || '备份失败')
+	  }
+	}
+
+	async function restoreDb(dbName: string) {
+	  try {
+	    const { value: filePath } = await ElMessageBox.prompt('请输入备份文件路径', '恢复数据库', {
+	      confirmButtonText: '恢复',
+	      inputPlaceholder: '/data/backups/database/db_20260706_120000.sql'
+	    })
+	    if (filePath) {
+	      await databaseApi.restore(currentDbInstance.value.id, dbName, filePath)
+	      ElMessage.success('恢复成功')
+	    }
+	  } catch (e: any) {
+	    if (e !== 'cancel') {
+	      ElMessage.error(e?.message || '恢复失败')
+	    }
+	  }
+	}
+
+	onMounted(async () => {
   await checkStatus()
   if (serviceStatus.value.installed) {
     loadDatabases()

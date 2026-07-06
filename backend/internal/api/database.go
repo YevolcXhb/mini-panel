@@ -116,6 +116,10 @@ func (h *DatabaseAPI) ListTables(c *gin.Context) {
 		c.JSON(http.StatusNotFound, dto.Response{Code: 404, Message: "instance not found"})
 		return
 	}
+	// 支持通过 query 参数指定数据库名
+	if dbName := c.Query("db_name"); dbName != "" {
+		item.Database = dbName
+	}
 	tables, err := h.service.ListTables(item)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
@@ -174,4 +178,82 @@ func (h *DatabaseAPI) CreateUser(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "User created successfully"})
+}
+
+func (h *DatabaseAPI) DescribeTable(c *gin.Context) {
+	id, _ := strconv.Atoi(c.Param("id"))
+	item, err := h.service.GetByID(uint(id))
+	if err != nil {
+		c.JSON(http.StatusNotFound, dto.Response{Code: 404, Message: "instance not found"})
+		return
+	}
+	dbName := c.Param("dbName")
+	tableName := c.Param("tableName")
+	cols, err := h.service.DescribeTable(item, dbName, tableName)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: cols})
+}
+
+func (h *DatabaseAPI) ExecuteQuery(c *gin.Context) {
+	id, _ := strconv.Atoi(c.Param("id"))
+	item, err := h.service.GetByID(uint(id))
+	if err != nil {
+		c.JSON(http.StatusNotFound, dto.Response{Code: 404, Message: "instance not found"})
+		return
+	}
+	var req struct {
+		DBName string `json:"db_name" binding:"required"`
+		Query  string `json:"query" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: err.Error()})
+		return
+	}
+	result, err := h.service.ExecuteQuery(item, req.DBName, req.Query)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: result})
+}
+
+func (h *DatabaseAPI) Backup(c *gin.Context) {
+	id, _ := strconv.Atoi(c.Param("id"))
+	item, err := h.service.GetByID(uint(id))
+	if err != nil {
+		c.JSON(http.StatusNotFound, dto.Response{Code: 404, Message: "instance not found"})
+		return
+	}
+	dbName := c.Param("dbName")
+	outputPath, err := h.service.BackupDatabase(item, dbName)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: gin.H{"file_path": outputPath}, Message: "备份成功"})
+}
+
+func (h *DatabaseAPI) Restore(c *gin.Context) {
+	id, _ := strconv.Atoi(c.Param("id"))
+	item, err := h.service.GetByID(uint(id))
+	if err != nil {
+		c.JSON(http.StatusNotFound, dto.Response{Code: 404, Message: "instance not found"})
+		return
+	}
+	dbName := c.Param("dbName")
+	var req struct {
+		FilePath string `json:"file_path" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: err.Error()})
+		return
+	}
+	if err := h.service.RestoreDatabase(item, dbName, req.FilePath); err != nil {
+		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "恢复成功"})
 }

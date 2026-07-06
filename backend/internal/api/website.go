@@ -171,3 +171,45 @@ func (a *WebsiteAPI) RestartNginx(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "nginx restarted"})
 }
+
+func (a *WebsiteAPI) GetAccessLogs(c *gin.Context) {
+	id, _ := strconv.Atoi(c.Param("id"))
+	w, err := a.service.GetByID(uint(id))
+	if err != nil {
+		c.JSON(http.StatusNotFound, dto.Response{Code: 404, Message: "website not found"})
+		return
+	}
+	var filters service.AccessLogFilter
+	filters.Date = c.Query("date")
+	filters.IP = c.Query("ip")
+	filters.StatusCode = c.Query("status_code")
+	filters.URL = c.Query("url")
+	if page, err := strconv.Atoi(c.DefaultQuery("page", "1")); err == nil {
+		filters.Page = page
+	}
+	if pageSize, err := strconv.Atoi(c.DefaultQuery("page_size", "50")); err == nil {
+		filters.PageSize = pageSize
+	}
+	entries, total, err := a.service.ParseAccessLogs(w, filters)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: gin.H{"entries": entries, "total": total}})
+}
+
+func (a *WebsiteAPI) GetTrafficStats(c *gin.Context) {
+	id, _ := strconv.Atoi(c.Param("id"))
+	w, err := a.service.GetByID(uint(id))
+	if err != nil {
+		c.JSON(http.StatusNotFound, dto.Response{Code: 404, Message: "website not found"})
+		return
+	}
+	period := c.DefaultQuery("period", "24h")
+	stats, err := a.service.GetTrafficStats(w, period)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: stats})
+}

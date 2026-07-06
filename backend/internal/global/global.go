@@ -20,7 +20,7 @@ var (
 	Cron            *cron.Cron
 	IsAndroidChroot bool
 	DockRootClient  *dockroot.Client
-	Version         = "dev"
+	Version         = "4.3.0"
 	BuildTime       = "unknown"
 	GitCommit       = "unknown"
 )

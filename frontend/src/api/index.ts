@@ -68,6 +68,7 @@ export const fileApi = {
   create: (data: any) => api.post('/files', data),
   update: (data: any) => api.put('/files', data),
   delete: (path: string) => api.delete('/files', { data: { path } }),
+	  forceDelete: (path: string) => api.delete('/files/force', { data: { path } }),
   upload: (data: FormData | string, file?: File) => {
     if (data instanceof FormData) {
       return api.post('/files/upload', data)
@@ -77,8 +78,25 @@ export const fileApi = {
     form.append('file', file!)
     return api.post('/files/upload', form)
   },
-  download: (path: string) => api.get('/files/download', { params: { path }, responseType: 'blob' })
-}
+  download: (path: string) => api.get('/files/download', { params: { path }, responseType: 'blob' }),
+	  uploadMultiple: (path: string, files: File[]) => {
+	    const form = new FormData()
+	    form.append('path', path)
+	    files.forEach(f => form.append('files', f))
+	    return api.post('/files/upload-multiple', form)
+	  },
+	  downloadZip: (path: string) => api.get('/files/download-zip', { params: { path }, responseType: 'blob' }),
+	  rename: (path: string, newName: string) => api.post('/files/rename', { path, new_name: newName }),
+	  chmod: (path: string, mode: string, recursive: boolean) => api.post('/files/chmod', { path, mode, recursive }),
+	  compress: (paths: string[], output: string, format: string) => api.post('/files/compress', { paths, output, format }),
+	  extract: (path: string, destDir: string) => api.post('/files/extract', { path, dest_dir: destDir }),
+	  copy: (srcPath: string, destPath: string) => api.post('/files/copy', { src_path: srcPath, dest_path: destPath }),
+	  move: (srcPath: string, destPath: string) => api.post('/files/move', { src_path: srcPath, dest_path: destPath }),
+	  search: (path: string, search: string) => api.get('/files/search', { params: { path, search } }),
+	  listRecycleBin: () => api.get('/files/recycle-bin'),
+	  restoreRecycle: (path: string) => api.post('/files/recycle-bin/restore', { path }),
+	  clearRecycleBin: () => api.post('/files/recycle-bin/clear'),
+	}
 
 export const processApi = {
   list: () => api.get('/processes'),
@@ -146,8 +164,9 @@ export const versionApi = {
 }
 
 export const monitorApi = {
-  history: (limit?: number) => api.get('/monitor/history', { params: { limit } })
-}
+	  history: (limit?: number) => api.get('/monitor/history', { params: { limit } }),
+	  realtime: () => api.get('/monitor/realtime')
+	}
 
 export const websiteApi = {
   list: () => api.get('/websites'),
@@ -157,6 +176,8 @@ export const websiteApi = {
   deleteExternal: (domain: string, port: number) => api.delete(`/websites/0?domain=${domain}&port=${port}`),
   toggle: (id: number, enabled: boolean) => api.put(`/websites/${id}/toggle`, { enabled }),
   toggleExternal: (domain: string, port: number, enabled: boolean) => api.put(`/websites/0/toggle?domain=${domain}&port=${port}`, { enabled }),
+  getAccessLogs: (id: number, params: any) => api.get(`/websites/${id}/logs`, { params }),
+  getTrafficStats: (id: number, period: string) => api.get(`/websites/${id}/traffic`, { params: { period } }),
   getNginxStatus: () => api.get('/websites/nginx/status'),
   startNginx: () => api.post('/websites/nginx/start'),
   stopNginx: () => api.post('/websites/nginx/stop'),
@@ -171,9 +192,13 @@ export const databaseApi = {
   delete: (id: number) => api.delete(`/databases/${id}`),
   test: (data: any) => api.post('/databases/test', data),
   listDatabases: (id: number) => api.get(`/databases/${id}/dbs`),
-  listTables: (id: number) => api.get(`/databases/${id}/tables`),
+  listTables: (id: number, dbName?: string) => api.get(`/databases/${id}/tables`, { params: dbName ? { db_name: dbName } : {} }),
   createDatabase: (id: number, dbName: string) => api.post(`/databases/${id}/create-db`, { db_name: dbName }),
-  createUser: (id: number, data: any) => api.post(`/databases/${id}/create-user`, data)
+  createUser: (id: number, data: any) => api.post(`/databases/${id}/create-user`, data),
+  describeTable: (id: number, dbName: string, tableName: string) => api.get(`/databases/${id}/tables/${dbName}/${tableName}`),
+	  executeQuery: (id: number, dbName: string, query: string) => api.post(`/databases/${id}/query`, { db_name: dbName, query }),
+	  backup: (id: number, dbName: string) => api.post(`/databases/${id}/backup/${dbName}`),
+	  restore: (id: number, dbName: string, filePath: string) => api.post(`/databases/${id}/restore/${dbName}`, { file_path: filePath })
 }
 
 export const firewallApi = {

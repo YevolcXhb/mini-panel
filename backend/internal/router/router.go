@@ -50,8 +50,21 @@ func NewRouter() *gin.Engine {
 		apiV1.POST("/files", file.Create)
 		apiV1.PUT("/files", file.Update)
 		apiV1.DELETE("/files", file.Delete)
+		apiV1.DELETE("/files/force", file.ForceDelete)
 		apiV1.POST("/files/upload", file.Upload)
 		apiV1.GET("/files/download", file.Download)
+		apiV1.POST("/files/upload-multiple", file.UploadMultiple)
+		apiV1.GET("/files/download-zip", file.DownloadZip)
+		apiV1.POST("/files/rename", file.Rename)
+		apiV1.POST("/files/chmod", file.Chmod)
+		apiV1.POST("/files/compress", file.Compress)
+		apiV1.POST("/files/extract", file.Extract)
+		apiV1.POST("/files/copy", file.Copy)
+		apiV1.POST("/files/move", file.Move)
+		apiV1.GET("/files/search", file.Search)
+		apiV1.GET("/files/recycle-bin", file.ListRecycleBin)
+		apiV1.POST("/files/recycle-bin/restore", file.RestoreRecycle)
+		apiV1.POST("/files/recycle-bin/clear", file.ClearRecycleBin)
 
 		term := api.NewTerminalAPI()
 		apiV1.GET("/terminal/ws", term.HandleWS)
@@ -101,6 +114,7 @@ func NewRouter() *gin.Engine {
 
 		monitor := api.NewMonitorAPI()
 		apiV1.GET("/monitor/history", monitor.List)
+		apiV1.GET("/monitor/realtime", monitor.GetRealtime)
 
 		apiV1.POST("/auth/change-password", auth.ChangePassword)
 
@@ -122,6 +136,8 @@ func NewRouter() *gin.Engine {
 		apiV1.PUT("/websites/:id", website.Update)
 		apiV1.DELETE("/websites/:id", website.Delete)
 		apiV1.PUT("/websites/:id/toggle", website.Toggle)
+		apiV1.GET("/websites/:id/logs", website.GetAccessLogs)
+		apiV1.GET("/websites/:id/traffic", website.GetTrafficStats)
 
 		db := api.NewDatabaseAPI()
 		apiV1.GET("/databases", db.List)
@@ -133,6 +149,10 @@ func NewRouter() *gin.Engine {
 		apiV1.GET("/databases/:id/tables", db.ListTables)
 		apiV1.POST("/databases/:id/create-db", db.CreateDatabase)
 		apiV1.POST("/databases/:id/create-user", db.CreateUser)
+		apiV1.GET("/databases/:id/tables/:dbName/:tableName", db.DescribeTable)
+		apiV1.POST("/databases/:id/query", db.ExecuteQuery)
+		apiV1.POST("/databases/:id/backup/:dbName", db.Backup)
+		apiV1.POST("/databases/:id/restore/:dbName", db.Restore)
 
 		fw := api.NewFirewallAPI()
 		apiV1.GET("/firewall/rules", fw.List)

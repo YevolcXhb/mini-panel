@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -1011,6 +1012,37 @@ func (s *WebsiteService) applyConfig(w *model.Website) error {
 	}
 
 	sb.WriteString("# Managed by MiniPanel\n")
+
+	// 频率限制 zone（全局，在所有 server 块之前）
+	if w.RateLimitEnabled && w.RateLimitRate != "" {
+		zoneName := fmt.Sprintf("zone_%s_%d", strings.ReplaceAll(w.Domain, ".", "_"), w.Port)
+		burst := w.RateLimitBurst
+		if burst <= 0 {
+			burst = 10
+		}
+		sb.WriteString(fmt.Sprintf("limit_req_zone $binary_remote_addr zone=%s:10m rate=%s;\n", zoneName, w.RateLimitRate))
+		sb.WriteString("\n")
+	}
+
+	// 处理 SSL 证书 PEM 内容：写入文件并取得路径
+	var certPath, keyPath string
+	if w.SSL {
+		certPath = w.SSLCert
+		keyPath = w.SSLKey
+		if w.SSLCertPEM != "" || w.SSLKeyPEM != "" {
+			sslDir := filepath.Join(global.GetDataDir(), "ssl", w.Domain)
+			_ = os.MkdirAll(sslDir, 0700)
+			if w.SSLCertPEM != "" {
+				certPath = filepath.Join(sslDir, "fullchain.pem")
+				_ = os.WriteFile(certPath, []byte(w.SSLCertPEM), 0600)
+			}
+			if w.SSLKeyPEM != "" {
+				keyPath = filepath.Join(sslDir, "privkey.pem")
+				_ = os.WriteFile(keyPath, []byte(w.SSLKeyPEM), 0600)
+			}
+		}
+	}
+
 	sb.WriteString("server {\n")
 	if w.SSL {
 		sb.WriteString(fmt.Sprintf("    listen %d;\n", port))
@@ -1023,11 +1055,11 @@ func (s *WebsiteService) applyConfig(w *model.Website) error {
 		sb.WriteString(fmt.Sprintf("    listen %d ssl http2;\n", port+443))
 		sb.WriteString(fmt.Sprintf("    listen [::]:%d ssl http2;\n", port+443))
 		sb.WriteString(fmt.Sprintf("    server_name %s;\n", w.Domain))
-		if w.SSLCert != "" {
-			sb.WriteString(fmt.Sprintf("    ssl_certificate %s;\n", w.SSLCert))
+		if certPath != "" {
+			sb.WriteString(fmt.Sprintf("    ssl_certificate %s;\n", certPath))
 		}
-		if w.SSLKey != "" {
-			sb.WriteString(fmt.Sprintf("    ssl_certificate_key %s;\n", w.SSLKey))
+		if keyPath != "" {
+			sb.WriteString(fmt.Sprintf("    ssl_certificate_key %s;\n", keyPath))
 		}
 		sb.WriteString("    ssl_protocols TLSv1.2 TLSv1.3;\n")
 		sb.WriteString("    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256;\n")
@@ -1045,6 +1077,11 @@ func (s *WebsiteService) applyConfig(w *model.Website) error {
 		sb.WriteString("        proxy_set_header X-Real-IP $remote_addr;\n")
 		sb.WriteString("        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
 		sb.WriteString("        proxy_set_header X-Forwarded-Proto $scheme;\n")
+		if w.ProxyWS {
+			sb.WriteString("        proxy_set_header Upgrade $http_upgrade;\n")
+			sb.WriteString("        proxy_set_header Connection \"upgrade\";\n")
+			sb.WriteString("        proxy_http_version 1.1;\n")
+		}
 		sb.WriteString("    }\n")
 	} else {
 		root := w.Root
@@ -1055,19 +1092,134 @@ func (s *WebsiteService) applyConfig(w *model.Website) error {
 		indexFile := filepath.Join(root, "index.html")
 		if _, err := os.Stat(indexFile); os.IsNotExist(err) {
 			defaultHtml := fmt.Sprintf(`<html>
-<head><title>Welcome to %s</title></head>
-<body>
-<h1>Website %s is running!</h1>
-<p>Managed by MiniPanel.</p>
-</body>
-</html>`, w.Domain, w.Domain)
+		<head><title>Welcome to %s</title></head>
+		<body>
+		<h1>Website %s is running!</h1>
+		<p>Managed by MiniPanel.</p>
+		</body>
+		</html>`, w.Domain, w.Domain)
 			os.WriteFile(indexFile, []byte(defaultHtml), 0644)
 		}
 		sb.WriteString(fmt.Sprintf("\n    root %s;\n", root))
-		sb.WriteString("    index index.html index.htm index.php;\n")
+
+		// 默认首页
+		indexPage := w.IndexPage
+		if indexPage == "" {
+			indexPage = "index.html index.htm index.php"
+		}
+		sb.WriteString(fmt.Sprintf("    index %s;\n", indexPage))
+
 		sb.WriteString("\n    location / {\n")
 		sb.WriteString("        try_files $uri $uri/ =404;\n")
 		sb.WriteString("    }\n")
+
+		// 安全文件访问控制
+		sb.WriteString("\n    # 禁止访问敏感文件\n")
+		sb.WriteString("    location ~ ^/(\\.user\\.ini|\\.htaccess|\\.git|\\.svn|\\.env|\\.project|LICENSE|README\\.md|\\.DS_Store) {\n")
+		sb.WriteString("        return 404;\n")
+		sb.WriteString("    }\n")
+
+		// 静态资源缓存
+		sb.WriteString("\n    # 图片/字体 30天缓存\n")
+		sb.WriteString("    location ~ .*\\.(gif|jpg|jpeg|png|bmp|swf|ico|svg|woff|woff2|ttf|eot)$ {\n")
+		sb.WriteString("        expires 30d;\n")
+		sb.WriteString("        access_log off;\n")
+		sb.WriteString("    }\n")
+		sb.WriteString("\n    # JS/CSS 12小时缓存\n")
+		sb.WriteString("    location ~ .*\\.(js|css)$ {\n")
+		sb.WriteString("        expires 12h;\n")
+		sb.WriteString("        access_log off;\n")
+		sb.WriteString("    }\n")
+	}
+
+	// 301/302 重定向规则（静态和代理均生效）
+	if w.Redirects != "" {
+		var rules []model.RedirectRule
+		if err := json.Unmarshal([]byte(w.Redirects), &rules); err == nil {
+			for _, r := range rules {
+				if r.From != "" && r.To != "" && (r.Code == 301 || r.Code == 302) {
+					sb.WriteString(fmt.Sprintf("\n    # 重定向 %s -> %s (%d)\n", r.From, r.To, r.Code))
+					sb.WriteString(fmt.Sprintf("    if ($host = \"%s\") {\n", r.From))
+					sb.WriteString(fmt.Sprintf("        return %d %s$request_uri;\n", r.Code, r.To))
+					sb.WriteString("    }\n")
+				}
+			}
+		}
+	}
+
+	// 目录密码保护（静态和代理均生效）
+	if w.AuthEnabled && w.AuthUser != "" && w.AuthPassword != "" {
+		authDir := filepath.Join(global.GetDataDir(), "auth", w.Domain)
+		_ = os.MkdirAll(authDir, 0700)
+		htpasswdPath := filepath.Join(authDir, ".htpasswd")
+		_ = s.generateHtpasswd(htpasswdPath, w.AuthUser, w.AuthPassword)
+		sb.WriteString("\n    # 目录密码保护\n")
+		sb.WriteString("    auth_basic \"Restricted Area\";\n")
+		sb.WriteString(fmt.Sprintf("    auth_basic_user_file %s;\n", htpasswdPath))
+	}
+
+	// 自定义错误页面
+	if w.ErrorPage404 != "" || w.ErrorPage502 != "" || w.ErrorPage503 != "" {
+		errDir := filepath.Join(global.GetDataDir(), "error", w.Domain)
+		_ = os.MkdirAll(errDir, 0755)
+		errPages := map[int]string{404: w.ErrorPage404, 502: w.ErrorPage502, 503: w.ErrorPage503}
+		for code, html := range errPages {
+			if html == "" {
+				continue
+			}
+			fileName := fmt.Sprintf("%d.html", code)
+			_ = os.WriteFile(filepath.Join(errDir, fileName), []byte(html), 0644)
+			sb.WriteString(fmt.Sprintf("\n    error_page %d /%s;\n", code, fileName))
+		}
+		sb.WriteString(fmt.Sprintf("\n    location ~ ^/\\d+\\.html$ {\n        root %s;\n    }\n", errDir))
+	}
+
+	// 频率限制（server 块内）
+	if w.RateLimitEnabled && w.RateLimitRate != "" {
+		zoneName := fmt.Sprintf("zone_%s_%d", strings.ReplaceAll(w.Domain, ".", "_"), w.Port)
+		burst := w.RateLimitBurst
+		if burst <= 0 {
+			burst = 10
+		}
+		sb.WriteString(fmt.Sprintf("\n    limit_req zone=%s burst=%d;\n", zoneName, burst))
+	}
+
+	// 防盗链
+	if w.HotlinkProtection {
+		exts := w.HotlinkExts
+		if exts == "" {
+			exts = "jpg,jpeg,png,gif,svg,webp,js,css,woff,woff2"
+		}
+		domains := w.HotlinkDomains
+		if domains == "" {
+			domains = "none blocked"
+		} else {
+			domains = "none blocked " + domains
+		}
+		sb.WriteString(fmt.Sprintf("\n    location ~ .*\\.(%s)$ {\n", strings.ReplaceAll(exts, ",", "|")))
+		sb.WriteString(fmt.Sprintf("        valid_referers %s;\n", domains))
+		sb.WriteString("        if ($invalid_referer) {\n            return 403;\n        }\n")
+		sb.WriteString("    }\n")
+	}
+
+	// IP 黑白名单
+	if w.IPFilterEnabled && w.IPFilterList != "" {
+		ips := strings.Split(w.IPFilterList, "\n")
+		sb.WriteString("\n    # IP 过滤\n")
+		for _, ip := range ips {
+			ip = strings.TrimSpace(ip)
+			if ip == "" {
+				continue
+			}
+			if w.IPFilterMode == "whitelist" {
+				sb.WriteString(fmt.Sprintf("    allow %s;\n", ip))
+			} else {
+				sb.WriteString(fmt.Sprintf("    deny %s;\n", ip))
+			}
+		}
+		if w.IPFilterMode == "whitelist" {
+			sb.WriteString("    deny all;\n")
+		}
 	}
 
 	sb.WriteString("}\n")
@@ -1100,4 +1252,250 @@ func (s *WebsiteService) resolveConfigPath(w *model.Website) string {
 		return w.ConfigFile
 	}
 	return s.nginxConfPath(w)
+}
+
+// generateHtpasswd 生成 htpasswd 文件（优先 htpasswd 命令，回退 openssl）
+func (s *WebsiteService) generateHtpasswd(path, user, password string) error {
+	// 尝试使用 htpasswd 命令
+	if syscmd.Which("htpasswd") {
+		cmd := exec.Command("htpasswd", "-bc", path, user, password)
+		if err := cmd.Run(); err == nil {
+			os.Chmod(path, 0600)
+			return nil
+		}
+	}
+	// 回退：使用 openssl 生成 crypt 密码
+	if syscmd.Which("openssl") {
+		hash, err := exec.Command("openssl", "passwd", "-crypt", password).CombinedOutput()
+		if err == nil {
+			line := fmt.Sprintf("%s:%s\n", user, strings.TrimSpace(string(hash)))
+			return os.WriteFile(path, []byte(line), 0600)
+		}
+	}
+	// 最后回退：明文存储
+	line := fmt.Sprintf("%s:%s\n", user, password)
+	return os.WriteFile(path, []byte(line), 0600)
+}
+
+// AccessLogEntry 访问日志条目
+type AccessLogEntry struct {
+	Time       string `json:"time"`
+	IP         string `json:"ip"`
+	Method     string `json:"method"`
+	URL        string `json:"url"`
+	StatusCode int    `json:"status_code"`
+	Size       int64  `json:"size"`
+	Referer    string `json:"referer"`
+	UserAgent  string `json:"user_agent"`
+}
+
+// AccessLogFilter 日志过滤条件
+type AccessLogFilter struct {
+	Date       string `json:"date"`        // 日期过滤 "2026-07-06"
+	IP         string `json:"ip"`          // IP 过滤
+	StatusCode string `json:"status_code"` // 状态码过滤
+	URL        string `json:"url"`         // URL 关键词
+	Page       int    `json:"page"`        // 页码，从 1 开始
+	PageSize   int    `json:"page_size"`   // 每页条数
+}
+
+// ParseAccessLogs 解析网站访问日志
+func (s *WebsiteService) ParseAccessLogs(w *model.Website, filters AccessLogFilter) ([]AccessLogEntry, int64, error) {
+	logPath := s.findAccessLogPath(w.Domain)
+	if logPath == "" {
+		return nil, 0, fmt.Errorf("找不到 %s 的访问日志", w.Domain)
+	}
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		return nil, 0, fmt.Errorf("读取日志失败: %w", err)
+	}
+
+	// combined log 正则
+	logRe := regexp.MustCompile(`^(\S+) - \S+ \[([^\]]+)\] "(\S+) (\S+) \S+" (\d+) (\d+) "([^"]*)" "([^"]*)"`)
+	lines := strings.Split(string(data), "\n")
+
+	var allEntries []AccessLogEntry
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		m := logRe.FindStringSubmatch(line)
+		if len(m) < 9 {
+			continue
+		}
+		statusCode, _ := strconv.Atoi(m[5])
+		size, _ := strconv.ParseInt(m[6], 10, 64)
+		entry := AccessLogEntry{
+			IP:         m[1],
+			Time:       m[2],
+			Method:     m[3],
+			URL:        m[4],
+			StatusCode: statusCode,
+			Size:       size,
+			Referer:    m[7],
+			UserAgent:  m[8],
+		}
+
+		// 过滤
+		if filters.Date != "" && !strings.HasPrefix(entry.Time, filters.Date) {
+			continue
+		}
+		if filters.IP != "" && entry.IP != filters.IP {
+			continue
+		}
+		if filters.StatusCode != "" {
+			code, _ := strconv.Atoi(filters.StatusCode)
+			if entry.StatusCode != code {
+				continue
+			}
+		}
+		if filters.URL != "" && !strings.Contains(entry.URL, filters.URL) {
+			continue
+		}
+		allEntries = append(allEntries, entry)
+	}
+
+	total := int64(len(allEntries))
+
+	// 分页（倒序，最新在前）
+	if filters.PageSize <= 0 {
+		filters.PageSize = 50
+	}
+	if filters.Page <= 0 {
+		filters.Page = 1
+	}
+	start := int64(len(allEntries)) - int64(filters.Page)*int64(filters.PageSize)
+	end := start + int64(filters.PageSize)
+	if start < 0 {
+		start = 0
+	}
+	if end > int64(len(allEntries)) {
+		end = int64(len(allEntries))
+	}
+
+	// 反转结果（最新在前）
+	var result []AccessLogEntry
+	for i := end - 1; i >= start; i-- {
+		result = append(result, allEntries[i])
+	}
+
+	return result, total, nil
+}
+
+// findAccessLogPath 查找站点的访问日志文件
+func (s *WebsiteService) findAccessLogPath(domain string) string {
+	candidates := []string{
+		fmt.Sprintf("/var/log/nginx/%s.access.log", domain),
+		"/var/log/nginx/access.log",
+		"/usr/local/nginx/logs/access.log",
+		"/var/log/nginx/access_log",
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+// TrafficPoint 流量统计点
+type TrafficPoint struct {
+	Time      string `json:"time"`
+	Requests  int64  `json:"requests"`
+	Bandwidth int64  `json:"bandwidth"`
+}
+
+// GetTrafficStats 获取网站流量统计（按小时聚合）
+func (s *WebsiteService) GetTrafficStats(w *model.Website, period string) ([]TrafficPoint, error) {
+	logPath := s.findAccessLogPath(w.Domain)
+	if logPath == "" {
+		return nil, fmt.Errorf("找不到 %s 的访问日志", w.Domain)
+	}
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		return nil, fmt.Errorf("读取日志失败: %w", err)
+	}
+
+	logRe := regexp.MustCompile(`^(\S+) - \S+ \[([^\]]+)\] "(\S+) (\S+) \S+" (\d+) (\d+) "([^"]*)" "([^"]*)"`)
+	lines := strings.Split(string(data), "\n")
+
+	// 确定时间桶大小
+	bucketHours := 1
+	lookbackHours := 24
+	switch period {
+	case "7d":
+		lookbackHours = 168
+		bucketHours = 6
+	case "30d":
+		lookbackHours = 720
+		bucketHours = 24
+	}
+
+	// 解析并聚合
+	buckets := make(map[string]*TrafficPoint)
+	now := time.Now()
+	cutoff := now.Add(-time.Duration(lookbackHours) * time.Hour)
+
+	timeRe := regexp.MustCompile(`(\d{2})/(\w{3})/(\d{4}):(\d{2}):(\d{2})`)
+	monthMap := map[string]time.Month{
+		"Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+		"Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
+	}
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		m := logRe.FindStringSubmatch(line)
+		if len(m) < 9 {
+			continue
+		}
+
+		// 解析时间
+		tm := timeRe.FindStringSubmatch(m[2])
+		if len(tm) < 6 {
+			continue
+		}
+		day, _ := strconv.Atoi(tm[1])
+		month := monthMap[tm[2]]
+		year, _ := strconv.Atoi(tm[3])
+		hour, _ := strconv.Atoi(tm[4])
+		minute, _ := strconv.Atoi(tm[5])
+		logTime := time.Date(year, month, day, hour, minute, 0, 0, time.UTC)
+
+		if logTime.Before(cutoff) {
+			continue
+		}
+
+		// 按 bucket 对齐
+		bucketHour := (logTime.Hour() / bucketHours) * bucketHours
+		key := logTime.Format("2006-01-02") + fmt.Sprintf(" %02d:00", bucketHour)
+
+		if buckets[key] == nil {
+			buckets[key] = &TrafficPoint{Time: key}
+		}
+		buckets[key].Requests++
+		size, _ := strconv.ParseInt(m[6], 10, 64)
+		buckets[key].Bandwidth += size
+	}
+
+	// 按时间排序
+	var result []TrafficPoint
+	for _, v := range buckets {
+		result = append(result, *v)
+	}
+	// 简单冒泡排序
+	for i := 0; i < len(result); i++ {
+		for j := i + 1; j < len(result); j++ {
+			if result[i].Time > result[j].Time {
+				result[i], result[j] = result[j], result[i]
+			}
+		}
+	}
+
+	return result, nil
 }
