@@ -486,7 +486,7 @@ func (s *FileService) GetRecycleDir() string {
 	return filepath.Join(s.root, "tmp", ".minipanel_recycle")
 }
 
-// MoveToRecycle 移动文件到回收站
+// MoveToRecycle 移动文件到回收站（支持跨文件系统）
 func (s *FileService) MoveToRecycle(path string) error {
 	fullPath, err := s.resolvePath(path)
 	if err != nil {
@@ -501,7 +501,54 @@ func (s *FileService) MoveToRecycle(path string) error {
 	safeName = strings.ReplaceAll(safeName, string(filepath.Separator), "_")
 	ts := strconv.FormatInt(time.Now().UnixNano(), 10)
 	dest := filepath.Join(recycleDir, safeName+"_"+ts)
-	return os.Rename(fullPath, dest)
+
+	// 使用 copy + remove 替代 os.Rename，解决跨文件系统 invalid cross-device link 问题
+	if err := s.copyOrMove(fullPath, dest); err != nil {
+		return err
+	}
+	return os.RemoveAll(fullPath)
+}
+
+// copyOrMove 复制文件或目录到目标路径
+func (s *FileService) copyOrMove(src, dest string) error {
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	if srcInfo.IsDir() {
+		return filepath.Walk(src, func(path string, fi os.FileInfo, _ error) error {
+			rel, _ := filepath.Rel(src, path)
+			target := filepath.Join(dest, rel)
+			if fi.IsDir() {
+				return os.MkdirAll(target, fi.Mode())
+			}
+			return s.copyFile(path, target)
+		})
+	}
+	os.MkdirAll(filepath.Dir(dest), 0755)
+	return s.copyFile(src, dest)
+}
+
+// copyFile 复制单个文件
+func (s *FileService) copyFile(src, dest string) error {
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+	destFile, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+	if _, err := io.Copy(destFile, srcFile); err != nil {
+		return err
+	}
+	return os.Chmod(dest, srcInfo.Mode())
 }
 
 // ListRecycleBin 列出回收站内容
@@ -533,22 +580,43 @@ func (s *FileService) ListRecycleBin() ([]FileInfo, error) {
 	return files, nil
 }
 
-// RestoreFromRecycle 从回收站恢复
+// RestoreFromRecycle 从回收站恢复到原始路径
 func (s *FileService) RestoreFromRecycle(recyclePath string) error {
-	// 回收站路径格式：{recycleDir}/{safeName}_{timestamp}
-	// 恢复时尝试恢复原始名称
 	recycleDir := s.GetRecycleDir()
 	fullPath := filepath.Join(recycleDir, recyclePath)
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 		return fmt.Errorf("recycle item not found")
 	}
-	// 恢复到一个临时名，用户需手动处理
-	restoreName := strings.TrimSuffix(recyclePath, filepath.Ext(recyclePath))
-	// 简单恢复：移到 /tmp/restored_name
-	destDir := filepath.Join(s.root, "tmp", "restored")
-	os.MkdirAll(destDir, 0755)
-	dest := filepath.Join(destDir, restoreName)
-	return os.Rename(fullPath, dest)
+
+	// 从回收站文件名反向解析原始路径
+	// 格式：{safeName}_{timestamp}，safeName = 原始路径中 / 替换为 _
+	// 例：_home_user_index.html_1680000000000 → /home/user/index.html
+	baseName := recyclePath
+	// 去掉末尾的 _timestamp（最后一段以 _ 开头且全为数字）
+	lastUnderscore := strings.LastIndex(baseName, "_")
+	if lastUnderscore > 0 {
+		suffix := baseName[lastUnderscore+1:]
+		if _, err := strconv.ParseInt(suffix, 10, 64); err == nil {
+			baseName = baseName[:lastUnderscore]
+		}
+	}
+	// _ 还原为 /
+	originalPath := strings.ReplaceAll(baseName, "_", "/")
+
+	// 确保原始路径的父目录存在
+	os.MkdirAll(filepath.Dir(originalPath), 0755)
+
+	// 如果目标已存在，追加 _restored 后缀
+	dest := originalPath
+	if _, err := os.Stat(dest); err == nil {
+		dest = originalPath + "_restored"
+	}
+
+	// 使用 copy + remove 支持跨分区
+	if err := s.copyOrMove(fullPath, dest); err != nil {
+		return err
+	}
+	return os.RemoveAll(fullPath)
 }
 
 // ClearRecycleBin 清空回收站
