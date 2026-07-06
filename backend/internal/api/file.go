@@ -126,22 +126,24 @@ func (a *FileAPI) Download(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
+
+	// 使用 os.Stat 跟随符号链接，获取真实文件信息
+	info, err := os.Stat(resolvedPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		return
+	}
+	if info.IsDir() {
+		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "不能下载目录，请使用“下载ZIP”按钮"})
+		return
+	}
+
 	file, err := os.Open(resolvedPath)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	defer file.Close()
-
-	info, err := file.Stat()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
-		return
-	}
-	if info.IsDir() {
-		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "不能下载目录"})
-		return
-	}
 
 	c.Header("Content-Disposition", "attachment; filename*=utf-8''"+url.PathEscape(info.Name()))
 	c.Header("Content-Length", strconv.FormatInt(info.Size(), 10))

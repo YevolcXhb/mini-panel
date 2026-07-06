@@ -6,9 +6,10 @@ type Website struct {
 	Domain      string `json:"domain" gorm:"not null;index"`
 	Port        int    `json:"port" gorm:"default:80"`
 	Root        string `json:"root"`
-	Type        string `json:"type" gorm:"default:static"` // static / proxy
+	Type        string `json:"type" gorm:"default:static"` // static / proxy / php
 	ProxyTarget string `json:"proxy_target"`               // e.g. http://localhost:8080
 	ProxyWS     bool   `json:"proxy_ws"`                   // WebSocket 支持
+	PhpVersion  string `json:"php_version"`                 // PHP 版本，如 8.1
 	SSL         bool   `json:"ssl" gorm:"default:false"`
 	SSLCert     string `json:"ssl_cert"`                      // 证书文件路径（兼容旧版）
 	SSLKey      string `json:"ssl_key"`                       // 私钥文件路径（兼容旧版）

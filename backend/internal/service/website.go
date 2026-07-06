@@ -1113,6 +1113,20 @@ func (s *WebsiteService) applyConfig(w *model.Website) error {
 		sb.WriteString("        try_files $uri $uri/ =404;\n")
 		sb.WriteString("    }\n")
 
+		// PHP-FPM 配置（PHP 网站类型）
+		if w.Type == "php" && w.PhpVersion != "" {
+			phpSvc := NewPhpService()
+			socket := phpSvc.GetFpmSocket(w.PhpVersion)
+			sb.WriteString("\n    # PHP-FPM 处理\n")
+			sb.WriteString("    location ~ \\.php$ {\n")
+			sb.WriteString(fmt.Sprintf("        fastcgi_pass %s;\n", socket))
+			sb.WriteString("        fastcgi_index index.php;\n")
+			sb.WriteString("        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;\n")
+			sb.WriteString("        include fastcgi_params;\n")
+			sb.WriteString("    }\n")
+			_ = phpSvc.SetFpmPool(w.PhpVersion, w.Domain, root, w.Port)
+		}
+
 		// 安全文件访问控制
 		sb.WriteString("\n    # 禁止访问敏感文件\n")
 		sb.WriteString("    location ~ ^/(\\.user\\.ini|\\.htaccess|\\.git|\\.svn|\\.env|\\.project|LICENSE|README\\.md|\\.DS_Store) {\n")

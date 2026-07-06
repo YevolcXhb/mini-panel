@@ -71,14 +71,22 @@ func (s *FileService) List(path string) ([]FileInfo, error) {
 		if err != nil {
 			continue
 		}
+		isLink := info.Mode()&os.ModeSymlink != 0
+		// 对符号链接跟随，获取真实文件信息以正确判断类型/大小
+		if isLink {
+			followPath := filepath.Join(fullPath, e.Name())
+			if realInfo, err := os.Stat(followPath); err == nil {
+				info = realInfo
+			}
+		}
 		f := FileInfo{
 			Name:    e.Name(),
 			Path:    filepath.Join(path, e.Name()),
 			Size:    info.Size(),
 			Mode:    info.Mode().String(),
 			ModTime: info.ModTime().Unix(),
-			IsDir:   e.IsDir(),
-			IsLink:  info.Mode()&os.ModeSymlink != 0,
+			IsDir:   info.IsDir(),
+			IsLink:  isLink,
 		}
 		files = append(files, f)
 	}
@@ -536,7 +544,7 @@ func (s *FileService) RestoreFromRecycle(recyclePath string) error {
 	}
 	// 恢复到一个临时名，用户需手动处理
 	restoreName := strings.TrimSuffix(recyclePath, filepath.Ext(recyclePath))
-		// 简单恢复：移到 /tmp/restored_name
+	// 简单恢复：移到 /tmp/restored_name
 	destDir := filepath.Join(s.root, "tmp", "restored")
 	os.MkdirAll(destDir, 0755)
 	dest := filepath.Join(destDir, restoreName)

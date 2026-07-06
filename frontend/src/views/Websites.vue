@@ -35,6 +35,7 @@
       <div style="margin-bottom:16px;display:flex;gap:8px;justify-content:space-between;align-items:center">
         <div style="display:flex;gap:8px">
           <el-button type="primary" @click="showAdd">添加网站</el-button>
+          <el-button @click="showLnmp = true; loadPhpVersions()">LNMP 管理</el-button>
         </div>
       </div>
 
@@ -43,6 +44,11 @@
           <el-table-column prop="name" label="名称" width="140" />
           <el-table-column prop="domain" label="域名" />
           <el-table-column prop="port" label="端口" width="80" />
+          <el-table-column label="类型" width="80">
+            <template #default="{ row }">
+              <el-tag size="small" :type="row.type === 'php' ? 'warning' : row.type === 'proxy' ? 'primary' : 'info'">{{ row.type === 'php' ? 'PHP' : row.type === 'proxy' ? '代理' : '静态' }}</el-tag>
+            </template>
+          </el-table-column>
           <el-table-column label="SSL" width="80">
             <template #default="{ row }">
               <el-tag size="small" :type="row.ssl ? 'success' : 'info'">{{ row.ssl ? '启用' : '关闭' }}</el-tag>
@@ -97,14 +103,21 @@
             <el-radio-group v-model="form.type">
               <el-radio-button label="static">静态网站</el-radio-button>
               <el-radio-button label="proxy">反向代理</el-radio-button>
+              <el-radio-button label="php">PHP 网站</el-radio-button>
             </el-radio-group>
           </el-form-item>
-          <el-form-item label="网站目录" v-if="form.type === 'static'">
+          <el-form-item label="网站目录" v-if="form.type === 'static' || form.type === 'php'">
             <el-input v-model="form.root" placeholder="留空自动创建 /data/www/domain" />
           </el-form-item>
-          <el-form-item label="默认首页" v-if="form.type === 'static'">
+          <el-form-item label="默认首页" v-if="form.type === 'static' || form.type === 'php'">
             <el-input v-model="form.index_page" placeholder="index.html index.htm index.php" />
             <div style="font-size: 12px; color: #909399; margin-top: 4px">按优先级排列，空格分隔</div>
+          </el-form-item>
+          <el-form-item label="PHP 版本" v-if="form.type === 'php'">
+            <el-select v-model="form.php_version" placeholder="选择 PHP 版本" style="width: 100%">
+              <el-option v-for="v in phpVersions" :key="v.version" :label="`PHP ${v.version}${v.installed ? '' : ' (未安装)'}`" :value="v.version" :disabled="!v.installed" />
+            </el-select>
+            <div style="font-size: 12px; color: #909399; margin-top: 4px">请先在 LNMP 管理中安装 PHP 版本</div>
           </el-form-item>
           <el-form-item label="代理目标" v-if="form.type === 'proxy'">
             <el-input v-model="form.proxy_target" placeholder="如：http://localhost:8080" />
@@ -268,6 +281,85 @@
           </el-tab-pane>
         </el-tabs>
       </el-dialog>
+
+      <!-- LNMP 管理 -->
+      <el-dialog v-model="showLnmp" title="LNMP 套件管理" width="800px">
+        <el-tabs v-model="lnmpTab">
+          <el-tab-pane label="PHP 版本" name="versions">
+            <el-table :data="phpVersions" v-loading="phpLoading" size="small">
+              <el-table-column prop="version" label="版本" width="100">
+                <template #default="{ row }">PHP {{ row.version }}</template>
+              </el-table-column>
+              <el-table-column label="状态" width="160">
+                <template #default="{ row }">
+                  <el-tag v-if="!row.installed" size="small" type="info">未安装</el-tag>
+                  <el-tag v-else-if="row.running" size="small" type="success">运行中</el-tag>
+                  <el-tag v-else size="small" type="danger">已停止</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="Socket" min-width="200">
+                <template #default="{ row }">
+                  <span v-if="row.fpm_socket" style="font-family: monospace; font-size: 12px">{{ row.fpm_socket }}</span>
+                  <span v-else style="color: #c0c4cc">-</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="320">
+                <template #default="{ row }">
+                  <template v-if="!row.installed">
+                    <el-button size="small" type="primary" @click="installPhpVersion(row.version)">安装</el-button>
+                  </template>
+                  <template v-else>
+                    <el-button size="small" type="success" v-if="!row.running" @click="startPhpFpm(row.version)">启动</el-button>
+                    <el-button size="small" type="warning" v-if="row.running" @click="stopPhpFpm(row.version)">停止</el-button>
+                    <el-button size="small" @click="restartPhpFpm(row.version)">重启</el-button>
+                    <el-button size="small" @click="showPhpExt(row.version)">扩展</el-button>
+                    <el-button size="small" @click="showPhpConfig(row.version)">配置</el-button>
+                    <el-button size="small" type="danger" @click="removePhpVersion(row.version)">卸载</el-button>
+                  </template>
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-tab-pane>
+
+          <el-tab-pane v-if="selectedPhpVersion" label="扩展管理" name="extensions">
+            <div style="margin-bottom: 12px; display: flex; gap: 8px; align-items: center">
+              <span style="font-weight: 600">PHP {{ selectedPhpVersion }}</span>
+              <el-input v-model="newExtName" placeholder="扩展名 (如 redis, imagick)" size="small" style="width: 200px" />
+              <el-button size="small" type="primary" @click="installExt">安装扩展</el-button>
+              <el-button size="small" @click="loadPhpExts">刷新</el-button>
+            </div>
+            <el-table :data="phpExts" v-loading="extLoading" size="small">
+              <el-table-column prop="name" label="扩展名" />
+              <el-table-column label="状态" width="100">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="row.installed ? 'success' : 'info'">{{ row.installed ? '已安装' : '未安装' }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="100">
+                <template #default="{ row }">
+                  <el-button v-if="row.installed" size="small" type="danger" @click="removeExt(row.name)">卸载</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-tab-pane>
+
+          <el-tab-pane v-if="selectedPhpVersion" label="PHP 配置" name="config">
+            <div style="margin-bottom: 12px; display: flex; gap: 8px; align-items: center">
+              <span style="font-weight: 600">PHP {{ selectedPhpVersion }} php.ini</span>
+              <el-button size="small" type="primary" @click="savePhpConfig">保存配置</el-button>
+              <el-button size="small" @click="loadPhpConfig">刷新</el-button>
+            </div>
+            <el-table :data="phpConfig" v-loading="configLoading" size="small">
+              <el-table-column prop="key" label="配置项" width="220" />
+              <el-table-column label="值">
+                <template #default="{ row }">
+                  <el-input v-model="row.value" size="small" />
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-tab-pane>
+        </el-tabs>
+      </el-dialog>
     </template>
   </div>
 </template>
@@ -275,7 +367,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { websiteApi, systemApi } from '../api'
+import { websiteApi, systemApi, phpApi } from '../api'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { LineChart } from 'echarts/charts'
@@ -292,7 +384,7 @@ const installing = ref(false)
 const actionLoading = ref(false)
 const serviceStatus = ref<any>({ installed: false, running: false, version: '' })
 
-const form = ref<any>({ name: '', domain: '', port: 80, root: '', type: 'static', proxy_target: '', proxy_ws: false, ssl: false, ssl_cert: '', ssl_key: '', ssl_cert_pem: '', ssl_key_pem: '', index_page: '', redirects: [], auth_enabled: false, auth_user: '', auth_password: '',
+const form = ref<any>({ name: '', domain: '', port: 80, root: '', type: 'static', php_version: '', proxy_target: '', proxy_ws: false, ssl: false, ssl_cert: '', ssl_key: '', ssl_cert_pem: '', ssl_key_pem: '', index_page: '', redirects: [], auth_enabled: false, auth_user: '', auth_password: '',
   error_page_404: '', error_page_502: '', error_page_503: '',
   rate_limit_enabled: false, rate_limit_rate: '', rate_limit_burst: 10,
   hotlink_protection: false, hotlink_domains: '', hotlink_exts: 'jpg,jpeg,png,gif,svg,webp,js,css,woff,woff2',
@@ -400,7 +492,7 @@ async function loadWebsites() {
 
 function showAdd() {
   editing.value = false
-  form.value = { name: '', domain: '', port: 80, root: '', type: 'static', proxy_target: '', proxy_ws: false, ssl: false, ssl_cert: '', ssl_key: '', ssl_cert_pem: '', ssl_key_pem: '', index_page: '', redirects: [],
+  form.value = { name: '', domain: '', port: 80, root: '', type: 'static', php_version: '', proxy_target: '', proxy_ws: false, ssl: false, ssl_cert: '', ssl_key: '', ssl_cert_pem: '', ssl_key_pem: '', index_page: '', redirects: [],
     error_page_404: '', error_page_502: '', error_page_503: '',
     rate_limit_enabled: false, rate_limit_rate: '', rate_limit_burst: 10,
     hotlink_protection: false, hotlink_domains: '', hotlink_exts: 'jpg,jpeg,png,gif,svg,webp,js,css,woff,woff2',
@@ -566,6 +658,134 @@ async function loadStats() {
   } catch (e: any) {
     ElMessage.error(e?.message || '加载统计失败')
   }
+}
+
+// LNMP 管理
+const showLnmp = ref(false)
+const lnmpTab = ref('versions')
+const phpVersions = ref<any[]>([])
+const phpLoading = ref(false)
+const selectedPhpVersion = ref('')
+const phpExts = ref<any[]>([])
+const extLoading = ref(false)
+const newExtName = ref('')
+const phpConfig = ref<any[]>([])
+const configLoading = ref(false)
+
+async function loadPhpVersions() {
+  phpLoading.value = true
+  try {
+    const res: any = await phpApi.getVersions()
+    phpVersions.value = res.data || []
+  } catch (e: any) {
+    ElMessage.error(e?.message || '加载 PHP 版本失败')
+  } finally { phpLoading.value = false }
+}
+
+async function installPhpVersion(version: string) {
+  try {
+    await ElMessageBox.confirm(`确定安装 PHP ${version} 吗？这将通过包管理器安装`, '安装 PHP', { type: 'warning' })
+    await phpApi.installVersion(version)
+    ElMessage.success(`PHP ${version} 安装中，请稍候...`)
+    setTimeout(() => loadPhpVersions(), 3000)
+  } catch (e: any) {
+    if (e !== 'cancel') ElMessage.error(e?.message || '安装失败')
+  }
+}
+
+async function removePhpVersion(version: string) {
+  try {
+    await ElMessageBox.confirm(`确定卸载 PHP ${version} 吗？所有相关扩展将被删除`, '卸载 PHP', { type: 'error' })
+    await phpApi.removeVersion(version)
+    ElMessage.success(`PHP ${version} 卸载成功`)
+    loadPhpVersions()
+  } catch (e: any) {
+    if (e !== 'cancel') ElMessage.error(e?.message || '卸载失败')
+  }
+}
+
+async function startPhpFpm(version: string) {
+  try {
+    await phpApi.startFpm(version)
+    ElMessage.success(`PHP-FPM ${version} 启动成功`)
+    loadPhpVersions()
+  } catch (e: any) { ElMessage.error(e?.message || '启动失败') }
+}
+
+async function stopPhpFpm(version: string) {
+  try {
+    await phpApi.stopFpm(version)
+    ElMessage.success(`PHP-FPM ${version} 停止成功`)
+    loadPhpVersions()
+  } catch (e: any) { ElMessage.error(e?.message || '停止失败') }
+}
+
+async function restartPhpFpm(version: string) {
+  try {
+    await phpApi.restartFpm(version)
+    ElMessage.success(`PHP-FPM ${version} 重启成功`)
+    loadPhpVersions()
+  } catch (e: any) { ElMessage.error(e?.message || '重启失败') }
+}
+
+function showPhpExt(version: string) {
+  selectedPhpVersion.value = version
+  lnmpTab.value = 'extensions'
+  loadPhpExts()
+}
+
+async function loadPhpExts() {
+  if (!selectedPhpVersion.value) return
+  extLoading.value = true
+  try {
+    const res: any = await phpApi.getExtensions(selectedPhpVersion.value)
+    phpExts.value = res.data || []
+  } catch (e: any) { ElMessage.error(e?.message || '加载扩展失败') }
+  finally { extLoading.value = false }
+}
+
+async function installExt() {
+  if (!newExtName.value.trim()) { ElMessage.warning('请输入扩展名'); return }
+  try {
+    await phpApi.installExtension(selectedPhpVersion.value, newExtName.value.trim())
+    ElMessage.success('扩展安装成功')
+    newExtName.value = ''
+    loadPhpExts()
+  } catch (e: any) { ElMessage.error(e?.message || '安装失败') }
+}
+
+async function removeExt(name: string) {
+  try {
+    await ElMessageBox.confirm(`确定卸载扩展 ${name} 吗？`, '卸载扩展', { type: 'warning' })
+    await phpApi.removeExtension(selectedPhpVersion.value, name)
+    ElMessage.success('扩展卸载成功')
+    loadPhpExts()
+  } catch (e: any) {
+    if (e !== 'cancel') ElMessage.error(e?.message || '卸载失败')
+  }
+}
+
+function showPhpConfig(version: string) {
+  selectedPhpVersion.value = version
+  lnmpTab.value = 'config'
+  loadPhpConfig()
+}
+
+async function loadPhpConfig() {
+  if (!selectedPhpVersion.value) return
+  configLoading.value = true
+  try {
+    const res: any = await phpApi.getConfig(selectedPhpVersion.value)
+    phpConfig.value = res.data || []
+  } catch (e: any) { ElMessage.error(e?.message || '加载配置失败') }
+  finally { configLoading.value = false }
+}
+
+async function savePhpConfig() {
+  try {
+    await phpApi.updateConfig(selectedPhpVersion.value, phpConfig.value)
+    ElMessage.success('配置已保存，重启 PHP-FPM 后生效')
+  } catch (e: any) { ElMessage.error(e?.message || '保存失败') }
 }
 
 onMounted(async () => {

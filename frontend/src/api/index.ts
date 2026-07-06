@@ -96,7 +96,22 @@ export const fileApi = {
 	  listRecycleBin: () => api.get('/files/recycle-bin'),
 	  restoreRecycle: (path: string) => api.post('/files/recycle-bin/restore', { path }),
 	  clearRecycleBin: () => api.post('/files/recycle-bin/clear'),
-	}
+}
+
+export const phpApi = {
+  getVersions: () => api.get('/php/versions'),
+  installVersion: (version: string) => api.post('/php/versions/install', { version }),
+  removeVersion: (version: string) => api.delete(`/php/versions/${version}`),
+  startFpm: (version: string) => api.post(`/php/versions/${version}/start`),
+  stopFpm: (version: string) => api.post(`/php/versions/${version}/stop`),
+  restartFpm: (version: string) => api.post(`/php/versions/${version}/restart`),
+  getExtensions: (version: string) => api.get(`/php/versions/${version}/extensions`),
+  installExtension: (version: string, name: string) => api.post(`/php/versions/${version}/extensions`, { name }),
+  removeExtension: (version: string, name: string) => api.delete(`/php/versions/${version}/extensions/${name}`),
+  getConfig: (version: string) => api.get(`/php/versions/${version}/config`),
+  updateConfig: (version: string, items: any[]) => api.put(`/php/versions/${version}/config`, items),
+  getSocket: (version: string) => api.get(`/php/versions/${version}/socket`),
+}
 
 export const processApi = {
   list: () => api.get('/processes'),
