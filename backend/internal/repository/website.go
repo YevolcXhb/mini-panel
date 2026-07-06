@@ -51,3 +51,13 @@ func (r *WebsiteRepository) GetByDomainPort(domain string, port int) (*model.Web
 func (r *WebsiteRepository) DeleteByDomainPort(domain string, port int) error {
 	return r.db.Where("domain = ? AND port = ?", domain, port).Delete(&model.Website{}).Error
 }
+
+// CountByPhpVersion 统计使用指定 PHP 版本的网站数量
+// 条件：type='php' AND php_version=?（不区分 enabled，所有 PHP 站点都算依赖）
+func (r *WebsiteRepository) CountByPhpVersion(version string) (int64, error) {
+	var count int64
+	err := r.db.Model(&model.Website{}).
+		Where("type = ? AND php_version = ?", "php", version).
+		Count(&count).Error
+	return count, err
+}

@@ -138,6 +138,8 @@ func NewRouter() *gin.Engine {
 		apiV1.PUT("/websites/:id/toggle", website.Toggle)
 		apiV1.GET("/websites/:id/logs", website.GetAccessLogs)
 		apiV1.GET("/websites/:id/traffic", website.GetTrafficStats)
+		apiV1.GET("/websites/:id/databases", website.ListDatabasesByWebsite)
+		apiV1.GET("/databases/:id/websites", website.ListWebsitesByDB)
 
 		php := api.NewPhpAPI()
 		apiV1.GET("/php/versions", php.GetVersions)
@@ -163,6 +165,8 @@ func NewRouter() *gin.Engine {
 		apiV1.GET("/databases/:id/tables", db.ListTables)
 		apiV1.POST("/databases/:id/create-db", db.CreateDatabase)
 		apiV1.POST("/databases/:id/create-user", db.CreateUser)
+		apiV1.DELETE("/databases/:id/dbs/:dbName", db.DropDatabase)
+		apiV1.DELETE("/databases/:id/users/:username", db.DropUser)
 		apiV1.GET("/databases/:id/tables/:dbName/:tableName", db.DescribeTable)
 		apiV1.POST("/databases/:id/query", db.ExecuteQuery)
 		apiV1.POST("/databases/:id/backup/:dbName", db.Backup)

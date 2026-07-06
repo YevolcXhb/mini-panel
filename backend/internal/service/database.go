@@ -16,11 +16,15 @@ import (
 )
 
 type DatabaseService struct {
-	repo *repository.DatabaseRepository
+	repo   *repository.DatabaseRepository
+	wdRepo *repository.WebsiteDatabaseRepository
 }
 
 func NewDatabaseService() *DatabaseService {
-	return &DatabaseService{repo: repository.NewDatabaseRepository(global.DB)}
+	return &DatabaseService{
+		repo:   repository.NewDatabaseRepository(global.DB),
+		wdRepo: repository.NewWebsiteDatabaseRepository(global.DB),
+	}
 }
 
 // maskPassword 脱敏：密码只显示首尾各1位，中间用 *** 替代
@@ -73,8 +77,19 @@ func (s *DatabaseService) Create(item *model.DatabaseInstance) error {
 	return nil
 }
 
-func (s *DatabaseService) List() ([]model.DatabaseInstance, error) {
-	return s.repo.List()
+func (s *DatabaseService) List() ([]DatabaseInstanceWithCount, error) {
+	var items []DatabaseInstanceWithCount
+	err := global.DB.Model(&model.DatabaseInstance{}).
+		Select("database_instances.*, (SELECT COUNT(*) FROM website_databases WHERE website_databases.db_instance_id = database_instances.id AND website_databases.deleted_at IS NULL) as website_count").
+		Order("id DESC").
+		Find(&items).Error
+	return items, err
+}
+
+// DatabaseInstanceWithCount 在 DatabaseInstance 基础上附加关联网站数量
+type DatabaseInstanceWithCount struct {
+	model.DatabaseInstance
+	WebsiteCount int64 `json:"website_count" gorm:"-"`
 }
 
 func (s *DatabaseService) GetByID(id uint) (*model.DatabaseInstance, error) {
@@ -87,6 +102,16 @@ func (s *DatabaseService) Update(item *model.DatabaseInstance) error {
 
 func (s *DatabaseService) Delete(id uint) error {
 	global.LOG.Infof("[DB] Delete start: id=%d", id)
+	// 引用检查：若有关联网站，拒绝删除以保护数据
+	count, err := s.wdRepo.CountByInstanceID(id)
+	if err != nil {
+		global.LOG.Errorf("[DB] Delete reference check failed: id=%d err=%v", id, err)
+		return fmt.Errorf("检查数据库实例引用失败: %v", err)
+	}
+	if count > 0 {
+		global.LOG.Warnf("[DB] Delete rejected: id=%d is referenced by %d website(s)", id, count)
+		return fmt.Errorf("该数据库实例被 %d 个网站关联，请先解除关联（删除对应网站）后再删除", count)
+	}
 	if err := s.repo.Delete(id); err != nil {
 		global.LOG.Errorf("[DB] Delete failed: id=%d err=%v", id, err)
 		return err
@@ -202,6 +227,73 @@ func (s *DatabaseService) CreateUser(item *model.DatabaseInstance, username, pas
 		return fmt.Errorf("create user failed: %s: %v", string(out), err)
 	}
 	global.LOG.Infof("[DB] CreateUser OK: user=%s", username)
+	return nil
+}
+
+// DropDatabase 删除指定数据库
+func (s *DatabaseService) DropDatabase(item *model.DatabaseInstance, dbName string) error {
+	logItem("DropDatabase start", item)
+	global.LOG.Infof("[DB] DropDatabase target: db=%s", dbName)
+	if item.Type != "mysql" {
+		return fmt.Errorf("only mysql database drop is supported currently")
+	}
+	if !syscmd.Which("mysql") {
+		return fmt.Errorf("mysql client not found, please install mysql first")
+	}
+	args := s.getMysqlArgs(item, "")
+	query := fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", dbName)
+	args = append(args, "-e", query)
+	if out, err := s.runMysqlCmd(item, args...); err != nil {
+		global.LOG.Errorf("[DB] DropDatabase FAILED: db=%s err=%v", dbName, err)
+		return fmt.Errorf("drop database failed: %s: %v", string(out), err)
+	}
+	global.LOG.Infof("[DB] DropDatabase OK: db=%s", dbName)
+	return nil
+}
+
+// DropUser 删除指定 MySQL 用户
+func (s *DatabaseService) DropUser(item *model.DatabaseInstance, username string) error {
+	logItem("DropUser start", item)
+	global.LOG.Infof("[DB] DropUser target: user=%s", username)
+	if item.Type != "mysql" {
+		return fmt.Errorf("only mysql user drop is supported currently")
+	}
+	if !syscmd.Which("mysql") {
+		return fmt.Errorf("mysql client not found, please install mysql first")
+	}
+	args := s.getMysqlArgs(item, "")
+	queries := []string{
+		fmt.Sprintf("DROP USER IF EXISTS '%s'@'%%'", username),
+		"FLUSH PRIVILEGES",
+	}
+	fullQuery := strings.Join(queries, "; ")
+	args = append(args, "-e", fullQuery)
+	if out, err := s.runMysqlCmd(item, args...); err != nil {
+		global.LOG.Errorf("[DB] DropUser FAILED: user=%s err=%v", username, err)
+		return fmt.Errorf("drop user failed: %s: %v", string(out), err)
+	}
+	global.LOG.Infof("[DB] DropUser OK: user=%s", username)
+	return nil
+}
+
+// CreateDatabaseForWebsite 一站式建库+建用户+授权，供 WebsiteService 调用
+// 任一步骤失败都会回滚（删除已建的库或用户）
+func (s *DatabaseService) CreateDatabaseForWebsite(item *model.DatabaseInstance, dbName, username, password string) error {
+	logItem("CreateDatabaseForWebsite start", item)
+	global.LOG.Infof("[DB] CreateDatabaseForWebsite db=%s user=%s", dbName, username)
+
+	if err := s.CreateDatabase(item, dbName); err != nil {
+		return fmt.Errorf("建库失败: %v", err)
+	}
+	if err := s.CreateUser(item, username, password, dbName); err != nil {
+		// 建用户失败，回滚已建的库
+		global.LOG.Warnf("[DB] CreateDatabaseForWebsite rollback: dropping db=%s due to user creation failure", dbName)
+		if dropErr := s.DropDatabase(item, dbName); dropErr != nil {
+			global.LOG.Errorf("[DB] rollback drop db failed: %v (db=%s remains, please clean manually)", dropErr, dbName)
+		}
+		return fmt.Errorf("建用户失败: %v", err)
+	}
+	global.LOG.Infof("[DB] CreateDatabaseForWebsite OK: db=%s user=%s", dbName, username)
 	return nil
 }
 

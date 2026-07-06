@@ -9,20 +9,30 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/minipanel/minipanel/internal/dto"
 	"github.com/minipanel/minipanel/internal/global"
 	"github.com/minipanel/minipanel/internal/model"
 	"github.com/minipanel/minipanel/internal/repository"
 	syscmd "github.com/minipanel/minipanel/internal/utils/cmd"
+	"gorm.io/gorm"
 )
 
 type WebsiteService struct {
-	repo *repository.WebsiteRepository
+	repo      *repository.WebsiteRepository
+	wdRepo    *repository.WebsiteDatabaseRepository
+	dbService *DatabaseService
+	deleteMu  sync.Map // 按 website id 加锁，防止并发删/改
 }
 
 func NewWebsiteService() *WebsiteService {
-	return &WebsiteService{repo: repository.NewWebsiteRepository(global.DB)}
+	return &WebsiteService{
+		repo:      repository.NewWebsiteRepository(global.DB),
+		wdRepo:    repository.NewWebsiteDatabaseRepository(global.DB),
+		dbService: NewDatabaseService(),
+	}
 }
 
 func (s *WebsiteService) Create(w *model.Website) error {
@@ -43,6 +53,151 @@ func (s *WebsiteService) Create(w *model.Website) error {
 	return s.applyConfig(w)
 }
 
+// CreateWithDB 建站时联动建库（核心正向流程）
+// 仅在"真新建"分支（非 upsert 命中）且 DBCreate=true 时联动
+func (s *WebsiteService) CreateWithDB(req *dto.WebsiteCreateRequest) error {
+	sessionID := time.Now().UnixNano()
+	w := &req.Website
+	w.Managed = true
+
+	global.LOG.Infof("[Engine] 会话ID: %d | CreateWithDB 入口 | name=%s domain=%s port=%d type=%s php_version=%s db_create=%v",
+		sessionID, w.Name, w.Domain, w.Port, w.Type, w.PhpVersion, req.DBCreate)
+
+	if req.DBCreate {
+		global.LOG.Infof("[Engine] 会话ID: %d | 联动建库参数 | instance_id=%d db_name=%s db_username=%s password_len=%d",
+			sessionID, req.DBInstanceID, req.DBName, req.DBUsername, len(req.DBPassword))
+	}
+
+	// 检查 Domain:Port 是否已存在，存在则走更新分支，不重复建库
+	global.LOG.Infof("[Engine] 会话ID: %d | 步骤1: 检查域名重复 | domain=%s port=%d", sessionID, w.Domain, w.Port)
+	existing, _ := s.repo.GetByDomainPort(w.Domain, w.Port)
+	if existing != nil {
+		global.LOG.Infof("[Engine] 会话ID: %d | 步骤1结果: upsert命中 | existing_id=%d (跳过建库)", sessionID, existing.ID)
+		w.ID = existing.ID
+		w.ConfigFile = existing.ConfigFile
+		if err := s.repo.Update(w); err != nil {
+			global.LOG.Errorf("[Engine] 会话ID: %d | 步骤1失败: Update错误 | err=%v", sessionID, err)
+			return err
+		}
+		return s.applyConfig(w)
+	}
+	global.LOG.Infof("[Engine] 会话ID: %d | 步骤1结果: 真新建", sessionID)
+
+	// 真新建分支
+	if req.DBCreate {
+		global.LOG.Infof("[Engine] 会话ID: %d | 步骤2: 进入联动建库分支", sessionID)
+		if err := s.createWebsiteWithDB(req, sessionID); err != nil {
+			global.LOG.Errorf("[Engine] 会话ID: %d | 步骤2失败: 联动建库失败 | err=%v", sessionID, err)
+			return err
+		}
+		global.LOG.Infof("[Engine] 会话ID: %d | 步骤2结果: 联动建库成功 | website_id=%d", sessionID, w.ID)
+	} else {
+		global.LOG.Infof("[Engine] 会话ID: %d | 步骤2: 不联动建库，走旧逻辑", sessionID)
+		if err := s.repo.Create(w); err != nil {
+			global.LOG.Errorf("[Engine] 会话ID: %d | 步骤2失败: repo.Create错误 | err=%v", sessionID, err)
+			return err
+		}
+	}
+
+	global.LOG.Infof("[Engine] 会话ID: %d | 步骤3: 生成 Nginx 配置 | website_id=%d", sessionID, w.ID)
+	if err := s.applyConfig(w); err != nil {
+		global.LOG.Errorf("[Engine] 会话ID: %d | 步骤3失败: applyConfig错误 | err=%v", sessionID, err)
+		return err
+	}
+	global.LOG.Infof("[Engine] 会话ID: %d | CreateWithDB 完成 | website_id=%d", sessionID, w.ID)
+	return nil
+}
+
+// createWebsiteWithDB 在事务内创建网站记录 + MySQL 库/用户 + 关联记录
+// MySQL 操作失败时回滚 SQLite 事务
+func (s *WebsiteService) createWebsiteWithDB(req *dto.WebsiteCreateRequest, sessionID int64) error {
+	w := &req.Website
+	dbInstanceID := req.DBInstanceID
+	if dbInstanceID == 0 {
+		return fmt.Errorf("联动建库需要指定数据库实例 ID")
+	}
+
+	// 拉取数据库实例
+	global.LOG.Infof("[Engine] 会话ID: %d | 事务前置: 拉取数据库实例 | instance_id=%d", sessionID, dbInstanceID)
+	instance, err := s.dbService.GetByID(dbInstanceID)
+	if err != nil {
+		global.LOG.Errorf("[Engine] 会话ID: %d | 事务前置失败: 数据库实例不存在 | err=%v", sessionID, err)
+		return fmt.Errorf("数据库实例不存在: %v", err)
+	}
+	global.LOG.Infof("[Engine] 会话ID: %d | 事务前置: 实例信息 | name=%s type=%s host=%s:%d", sessionID, instance.Name, instance.Type, instance.Host, instance.Port)
+
+	// 参数兜底
+	if req.DBName == "" {
+		return fmt.Errorf("数据库名不能为空")
+	}
+	if req.DBUsername == "" {
+		return fmt.Errorf("数据库用户名不能为空")
+	}
+	if req.DBPassword == "" {
+		req.DBPassword = dto.GenerateRandomPassword()
+		global.LOG.Infof("[Engine] 会话ID: %d | 事务前置: 自动生成密码 | user=%s pwd_len=%d", sessionID, req.DBUsername, len(req.DBPassword))
+	}
+
+	// 用户名全局唯一性校验（查关联表）
+	global.LOG.Infof("[Engine] 会话ID: %d | 事务前置: 用户名唯一性校验 | user=%s", sessionID, req.DBUsername)
+	existUser, _ := s.wdRepo.GetByInstanceAndUsername(dbInstanceID, req.DBUsername)
+	if existUser != nil && existUser.ID > 0 {
+		global.LOG.Warnf("[Engine] 会话ID: %d | 事务前置失败: 用户名冲突 | user=%s 占用网站=#%d", sessionID, req.DBUsername, existUser.WebsiteID)
+		return fmt.Errorf("数据库用户名 '%s' 已被网站 #%d 使用，请换一个", req.DBUsername, existUser.WebsiteID)
+	}
+	// 库名全局唯一性校验
+	global.LOG.Infof("[Engine] 会话ID: %d | 事务前置: 库名唯一性校验 | db=%s", sessionID, req.DBName)
+	existDB, _ := s.wdRepo.GetByInstanceAndDBName(dbInstanceID, req.DBName)
+	if existDB != nil && existDB.ID > 0 {
+		global.LOG.Warnf("[Engine] 会话ID: %d | 事务前置失败: 库名冲突 | db=%s 占用网站=#%d", sessionID, req.DBName, existDB.WebsiteID)
+		return fmt.Errorf("数据库名 '%s' 已被网站 #%d 使用，请换一个", req.DBName, existDB.WebsiteID)
+	}
+	global.LOG.Infof("[Engine] 会话ID: %d | 事务前置通过", sessionID)
+
+	// 事务：先建 Website 记录拿 ID → 调 MySQL 建库建用户 → 写关联记录
+	// 任何一步失败回滚 SQLite；MySQL 失败回滚已建的库
+	global.LOG.Infof("[Engine] 会话ID: %d | 开启 SQLite 事务", sessionID)
+	return global.DB.Transaction(func(tx *gorm.DB) error {
+		// 1. 创建 Website 记录
+		global.LOG.Infof("[Engine] 会话ID: %d | 事务步骤1: 创建 Website 记录 | name=%s domain=%s", sessionID, w.Name, w.Domain)
+		if err := tx.Create(w).Error; err != nil {
+			global.LOG.Errorf("[Engine] 会话ID: %d | 事务步骤1失败: tx.Create | err=%v", sessionID, err)
+			return fmt.Errorf("创建网站记录失败: %v", err)
+		}
+		global.LOG.Infof("[Engine] 会话ID: %d | 事务步骤1成功: website_id=%d", sessionID, w.ID)
+
+		// 2. 调用 MySQL 建库+建用户+授权
+		global.LOG.Infof("[Engine] 会话ID: %d | 事务步骤2: MySQL 建库+建用户 | db=%s user=%s", sessionID, req.DBName, req.DBUsername)
+		if err := s.dbService.CreateDatabaseForWebsite(instance, req.DBName, req.DBUsername, req.DBPassword); err != nil {
+			global.LOG.Errorf("[Engine] 会话ID: %d | 事务步骤2失败: MySQL 建库错误 | err=%v (将回滚 SQLite, website_id=%d)", sessionID, err, w.ID)
+			return fmt.Errorf("联动建库失败: %v", err)
+		}
+		global.LOG.Infof("[Engine] 会话ID: %d | 事务步骤2成功: MySQL 库和用户已创建", sessionID)
+
+		// 3. 写关联记录
+		wd := &model.WebsiteDatabase{
+			WebsiteID:    w.ID,
+			DBInstanceID: dbInstanceID,
+			DBName:       req.DBName,
+			DBUsername:   req.DBUsername,
+			DBPassword:   req.DBPassword,
+		}
+		global.LOG.Infof("[Engine] 会话ID: %d | 事务步骤3: 写关联记录 | website_id=%d db_instance_id=%d db=%s", sessionID, w.ID, dbInstanceID, req.DBName)
+		if err := tx.Create(wd).Error; err != nil {
+			// 关联记录写入失败，回滚已建的 MySQL 库（事务回滚后通过补偿删除）
+			global.LOG.Warnf("[Engine] 会话ID: %d | 事务步骤3失败: tx.Create wd 错误 | err=%v, 补偿删除 MySQL db=%s user=%s", sessionID, err, req.DBName, req.DBUsername)
+			_ = s.dbService.DropDatabase(instance, req.DBName)
+			_ = s.dbService.DropUser(instance, req.DBUsername)
+			return fmt.Errorf("写入关联记录失败: %v", err)
+		}
+		global.LOG.Infof("[Engine] 会话ID: %d | 事务步骤3成功: wd_id=%d", sessionID, wd.ID)
+
+		global.LOG.Infof("[Engine] 会话ID: %d | 事务提交中 | website_id=%d db=%s user=%s instance=%d",
+			sessionID, w.ID, req.DBName, req.DBUsername, dbInstanceID)
+		return nil
+	})
+}
+
 func (s *WebsiteService) Update(w *model.Website) error {
 	old, err := s.repo.GetByID(w.ID)
 	if err != nil {
@@ -60,16 +215,96 @@ func (s *WebsiteService) Update(w *model.Website) error {
 	return s.applyConfig(w)
 }
 
+// ListDatabasesByWebsiteID 查询网站关联的数据库列表
+func (s *WebsiteService) ListDatabasesByWebsiteID(websiteID uint) ([]model.WebsiteDatabase, error) {
+	return s.wdRepo.GetByWebsiteID(websiteID)
+}
+
+// ListWebsitesByInstanceID 查询数据库实例被哪些网站引用
+func (s *WebsiteService) ListWebsitesByInstanceID(instanceID uint) ([]model.WebsiteDatabase, error) {
+	return s.wdRepo.GetByInstanceID(instanceID)
+}
+
 func (s *WebsiteService) Delete(id uint) error {
+	return s.DeleteWithCascade(id, true)
+}
+
+// DeleteWithCascade 删除网站并按需级联清理数据库
+// cascadeDB=true 时：备份关联库 → DROP DATABASE + DROP USER（失败标 DropFailed 不阻塞删站）
+// cascadeDB=false 时：保留 db 但删 WebsiteDatabase 关联记录
+func (s *WebsiteService) DeleteWithCascade(id uint, cascadeDB bool) error {
+	// 按 website id 加锁，防止并发删/改
+	lockKey := fmt.Sprintf("delete-%d", id)
+	_, _ = s.deleteMu.LoadOrStore(lockKey, struct{}{})
+	defer s.deleteMu.Delete(lockKey)
+
 	w, err := s.repo.GetByID(id)
 	if err != nil {
-		return err
+		return fmt.Errorf("网站不存在: %v", err)
 	}
+
+	global.LOG.Infof("[Website] DeleteWithCascade start: id=%d name=%s cascade_db=%v", id, w.Name, cascadeDB)
+
+	// 查询关联的数据库
+	wdList, err := s.wdRepo.GetByWebsiteID(id)
+	if err != nil {
+		global.LOG.Warnf("[Website] GetByWebsiteID failed: %v (continue without cascade)", err)
+		wdList = nil
+	}
+
+	// 级联清理 MySQL 库
+	if cascadeDB && len(wdList) > 0 {
+		for _, wd := range wdList {
+			instance, err := s.dbService.GetByID(wd.DBInstanceID)
+			if err != nil {
+				global.LOG.Errorf("[Website] cascade: instance %d not found, mark DropFailed: %v", wd.DBInstanceID, err)
+				wd.DropFailed = true
+				_ = s.wdRepo.Update(&wd)
+				continue
+			}
+
+			// 强制备份（DROP 不可逆）
+			backupPath, backupErr := s.dbService.BackupDatabase(instance, wd.DBName)
+			if backupErr != nil {
+				// 备份失败：MySQL 离线或不可达 → 拒绝删站以保护数据
+				global.LOG.Errorf("[Website] cascade: backup db=%s FAILED: %v (refuse to delete website)", wd.DBName, backupErr)
+				return fmt.Errorf("删除网站失败：关联数据库 %s 备份失败（MySQL 可能不可达），请先恢复 MySQL 或使用 cascade_db=false: %v", wd.DBName, backupErr)
+			}
+			global.LOG.Infof("[Website] cascade: backup db=%s OK: %s", wd.DBName, backupPath)
+
+			// DROP DATABASE
+			if dropErr := s.dbService.DropDatabase(instance, wd.DBName); dropErr != nil {
+				global.LOG.Errorf("[Website] cascade: drop db=%s FAILED: %v (mark DropFailed, continue)", wd.DBName, dropErr)
+				wd.DropFailed = true
+				_ = s.wdRepo.Update(&wd)
+				continue
+			}
+			// DROP USER
+			if dropErr := s.dbService.DropUser(instance, wd.DBUsername); dropErr != nil {
+				global.LOG.Warnf("[Website] cascade: drop user=%s FAILED: %v (db already dropped, mark DropFailed)", wd.DBUsername, dropErr)
+				wd.DropFailed = true
+				_ = s.wdRepo.Update(&wd)
+				continue
+			}
+			global.LOG.Infof("[Website] cascade: drop db=%s user=%s OK", wd.DBName, wd.DBUsername)
+		}
+	}
+
+	// 删除 WebsiteDatabase 关联记录（无论 cascadeDB）
+	if err := s.wdRepo.DeleteByWebsiteID(id); err != nil {
+		global.LOG.Warnf("[Website] DeleteByWebsiteID failed: %v (continue)", err)
+	}
+
+	// 删除 Nginx 配置
 	_ = s.removeConfig(w)
+
+	// 删除 Website 记录
 	if err := s.repo.Delete(id); err != nil {
 		return err
 	}
+
 	_ = s.ReloadNginx()
+	global.LOG.Infof("[Website] DeleteWithCascade OK: id=%d", id)
 	return nil
 }
 

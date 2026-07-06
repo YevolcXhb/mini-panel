@@ -9,7 +9,7 @@ type Website struct {
 	Type        string `json:"type" gorm:"default:static"` // static / proxy / php
 	ProxyTarget string `json:"proxy_target"`               // e.g. http://localhost:8080
 	ProxyWS     bool   `json:"proxy_ws"`                   // WebSocket 支持
-	PhpVersion  string `json:"php_version"`                 // PHP 版本，如 8.1
+	PhpVersion  string `json:"php_version"`                // PHP 版本，如 8.1
 	SSL         bool   `json:"ssl" gorm:"default:false"`
 	SSLCert     string `json:"ssl_cert"`                      // 证书文件路径（兼容旧版）
 	SSLKey      string `json:"ssl_key"`                       // 私钥文件路径（兼容旧版）
@@ -32,15 +32,15 @@ type Website struct {
 	ErrorPage503 string `json:"error_page_503" gorm:"type:text"`
 	// 频率限制
 	RateLimitEnabled bool   `json:"rate_limit_enabled" gorm:"default:false"`
-	RateLimitRate    string `json:"rate_limit_rate"`    // "10r/s"
+	RateLimitRate    string `json:"rate_limit_rate"` // "10r/s"
 	RateLimitBurst   int    `json:"rate_limit_burst" gorm:"default:10"`
 	// 防盗链
 	HotlinkProtection bool   `json:"hotlink_protection" gorm:"default:false"`
-	HotlinkDomains    string `json:"hotlink_domains"`                                 // 允许的域名，逗号分隔
+	HotlinkDomains    string `json:"hotlink_domains"` // 允许的域名，逗号分隔
 	HotlinkExts       string `json:"hotlink_exts" gorm:"default:jpg,jpeg,png,gif,svg,webp,js,css,woff,woff2"`
 	// IP 黑白名单
 	IPFilterEnabled bool   `json:"ip_filter_enabled" gorm:"default:false"`
-	IPFilterMode    string `json:"ip_filter_mode"`     // "blacklist" / "whitelist"
+	IPFilterMode    string `json:"ip_filter_mode"`                  // "blacklist" / "whitelist"
 	IPFilterList    string `json:"ip_filter_list" gorm:"type:text"` // 换行分隔的 IP/CIDR
 }
 
@@ -57,4 +57,16 @@ type NginxStatus struct {
 	Version   string `json:"version"`
 	ConfigDir string `json:"config_dir"`
 	Pid       int    `json:"pid"`
+}
+
+// WebsiteDatabase 网站与数据库的关联记录
+// 一个网站可在同一 DatabaseInstance 下关联一个库+专用用户
+type WebsiteDatabase struct {
+	BaseModel
+	WebsiteID    uint   `json:"website_id" gorm:"index;not null"`
+	DBInstanceID uint   `json:"db_instance_id" gorm:"uniqueIndex:idx_instance_db_name,uniqueIndex:idx_instance_db_user;not null"`
+	DBName       string `json:"db_name" gorm:"uniqueIndex:idx_instance_db_name;not null"`
+	DBUsername   string `json:"db_username" gorm:"uniqueIndex:idx_instance_db_user;not null"`
+	DBPassword   string `json:"db_password" gorm:"type:text"`
+	DropFailed   bool   `json:"drop_failed" gorm:"default:false"`
 }

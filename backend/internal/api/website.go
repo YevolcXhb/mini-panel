@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/minipanel/minipanel/internal/dto"
@@ -19,16 +20,24 @@ func NewWebsiteAPI() *WebsiteAPI {
 }
 
 func (a *WebsiteAPI) Create(c *gin.Context) {
-	var w model.Website
-	if err := c.ShouldBindJSON(&w); err != nil {
+	var req dto.WebsiteCreateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: err.Error()})
 		return
 	}
-	if err := a.service.Create(&w); err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
-		return
+	// 联动建库走新路径，否则走旧 Create 保持向下兼容
+	if req.DBCreate {
+		if err := a.service.CreateWithDB(&req); err != nil {
+			c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+			return
+		}
+	} else {
+		if err := a.service.Create(&req.Website); err != nil {
+			c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+			return
+		}
 	}
-	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "created"})
+	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: req.Website, Message: "created"})
 }
 
 func (a *WebsiteAPI) Update(c *gin.Context) {
@@ -73,7 +82,10 @@ func (a *WebsiteAPI) Delete(c *gin.Context) {
 		c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "deleted"})
 		return
 	}
-	if err := a.service.Delete(uint(id)); err != nil {
+	// 读取 cascade_db 参数（默认 true；"false"/"0"/"no" 视为 false）
+	cascadeStr := strings.ToLower(c.DefaultQuery("cascade_db", "true"))
+	cascadeDB := !(cascadeStr == "false" || cascadeStr == "0" || cascadeStr == "no" || cascadeStr == "")
+	if err := a.service.DeleteWithCascade(uint(id), cascadeDB); err != nil {
 		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
@@ -97,6 +109,36 @@ func (a *WebsiteAPI) GetByID(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: w})
+}
+
+// ListDatabasesByWebsite 查询网站关联的数据库
+func (a *WebsiteAPI) ListDatabasesByWebsite(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "invalid id"})
+		return
+	}
+	items, err := a.service.ListDatabasesByWebsiteID(uint(id))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: items})
+}
+
+// ListWebsitesByDB 查询数据库实例被哪些网站引用
+func (a *WebsiteAPI) ListWebsitesByDB(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "invalid id"})
+		return
+	}
+	items, err := a.service.ListWebsitesByInstanceID(uint(id))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: items})
 }
 
 func (a *WebsiteAPI) Toggle(c *gin.Context) {

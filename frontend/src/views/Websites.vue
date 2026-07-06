@@ -221,6 +221,32 @@
           <el-form-item label="备注">
             <el-input v-model="form.remark" type="textarea" :rows="2" />
           </el-form-item>
+          <el-divider content-position="left">联动数据库（仅新建网站时生效）</el-divider>
+          <el-form-item label="同时建库">
+            <el-switch v-model="form.db_create" :disabled="editing" />
+            <span style="margin-left: 8px; color: #909399; font-size: 12px">勾选后会同步创建 MySQL 数据库和专用用户</span>
+          </el-form-item>
+          <template v-if="form.db_create && !editing">
+            <el-form-item label="数据库实例">
+              <el-select v-model="form.db_instance_id" placeholder="选择数据库实例" style="width: 100%">
+                <el-option v-for="db in databaseInstances" :key="db.id" :label="`${db.name} (${db.host}:${db.port})`" :value="db.id" />
+              </el-select>
+              <div style="font-size: 12px; color: #909399; margin-top: 4px">若下拉为空，请先在数据库管理页面添加 MySQL 实例</div>
+            </el-form-item>
+            <el-form-item label="数据库名">
+              <el-input v-model="form.db_name" placeholder="如 myapp_db" @focus="autoFillDB" />
+            </el-form-item>
+            <el-form-item label="用户名">
+              <el-input v-model="form.db_username" placeholder="如 myapp_user" />
+            </el-form-item>
+            <el-form-item label="密码">
+              <el-input v-model="form.db_password" placeholder="留空自动生成 16 位随机密码" show-password>
+                <template #append>
+                  <el-button size="small" @click="genRandomPassword">随机</el-button>
+                </template>
+              </el-input>
+            </el-form-item>
+          </template>
         </el-form>
         <template #footer>
           <el-button @click="showForm = false">取消</el-button>
@@ -431,7 +457,7 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading, CircleCheck, CircleClose, Check, Close } from '@element-plus/icons-vue'
-import { websiteApi, systemApi, phpApi } from '../api'
+import { websiteApi, systemApi, phpApi, databaseApi } from '../api'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { LineChart } from 'echarts/charts'
@@ -453,8 +479,12 @@ const form = ref<any>({ name: '', domain: '', port: 80, root: '', type: 'static'
   rate_limit_enabled: false, rate_limit_rate: '', rate_limit_burst: 10,
   hotlink_protection: false, hotlink_domains: '', hotlink_exts: 'jpg,jpeg,png,gif,svg,webp,js,css,woff,woff2',
   ip_filter_enabled: false, ip_filter_mode: 'blacklist', ip_filter_list: '',
-  remark: '' })
+  remark: '',
+  // 联动建库
+  db_create: false, db_instance_id: 0, db_name: '', db_username: '', db_password: '' })
 const domainError = ref('')
+const databaseInstances = ref<any[]>([])
+const deleteCascadeDB = ref(true)
 
 const domainRegex = /^([\w\-\*]{1,100}\.){1,8}([\w\-]{1,24}|[\w\-]{1,24}\.[\w\-]{1,24})$/
 
@@ -561,9 +591,38 @@ function showAdd() {
     rate_limit_enabled: false, rate_limit_rate: '', rate_limit_burst: 10,
     hotlink_protection: false, hotlink_domains: '', hotlink_exts: 'jpg,jpeg,png,gif,svg,webp,js,css,woff,woff2',
     ip_filter_enabled: false, ip_filter_mode: 'blacklist', ip_filter_list: '',
-    auth_enabled: false, auth_user: '', auth_password: '', remark: '' }
+    auth_enabled: false, auth_user: '', auth_password: '', remark: '',
+    db_create: false, db_instance_id: 0, db_name: '', db_username: '', db_password: '' }
   domainError.value = ''
+  loadDatabaseInstances()
   showForm.value = true
+}
+
+// 加载数据库实例列表供联动建库选择
+async function loadDatabaseInstances() {
+  try {
+    const res: any = await databaseApi.list()
+    databaseInstances.value = res.data || []
+  } catch (e: any) {
+    databaseInstances.value = []
+  }
+}
+
+// 随机生成 16 位密码
+function genRandomPassword() {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
+  let pwd = ''
+  for (let i = 0; i < 16; i++) pwd += chars[Math.floor(Math.random() * chars.length)]
+  form.value.db_password = pwd
+}
+
+// 根据域名自动生成默认库名和用户名
+function autoFillDB() {
+  if (form.value.domain && form.value.db_name === '') {
+    const base = form.value.domain.replace(/\./g, '_').replace(/[^a-zA-Z0-9_]/g, '').toLowerCase().slice(0, 32)
+    form.value.db_name = base
+    form.value.db_username = base.slice(0, 16)
+  }
 }
 
 function editWebsite(row: any) {
@@ -625,9 +684,30 @@ async function toggleWebsite(row: any) {
 
 async function deleteWebsite(row: any) {
   try {
-    await ElMessageBox.confirm(`确定删除 ${row.name} (${row.domain}) 吗？`, '确认删除', { confirmButtonClass: 'el-button--danger' })
+    // 询问是否级联删除关联数据库
+    deleteCascadeDB.value = true
+    await ElMessageBox.confirm(
+      `<div><p>确定删除 ${row.name} (${row.domain}) 吗？</p>
+       <div style="margin-top:12px;display:flex;align-items:center">
+         <input type="checkbox" id="cascade_db" checked style="margin-right:6px" />
+         <label for="cascade_db">同时删除关联的 MySQL 数据库和用户（删除前会自动备份）</label>
+       </div></div>`,
+      '确认删除',
+      {
+        dangerouslyUseHTMLString: true,
+        confirmButtonClass: 'el-button--danger',
+        showCancelButton: true,
+        beforeClose: (action, instance, done) => {
+          if (action === 'confirm') {
+            const cb = document.getElementById('cascade_db') as HTMLInputElement
+            deleteCascadeDB.value = cb ? cb.checked : true
+          }
+          done()
+        }
+      }
+    )
     if (row.id) {
-      await websiteApi.delete(row.id)
+      await websiteApi.delete(row.id, deleteCascadeDB.value)
     } else {
       // 外部站点：通过 domain+port 删除
       await websiteApi.deleteExternal(row.domain, row.port)

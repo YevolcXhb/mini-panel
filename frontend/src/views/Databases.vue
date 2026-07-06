@@ -49,6 +49,12 @@
         <el-table-column prop="host" label="主机" min-width="120" />
         <el-table-column prop="port" label="端口" width="80" />
         <el-table-column prop="username" label="用户名" width="100" />
+        <el-table-column label="关联网站" width="120">
+          <template #default="{ row }">
+            <el-tag v-if="row.website_count > 0" size="small" type="warning">{{ row.website_count }} 个</el-tag>
+            <span v-else style="color: #c0c4cc">独立</span>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="280" fixed="right">
           <template #default="{ row }">
             <el-button size="small" @click="testConnection(row)">测试连接</el-button>

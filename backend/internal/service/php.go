@@ -13,13 +13,16 @@ import (
 
 	"github.com/minipanel/minipanel/internal/global"
 	"github.com/minipanel/minipanel/internal/model"
+	"github.com/minipanel/minipanel/internal/repository"
 	syscmd "github.com/minipanel/minipanel/internal/utils/cmd"
 )
 
-type PhpService struct{}
+type PhpService struct {
+	webRepo *repository.WebsiteRepository
+}
 
 func NewPhpService() *PhpService {
-	return &PhpService{}
+	return &PhpService{webRepo: repository.NewWebsiteRepository(global.DB)}
 }
 
 // GetInstalledVersions 获取已安装的 PHP 版本
@@ -336,6 +339,18 @@ func (s *PhpService) waitForAptLock(ctx context.Context, maxWaitSeconds int) err
 // RemoveVersion 卸载 PHP 版本
 func (s *PhpService) RemoveVersion(version string) error {
 	global.LOG.Infof("[PHP] RemoveVersion start: %s", version)
+
+	// 依赖检查：若有 PHP 类型网站使用此版本，拒绝卸载
+	count, err := s.webRepo.CountByPhpVersion(version)
+	if err != nil {
+		global.LOG.Errorf("[PHP] RemoveVersion dependency check failed: %v", err)
+		return fmt.Errorf("检查 PHP 依赖失败: %v", err)
+	}
+	if count > 0 {
+		global.LOG.Warnf("[PHP] RemoveVersion rejected: %s is used by %d website(s)", version, count)
+		return fmt.Errorf("PHP %s 仍被 %d 个网站依赖，请先在网站管理中切换或删除这些网站后再卸载", version, count)
+	}
+
 	if !syscmd.Which("apt") && !syscmd.Which("yum") && !syscmd.Which("dnf") {
 		return fmt.Errorf("不支持的包管理器")
 	}

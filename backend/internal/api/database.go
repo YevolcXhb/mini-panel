@@ -257,3 +257,51 @@ func (h *DatabaseAPI) Restore(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "恢复成功"})
 }
+
+// DropDatabase 删除指定数据库
+func (h *DatabaseAPI) DropDatabase(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "invalid id"})
+		return
+	}
+	dbName := c.Param("dbName")
+	if dbName == "" {
+		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "missing dbName"})
+		return
+	}
+	item, err := h.service.GetByID(uint(id))
+	if err != nil {
+		c.JSON(http.StatusNotFound, dto.Response{Code: 404, Message: "instance not found"})
+		return
+	}
+	if err := h.service.DropDatabase(item, dbName); err != nil {
+		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "数据库已删除"})
+}
+
+// DropUser 删除指定 MySQL 用户
+func (h *DatabaseAPI) DropUser(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "invalid id"})
+		return
+	}
+	username := c.Param("username")
+	if username == "" {
+		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "missing username"})
+		return
+	}
+	item, err := h.service.GetByID(uint(id))
+	if err != nil {
+		c.JSON(http.StatusNotFound, dto.Response{Code: 404, Message: "instance not found"})
+		return
+	}
+	if err := h.service.DropUser(item, username); err != nil {
+		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "用户已删除"})
+}
