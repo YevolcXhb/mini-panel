@@ -100,7 +100,7 @@ export const fileApi = {
 
 export const phpApi = {
   getVersions: () => api.get('/php/versions'),
-  installVersion: (version: string) => api.post('/php/versions/install', { version }),
+  installVersion: (version: string) => api.post('/php/versions/install', { version }, { timeout: 15 * 60 * 1000 }),
   removeVersion: (version: string) => api.delete(`/php/versions/${version}`),
   startFpm: (version: string) => api.post(`/php/versions/${version}/start`),
   stopFpm: (version: string) => api.post(`/php/versions/${version}/stop`),

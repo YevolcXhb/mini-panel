@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/minipanel/minipanel/internal/dto"
@@ -24,14 +26,21 @@ func (a *PhpAPI) GetVersions(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: versions})
 }
 
-// InstallVersion 安装 PHP 版本
+// InstallVersion 安装 PHP 版本（15 分钟超时）
 func (a *PhpAPI) InstallVersion(c *gin.Context) {
 	var req model.PhpInstallRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "请指定要安装的版本号"})
 		return
 	}
-	if err := a.svc.InstallVersion(req.Version); err != nil {
+	// 15 分钟超时，避免前端长时间挂起
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Minute)
+	defer cancel()
+	if err := a.svc.InstallVersionWithContext(ctx, req.Version); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			c.JSON(http.StatusGatewayTimeout, dto.Response{Code: 504, Message: "PHP " + req.Version + " 安装超时（超过15分钟），请检查网络或手动安装"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}

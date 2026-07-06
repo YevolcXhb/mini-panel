@@ -1,11 +1,13 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/minipanel/minipanel/internal/global"
 	"github.com/minipanel/minipanel/internal/model"
@@ -86,8 +88,15 @@ func (s *PhpService) isServiceRunning(name string) bool {
 	return err == nil && strings.TrimSpace(string(out)) == "active"
 }
 
-// InstallVersion 安装 PHP 版本
+// InstallVersion 安装 PHP 版本（默认超时 15 分钟）
 func (s *PhpService) InstallVersion(version string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	return s.InstallVersionWithContext(ctx, version)
+}
+
+// InstallVersionWithContext 安装 PHP 版本（带 context，可被取消/超时）
+func (s *PhpService) InstallVersionWithContext(ctx context.Context, version string) error {
 	global.LOG.Infof("[PHP] InstallVersion start: %s", version)
 	if !syscmd.Which("apt") && !syscmd.Which("yum") && !syscmd.Which("dnf") {
 		return fmt.Errorf("不支持的包管理器，仅支持 apt/yum/dnf")
@@ -110,33 +119,119 @@ func (s *PhpService) InstallVersion(version string) error {
 		fmt.Sprintf("php%s-xml", version),
 		fmt.Sprintf("php%s-zip", version),
 		fmt.Sprintf("php%s-opcache", version),
-		fmt.Sprintf("php%s-json", version),
 	}
 
 	var cmd *exec.Cmd
 	if syscmd.Which("apt") {
-		args := append([]string{"install", "-y"}, pkgs...)
-		cmd = exec.Command("apt", args...)
+		// Ubuntu/Debian 需要添加第三方源，官方源不再提供旧版 PHP
+		if err := s.prepareAptSource(ctx, version); err != nil {
+			return err
+		}
+		args := append([]string{"install", "-y", "-q"}, pkgs...)
+		cmd = exec.CommandContext(ctx, "apt", args...)
 	} else if syscmd.Which("dnf") {
 		args := append([]string{"install", "-y"}, pkgs...)
-		cmd = exec.Command("dnf", args...)
+		cmd = exec.CommandContext(ctx, "dnf", args...)
 	} else {
 		args := append([]string{"install", "-y"}, pkgs...)
-		cmd = exec.Command("yum", args...)
+		cmd = exec.CommandContext(ctx, "yum", args...)
 	}
 
 	cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 	out, err := cmd.CombinedOutput()
 	output := string(out)
-	if len(output) > 500 {
-		output = output[:500] + "..."
+	if len(output) > 2000 {
+		output = output[:2000] + "..."
 	}
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			global.LOG.Errorf("[PHP] InstallVersion TIMEOUT: %s", version)
+			return fmt.Errorf("PHP %s 安装超时", version)
+		}
 		global.LOG.Errorf("[PHP] InstallVersion FAILED: %s: %v, output: %s", version, err, output)
-		return fmt.Errorf("安装 PHP %s 失败: %v", version, err)
+		return fmt.Errorf("安装 PHP %s 失败: %v\n%s", version, err, output)
 	}
 
 	global.LOG.Infof("[PHP] InstallVersion OK: %s", version)
+	return nil
+}
+
+// prepareAptSource 为 Debian/Ubuntu 添加包含多版本 PHP 的源
+func (s *PhpService) prepareAptSource(ctx context.Context, version string) error {
+	global.LOG.Infof("[PHP] prepareAptSource for php %s", version)
+
+	// 检测 Debian/Ubuntu 系列
+	var isDebian, isUbuntu bool
+	if _, err := os.Stat("/etc/debian_version"); err == nil {
+		isDebian = true
+	}
+	if _, err := os.Stat("/etc/lsb-release"); err == nil {
+		data, _ := os.ReadFile("/etc/lsb-release")
+		if strings.Contains(string(data), "Ubuntu") || strings.Contains(string(data), "ubuntu") {
+			isUbuntu = true
+		}
+	}
+	if !isDebian && !isUbuntu {
+		global.LOG.Warnf("[PHP] prepareAptSource: not Debian/Ubuntu, skip")
+		return nil
+	}
+	_ = isUbuntu
+
+	// 检查是否已经添加了 ppa:ondrej/php（通过 sources.list.d 文件名判断）
+	sourcesDir := "/etc/apt/sources.list.d"
+	ondrejFound := false
+	if entries, err := os.ReadDir(sourcesDir); err == nil {
+		for _, e := range entries {
+			name := strings.ToLower(e.Name())
+			if strings.Contains(name, "ondrej") && (strings.HasSuffix(name, ".list") || strings.HasSuffix(name, ".sources")) {
+				ondrejFound = true
+				break
+			}
+		}
+	}
+
+	if !ondrejFound {
+		global.LOG.Infof("[PHP] adding ondrej/php repository")
+		// 更新 apt 索引并安装前置依赖
+		if err := exec.CommandContext(ctx, "apt", "update", "-q").Run(); err != nil {
+			global.LOG.Warnf("[PHP] apt update before add-apt-repository: %v", err)
+		}
+		if !syscmd.Which("add-apt-repository") {
+			exec.CommandContext(ctx, "apt", "install", "-y", "-q", "software-properties-common").Run()
+		}
+		if syscmd.Which("add-apt-repository") {
+			out, err := exec.CommandContext(ctx, "add-apt-repository", "-y", "ppa:ondrej/php").CombinedOutput()
+			if err != nil {
+				global.LOG.Errorf("[PHP] add-apt-repository failed: %v, output: %s", err, string(out))
+				// 继续尝试 Debian 方式
+			}
+		} else if isDebian {
+			// Debian 通过 sury.org 源
+			lsbOut, _ := exec.CommandContext(ctx, "lsb_release", "-cs").CombinedOutput()
+			codename := strings.TrimSpace(string(lsbOut))
+			if codename == "" {
+				codename = "bookworm"
+			}
+			aptLine := fmt.Sprintf("deb https://packages.sury.org/php/ %s main\n", codename)
+			sourceFile := filepath.Join(sourcesDir, "ondrej-php.list")
+			if err := os.WriteFile(sourceFile, []byte(aptLine), 0644); err != nil {
+				return fmt.Errorf("写入 sury 源失败: %v", err)
+			}
+			keyCmd := exec.CommandContext(ctx, "bash", "-c", "curl -fsSL https://packages.sury.org/php/apt.gpg | gpg --dearmor -o /usr/share/keyrings/ondrej-php.gpg")
+			if out, err := keyCmd.CombinedOutput(); err != nil {
+				global.LOG.Errorf("[PHP] add sury gpg key failed: %v, output: %s", err, string(out))
+				// 不阻断，apt 可能仍信任
+			}
+		}
+	}
+
+	// apt update 刷新索引
+	global.LOG.Infof("[PHP] apt update")
+	out, err := exec.CommandContext(ctx, "apt", "update", "-q").CombinedOutput()
+	if err != nil {
+		global.LOG.Errorf("[PHP] apt update failed: %v, output: %s", err, string(out))
+		return fmt.Errorf("apt update 失败: %v\n%s", err, string(out))
+	}
 	return nil
 }
 
@@ -255,7 +350,7 @@ func (s *PhpService) InstallExtension(version, extName string) error {
 	if err != nil {
 		// 尝试别名
 		aliases := map[string]string{
-			"redis":    "php-redis",
+			"redis":     "php-redis",
 			"memcached": "php-memcached",
 			"imagick":   "php-imagick",
 			"mongodb":   "php-mongodb",

@@ -360,6 +360,69 @@
           </el-tab-pane>
         </el-tabs>
       </el-dialog>
+
+      <!-- PHP 安装进度对话框 -->
+      <el-dialog
+        v-model="phpInstallDialog"
+        :title="`正在安装 PHP ${phpInstallVersion}`"
+        width="560px"
+        :close-on-click-modal="false"
+        :close-on-press-escape="false"
+        :show-close="phpInstallDone"
+      >
+        <div class="php-install-container">
+          <div class="php-install-spinner">
+            <el-icon v-if="!phpInstallDone" class="is-loading" :size="42" color="#409eff">
+              <Loading />
+            </el-icon>
+            <el-icon v-else :size="42" :color="phpInstallError ? '#f56c6c' : '#67c23a'">
+              <CircleCheck v-if="!phpInstallError" />
+              <CircleClose v-else />
+            </el-icon>
+          </div>
+          <div class="php-install-status">
+            {{ phpInstallError ? '安装失败' : (phpInstallDone ? '安装完成' : '正在安装，请耐心等待...') }}
+          </div>
+          <div class="php-install-tip">
+            安装过程可能需要 1-5 分钟，期间会自动添加 PHP 源、刷新索引、下载并配置包
+          </div>
+          <div class="php-steps">
+            <div
+              v-for="(step, idx) in phpInstallSteps"
+              :key="idx"
+              class="php-step"
+              :class="{
+                active: idx === phpInstallCurrentStep && !phpInstallDone,
+                done: idx < phpInstallCurrentStep || (phpInstallDone && !phpInstallError),
+                error: phpInstallError && idx === phpInstallCurrentStep
+              }"
+            >
+              <span class="php-step-icon">
+                <el-icon v-if="idx < phpInstallCurrentStep || (phpInstallDone && !phpInstallError)"><Check /></el-icon>
+                <el-icon v-else-if="idx === phpInstallCurrentStep && !phpInstallDone" class="is-loading"><Loading /></el-icon>
+                <el-icon v-else-if="phpInstallError && idx === phpInstallCurrentStep"><Close /></el-icon>
+                <span v-else>{{ idx + 1 }}</span>
+              </span>
+              <span class="php-step-text">{{ step }}</span>
+            </div>
+          </div>
+          <el-progress
+            v-if="!phpInstallDone"
+            :percentage="phpInstallProgress"
+            :stroke-width="8"
+            :show-text="false"
+            status="success"
+            style="margin-top: 16px"
+          />
+          <div v-if="phpInstallError" class="php-install-error">
+            {{ phpInstallError }}
+          </div>
+        </div>
+        <template #footer>
+          <el-button v-if="phpInstallDone" type="primary" @click="phpInstallDialog = false">关闭</el-button>
+          <el-button v-else disabled>安装中...</el-button>
+        </template>
+      </el-dialog>
     </template>
   </div>
 </template>
@@ -367,6 +430,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Loading, CircleCheck, CircleClose, Check, Close } from '@element-plus/icons-vue'
 import { websiteApi, systemApi, phpApi } from '../api'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
@@ -666,6 +730,22 @@ const lnmpTab = ref('versions')
 const phpVersions = ref<any[]>([])
 const phpLoading = ref(false)
 const selectedPhpVersion = ref('')
+
+// PHP 安装进度对话框状态
+const phpInstallDialog = ref(false)
+const phpInstallVersion = ref('')
+const phpInstallDone = ref(false)
+const phpInstallError = ref('')
+const phpInstallProgress = ref(0)
+const phpInstallCurrentStep = ref(0)
+const phpInstallSteps = ref([
+  '检查系统环境与包管理器',
+  '添加 ondrej/php PPA 或 sury 源',
+  'apt update 刷新索引',
+  '下载并安装 PHP 及扩展包',
+  '配置 PHP-FPM 与 php.ini',
+  '安装完成'
+])
 const phpExts = ref<any[]>([])
 const extLoading = ref(false)
 const newExtName = ref('')
@@ -685,11 +765,56 @@ async function loadPhpVersions() {
 async function installPhpVersion(version: string) {
   try {
     await ElMessageBox.confirm(`确定安装 PHP ${version} 吗？这将通过包管理器安装`, '安装 PHP', { type: 'warning' })
+  } catch {
+    return
+  }
+
+  // 重置对话框状态
+  phpInstallVersion.value = version
+  phpInstallDialog.value = true
+  phpInstallDone.value = false
+  phpInstallError.value = ''
+  phpInstallCurrentStep.value = 0
+  phpInstallProgress.value = 0
+
+  // 启动伪进度动画（每个步骤的预估时长总和约 5 分钟内会推完前 5 步）
+  // 后端实际只有"完成/失败"两种状态，前端通过分阶段动画让用户感知进度
+  const stepTimings = [8000, 15000, 30000, 60000, 90000] // 各步骤大致耗时（毫秒）
+  let stepIdx = 0
+  let stepElapsed = 0
+  const tickMs = 500
+  const timer = window.setInterval(() => {
+    if (phpInstallDone.value) {
+      window.clearInterval(timer)
+      return
+    }
+    stepElapsed += tickMs
+    if (stepIdx < stepTimings.length && stepElapsed >= stepTimings[stepIdx]) {
+      stepIdx++
+      if (stepIdx > phpInstallCurrentStep.value && phpInstallCurrentStep.value < phpInstallSteps.value.length - 1) {
+        phpInstallCurrentStep.value = stepIdx
+      }
+      stepElapsed = 0
+    }
+    // 进度条按剩余时间推进，最多到 95%，等真正返回后再跳到 100%
+    if (phpInstallProgress.value < 95) {
+      phpInstallProgress.value += 0.3
+    }
+  }, tickMs)
+
+  try {
     await phpApi.installVersion(version)
-    ElMessage.success(`PHP ${version} 安装中，请稍候...`)
-    setTimeout(() => loadPhpVersions(), 3000)
+    phpInstallProgress.value = 100
+    phpInstallCurrentStep.value = phpInstallSteps.value.length - 1
+    phpInstallDone.value = true
+    ElMessage.success(`PHP ${version} 安装成功`)
+    loadPhpVersions()
   } catch (e: any) {
-    if (e !== 'cancel') ElMessage.error(e?.message || '安装失败')
+    phpInstallDone.value = true
+    phpInstallError.value = e?.message || '安装失败，请查看后端日志获取详细信息'
+    ElMessage.error(phpInstallError.value)
+  } finally {
+    window.clearInterval(timer)
   }
 }
 
@@ -795,3 +920,79 @@ onMounted(async () => {
   }
 })
 </script>
+
+<style scoped>
+.php-install-container {
+  text-align: center;
+  padding: 12px 0;
+}
+.php-install-spinner {
+  margin-bottom: 12px;
+}
+.php-install-status {
+  font-size: 16px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 8px;
+}
+.php-install-tip {
+  font-size: 12px;
+  color: #909399;
+  margin-bottom: 18px;
+}
+.php-steps {
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px;
+  background: var(--card, #f5f7fa);
+  border-radius: 6px;
+}
+.php-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: #606266;
+  transition: all 0.2s;
+}
+.php-step.active {
+  color: #409eff;
+  font-weight: 600;
+}
+.php-step.done {
+  color: #67c23a;
+}
+.php-step.error {
+  color: #f56c6c;
+}
+.php-step-icon {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(64, 158, 255, 0.1);
+  font-size: 13px;
+}
+.php-step.done .php-step-icon {
+  background: rgba(103, 194, 58, 0.15);
+}
+.php-step.error .php-step-icon {
+  background: rgba(245, 108, 108, 0.15);
+}
+.php-install-error {
+  margin-top: 16px;
+  padding: 10px 12px;
+  background: rgba(245, 108, 108, 0.08);
+  border-left: 3px solid #f56c6c;
+  color: #f56c6c;
+  font-size: 12px;
+  text-align: left;
+  white-space: pre-wrap;
+  max-height: 200px;
+  overflow-y: auto;
+}
+</style>
