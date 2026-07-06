@@ -6,7 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/minipanel/minipanel/internal/global"
@@ -395,54 +397,113 @@ func (s *PhpService) startFpmDirect(version string) error {
 	return nil
 }
 
-// isFpmProcessRunning 检查 php-fpm 进程是否在运行
-func (s *PhpService) isFpmProcessRunning(version string) bool {
-	// 方式1: ps 命令查找 php-fpm 进程
+// getFpmPids 获取指定 PHP 版本的 FPM 进程 PID 列表
+func (s *PhpService) getFpmPids(version string) []string {
 	patterns := []string{
 		fmt.Sprintf("php-fpm%s", version),
 		"php-fpm: master",
 	}
+	seen := map[string]struct{}{}
+	var pids []string
 	for _, pattern := range patterns {
 		cmd := exec.Command("pgrep", "-f", pattern)
-		if out, err := cmd.CombinedOutput(); err == nil && strings.TrimSpace(string(out)) != "" {
-			return true
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Fields(string(out)) {
+			pid := strings.TrimSpace(line)
+			if pid == "" {
+				continue
+			}
+			if _, ok := seen[pid]; ok {
+				continue
+			}
+			seen[pid] = struct{}{}
+			pids = append(pids, pid)
 		}
 	}
-	return false
+	return pids
+}
+
+// isFpmProcessRunning 检查 php-fpm 进程是否在运行
+func (s *PhpService) isFpmProcessRunning(version string) bool {
+	return len(s.getFpmPids(version)) > 0
+}
+
+// signalPids 向指定 PID 发送信号，忽略已不存在的进程
+func (s *PhpService) signalPids(pids []string, sig os.Signal) []string {
+	var remaining []string
+	for _, pidStr := range pids {
+		pid, err := strconv.Atoi(pidStr)
+		if err != nil {
+			continue
+		}
+		process, err := os.FindProcess(pid)
+		if err != nil {
+			global.LOG.Warnf("[PHP] find process %d failed: %v", pid, err)
+			continue
+		}
+		if err := process.Signal(sig); err != nil {
+			// 进程已不存在时通常返回 "os: process already finished"
+			if !strings.Contains(err.Error(), "already finished") {
+				remaining = append(remaining, pidStr)
+				global.LOG.Warnf("[PHP] signal PID %d failed: %v", pid, err)
+			}
+		} else {
+			remaining = append(remaining, pidStr)
+		}
+	}
+	return remaining
 }
 
 // StopFpm 停止 PHP-FPM
 func (s *PhpService) StopFpm(version string) error {
 	svcName := fmt.Sprintf("php%s-fpm", version)
+	global.LOG.Infof("[PHP] StopFpm start: %s", version)
+
 	// 先尝试 systemctl stop（对 systemd 管理的 FPM 有效）
-	_ = s.runSystemctl(svcName, "stop")
-	// 等待 1 秒
+	if err := s.runSystemctl(svcName, "stop"); err != nil {
+		global.LOG.Warnf("[PHP] systemctl stop %s failed: %v", svcName, err)
+	}
 	time.Sleep(time.Second)
-	// 如果还有进程在运行，说明是直接启动模式，需要 pkill
-	if s.isFpmProcessRunning(version) {
-		global.LOG.Warnf("[PHP] systemctl stop %s ineffective (process still alive), using pkill", svcName)
-		// 优雅停止（SIGTERM）
-		pkillCmd := exec.Command("pkill", "-TERM", "-f", fmt.Sprintf("php-fpm%s", version))
-		if out, err := pkillCmd.CombinedOutput(); err != nil {
-			global.LOG.Warnf("[PHP] pkill TERM failed: %v, output: %s", err, string(out))
-		}
-		// 等待 2 秒
-		time.Sleep(2 * time.Second)
-		// 如果还在，强杀（SIGKILL）
-		if s.isFpmProcessRunning(version) {
-			pkillForce := exec.Command("pkill", "-KILL", "-f", fmt.Sprintf("php-fpm%s", version))
-			if out, err := pkillForce.CombinedOutput(); err != nil {
-				return fmt.Errorf("pkill -9 php-fpm 失败: %v\n%s", err, string(out))
-			}
-			global.LOG.Infof("[PHP] php-fpm %s force killed", version)
+
+	// 获取当前仍存活的 FPM 进程
+	pids := s.getFpmPids(version)
+	if len(pids) == 0 {
+		global.LOG.Infof("[PHP] StopFpm OK (no process): %s", version)
+		return nil
+	}
+	global.LOG.Warnf("[PHP] systemctl stop %s ineffective, alive PIDs: %v", svcName, pids)
+
+	// 优雅停止（SIGTERM）
+	_ = s.signalPids(pids, syscall.SIGTERM)
+
+	// 轮询等待进程退出，最多 5 秒
+	for i := 0; i < 5; i++ {
+		time.Sleep(time.Second)
+		pids = s.getFpmPids(version)
+		if len(pids) == 0 {
+			global.LOG.Infof("[PHP] StopFpm OK after SIGTERM: %s", version)
+			return nil
 		}
 	}
-	// 最后再验证
-	if s.isFpmProcessRunning(version) {
-		return fmt.Errorf("php-fpm 停止后仍有进程残留，请 SSH 手动执行 pkill -9 php-fpm%s", version)
+
+	global.LOG.Warnf("[PHP] SIGTERM timeout, still alive PIDs: %v, using SIGKILL", pids)
+	// 强制停止（SIGKILL）
+	_ = s.signalPids(pids, syscall.SIGKILL)
+
+	// 再等待验证
+	for i := 0; i < 3; i++ {
+		time.Sleep(time.Second)
+		pids = s.getFpmPids(version)
+		if len(pids) == 0 {
+			global.LOG.Infof("[PHP] StopFpm OK after SIGKILL: %s", version)
+			return nil
+		}
 	}
-	global.LOG.Infof("[PHP] StopFpm OK: %s", version)
-	return nil
+
+	return fmt.Errorf("php-fpm %s 停止后仍有进程残留，PID: %v，请 SSH 手动执行 kill -9", version, pids)
 }
 
 // RestartFpm 重启 PHP-FPM
