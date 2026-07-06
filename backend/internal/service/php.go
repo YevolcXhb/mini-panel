@@ -122,12 +122,20 @@ func (s *PhpService) InstallVersionWithContext(ctx context.Context, version stri
 	}
 
 	var cmd *exec.Cmd
+	// apt 公共参数：限制重试次数和单次请求超时，避免网络问题导致卡死
+	aptTimeoutArgs := []string{
+		"-o", "Acquire::Retries=3",
+		"-o", "Acquire::http::Timeout=30",
+		"-o", "Acquire::https::Timeout=30",
+		"-o", "Dpkg::Lock::Timeout=60",
+	}
 	if syscmd.Which("apt") {
 		// Ubuntu/Debian 需要添加第三方源，官方源不再提供旧版 PHP
 		if err := s.prepareAptSource(ctx, version); err != nil {
 			return err
 		}
 		args := append([]string{"install", "-y", "-q"}, pkgs...)
+		args = append(args, aptTimeoutArgs...)
 		cmd = exec.CommandContext(ctx, "apt", args...)
 	} else if syscmd.Which("dnf") {
 		args := append([]string{"install", "-y"}, pkgs...)
@@ -177,6 +185,11 @@ func (s *PhpService) prepareAptSource(ctx context.Context, version string) error
 	}
 	_ = isUbuntu
 
+	// 检测 apt 锁是否被占用（避免与 unattended-upgrades 冲突导致无限等待）
+	if err := s.waitForAptLock(ctx, 30); err != nil {
+		return fmt.Errorf("apt 锁被占用超过 30 秒，请稍后重试或检查是否有其他 apt 进程在运行: %v", err)
+	}
+
 	// 检查是否已经添加了 ppa:ondrej/php（通过 sources.list.d 文件名判断）
 	sourcesDir := "/etc/apt/sources.list.d"
 	ondrejFound := false
@@ -192,19 +205,33 @@ func (s *PhpService) prepareAptSource(ctx context.Context, version string) error
 
 	if !ondrejFound {
 		global.LOG.Infof("[PHP] adding ondrej/php repository")
-		// 更新 apt 索引并安装前置依赖
-		if err := exec.CommandContext(ctx, "apt", "update", "-q").Run(); err != nil {
-			global.LOG.Warnf("[PHP] apt update before add-apt-repository: %v", err)
+		// 更新 apt 索引并安装前置依赖（带超时参数）
+		aptUpdateArgs := []string{"update", "-q",
+			"-o", "Acquire::Retries=3",
+			"-o", "Acquire::http::Timeout=30",
+			"-o", "Acquire::https::Timeout=30",
+		}
+		if out, err := exec.CommandContext(ctx, "apt", aptUpdateArgs...).CombinedOutput(); err != nil {
+			global.LOG.Warnf("[PHP] apt update before add-apt-repository: %v, output: %s", err, string(out))
 		}
 		if !syscmd.Which("add-apt-repository") {
-			exec.CommandContext(ctx, "apt", "install", "-y", "-q", "software-properties-common").Run()
+			installArgs := []string{"install", "-y", "-q",
+				"-o", "Acquire::Retries=3",
+				"-o", "Acquire::http::Timeout=30",
+				"-o", "Acquire::https::Timeout=30",
+				"software-properties-common",
+			}
+			if out, err := exec.CommandContext(ctx, "apt", installArgs...).CombinedOutput(); err != nil {
+				global.LOG.Warnf("[PHP] install software-properties-common failed: %v, output: %s", err, string(out))
+			}
 		}
 		if syscmd.Which("add-apt-repository") {
 			out, err := exec.CommandContext(ctx, "add-apt-repository", "-y", "ppa:ondrej/php").CombinedOutput()
 			if err != nil {
-				global.LOG.Errorf("[PHP] add-apt-repository failed: %v, output: %s", err, string(out))
-				// 继续尝试 Debian 方式
+				// PPA 添加失败立即返回错误，不要继续往下走导致 apt install 找不到包卡死
+				return fmt.Errorf("添加 ondrej/php PPA 失败（可能是网络问题），请检查网络后重试或手动添加: %v\n%s", err, string(out))
 			}
+			global.LOG.Infof("[PHP] ondrej/php PPA added successfully")
 		} else if isDebian {
 			// Debian 通过 sury.org 源
 			lsbOut, _ := exec.CommandContext(ctx, "lsb_release", "-cs").CombinedOutput()
@@ -217,22 +244,69 @@ func (s *PhpService) prepareAptSource(ctx context.Context, version string) error
 			if err := os.WriteFile(sourceFile, []byte(aptLine), 0644); err != nil {
 				return fmt.Errorf("写入 sury 源失败: %v", err)
 			}
-			keyCmd := exec.CommandContext(ctx, "bash", "-c", "curl -fsSL https://packages.sury.org/php/apt.gpg | gpg --dearmor -o /usr/share/keyrings/ondrej-php.gpg")
-			if out, err := keyCmd.CombinedOutput(); err != nil {
-				global.LOG.Errorf("[PHP] add sury gpg key failed: %v, output: %s", err, string(out))
+			// 分两步：先下载 key，再导入。避免 curl 管道卡死
+			keyURL := "https://packages.sury.org/php/apt.gpg"
+			tmpKeyPath := "/tmp/minipanel-sury-key.asc"
+			curlCmd := exec.CommandContext(ctx, "curl", "-fsSL", "--max-time", "30", "--retry", "3", keyURL, "-o", tmpKeyPath)
+			if out, err := curlCmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("下载 sury GPG key 失败（网络问题），请检查网络后重试: %v\n%s", err, string(out))
+			}
+			gpgCmd := exec.CommandContext(ctx, "gpg", "--dearmor", "-o", "/usr/share/keyrings/ondrej-php.gpg", tmpKeyPath)
+			if out, err := gpgCmd.CombinedOutput(); err != nil {
+				global.LOG.Errorf("[PHP] import sury gpg key failed: %v, output: %s", err, string(out))
 				// 不阻断，apt 可能仍信任
 			}
+			os.Remove(tmpKeyPath)
 		}
 	}
 
-	// apt update 刷新索引
+	// apt update 刷新索引（带超时参数）
 	global.LOG.Infof("[PHP] apt update")
-	out, err := exec.CommandContext(ctx, "apt", "update", "-q").CombinedOutput()
+	updateArgs := []string{"update", "-q",
+		"-o", "Acquire::Retries=3",
+		"-o", "Acquire::http::Timeout=30",
+		"-o", "Acquire::https::Timeout=30",
+	}
+	out, err := exec.CommandContext(ctx, "apt", updateArgs...).CombinedOutput()
 	if err != nil {
-		global.LOG.Errorf("[PHP] apt update failed: %v, output: %s", err, string(out))
-		return fmt.Errorf("apt update 失败: %v\n%s", err, string(out))
+		return fmt.Errorf("apt update 失败（可能网络问题）: %v\n%s", err, string(out))
 	}
 	return nil
+}
+
+// waitForAptLock 检测 apt 锁是否被占用，最多等待 maxWaitSeconds 秒
+func (s *PhpService) waitForAptLock(ctx context.Context, maxWaitSeconds int) error {
+	lockFiles := []string{
+		"/var/lib/dpkg/lock",
+		"/var/lib/dpkg/lock-frontend",
+		"/var/lib/apt/lists/lock",
+		"/var/cache/apt/archives/lock",
+	}
+	for i := 0; i < maxWaitSeconds; i++ {
+		// 检查 fuser 是否能获取到锁进程
+		busy := false
+		for _, lockFile := range lockFiles {
+			if _, err := os.Stat(lockFile); err != nil {
+				continue
+			}
+			// 用 fuser 检查文件是否被占用
+			out, err := exec.CommandContext(ctx, "fuser", lockFile).CombinedOutput()
+			if err == nil && strings.TrimSpace(string(out)) != "" {
+				busy = true
+				break
+			}
+		}
+		if !busy {
+			return nil
+		}
+		global.LOG.Warnf("[PHP] apt lock busy, waiting %d/%d", i+1, maxWaitSeconds)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+	return fmt.Errorf("apt 锁持续被占用")
 }
 
 // RemoveVersion 卸载 PHP 版本
