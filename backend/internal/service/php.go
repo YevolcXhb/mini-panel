@@ -152,6 +152,28 @@ func (s *PhpService) InstallVersionWithContext(ctx context.Context, version stri
 		output = output[:2000] + "..."
 	}
 	if err != nil {
+		// dpkg 被中断（apt exit 100 常见原因），自动修复后重试一次
+		if strings.Contains(output, "dpkg --configure -a") || strings.Contains(output, "dpkg 被中断") || strings.Contains(output, "dpkg was interrupted") {
+			global.LOG.Warnf("[PHP] dpkg interrupted, trying dpkg --configure -a")
+			if fixOut, fixErr := exec.CommandContext(ctx, "dpkg", "--configure", "-a").CombinedOutput(); fixErr != nil {
+				global.LOG.Errorf("[PHP] dpkg --configure -a failed: %v, output: %s", fixErr, string(fixOut))
+				return fmt.Errorf("dpkg 状态异常，自动修复失败，请 SSH 执行 `dpkg --configure -a` 后重试: %v\n%s", fixErr, string(fixOut))
+			}
+			global.LOG.Infof("[PHP] dpkg --configure -a OK, retry apt install")
+			retryArgs := append([]string{"install", "-y", "-q"}, pkgs...)
+			retryArgs = append(retryArgs, aptTimeoutArgs...)
+			cmd = exec.CommandContext(ctx, "apt", retryArgs...)
+			cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
+			out, err = cmd.CombinedOutput()
+			output = string(out)
+			if len(output) > 2000 {
+				output = output[:2000] + "..."
+			}
+			if err == nil {
+				global.LOG.Infof("[PHP] InstallVersion OK after dpkg fix: %s", version)
+				return nil
+			}
+		}
 		if ctx.Err() == context.DeadlineExceeded {
 			global.LOG.Errorf("[PHP] InstallVersion TIMEOUT: %s", version)
 			return fmt.Errorf("PHP %s 安装超时", version)
