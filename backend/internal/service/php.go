@@ -414,13 +414,52 @@ func (s *PhpService) isFpmProcessRunning(version string) bool {
 // StopFpm 停止 PHP-FPM
 func (s *PhpService) StopFpm(version string) error {
 	svcName := fmt.Sprintf("php%s-fpm", version)
-	return s.runSystemctl(svcName, "stop")
+	// 先尝试 systemctl stop（对 systemd 管理的 FPM 有效）
+	_ = s.runSystemctl(svcName, "stop")
+	// 等待 1 秒
+	time.Sleep(time.Second)
+	// 如果还有进程在运行，说明是直接启动模式，需要 pkill
+	if s.isFpmProcessRunning(version) {
+		global.LOG.Warnf("[PHP] systemctl stop %s ineffective (process still alive), using pkill", svcName)
+		// 优雅停止（SIGTERM）
+		pkillCmd := exec.Command("pkill", "-TERM", "-f", fmt.Sprintf("php-fpm%s", version))
+		if out, err := pkillCmd.CombinedOutput(); err != nil {
+			global.LOG.Warnf("[PHP] pkill TERM failed: %v, output: %s", err, string(out))
+		}
+		// 等待 2 秒
+		time.Sleep(2 * time.Second)
+		// 如果还在，强杀（SIGKILL）
+		if s.isFpmProcessRunning(version) {
+			pkillForce := exec.Command("pkill", "-KILL", "-f", fmt.Sprintf("php-fpm%s", version))
+			if out, err := pkillForce.CombinedOutput(); err != nil {
+				return fmt.Errorf("pkill -9 php-fpm 失败: %v\n%s", err, string(out))
+			}
+			global.LOG.Infof("[PHP] php-fpm %s force killed", version)
+		}
+	}
+	// 最后再验证
+	if s.isFpmProcessRunning(version) {
+		return fmt.Errorf("php-fpm 停止后仍有进程残留，请 SSH 手动执行 pkill -9 php-fpm%s", version)
+	}
+	global.LOG.Infof("[PHP] StopFpm OK: %s", version)
+	return nil
 }
 
 // RestartFpm 重启 PHP-FPM
 func (s *PhpService) RestartFpm(version string) error {
 	svcName := fmt.Sprintf("php%s-fpm", version)
-	return s.runSystemctl(svcName, "restart")
+	// 优先尝试 systemctl restart
+	if err := s.runSystemctl(svcName, "restart"); err == nil {
+		time.Sleep(time.Second)
+		if s.isServiceRunning(svcName) || s.isFpmProcessRunning(version) {
+			return nil
+		}
+	}
+	// systemctl 不行就 stop+start
+	if err := s.StopFpm(version); err != nil {
+		return err
+	}
+	return s.StartFpm(version)
 }
 
 func (s *PhpService) runSystemctl(name, action string) error {
