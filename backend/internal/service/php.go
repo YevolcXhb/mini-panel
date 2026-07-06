@@ -58,9 +58,9 @@ func (s *PhpService) GetInstalledVersions() []model.PhpVersion {
 					break
 				}
 			}
-			// 检测 FPM 是否运行
+			// 检测 FPM 是否运行（systemctl + 进程双重检测）
 			svcName := fmt.Sprintf("php%s-fpm", v)
-			pv.Running = s.isServiceRunning(svcName)
+			pv.Running = s.isServiceRunning(svcName) || s.isFpmProcessRunning(v)
 
 			// php.ini 路径
 			iniPaths := []string{
@@ -359,7 +359,56 @@ func (s *PhpService) RemoveVersion(version string) error {
 // StartFpm 启动 PHP-FPM
 func (s *PhpService) StartFpm(version string) error {
 	svcName := fmt.Sprintf("php%s-fpm", version)
-	return s.runSystemctl(svcName, "start")
+	if err := s.runSystemctl(svcName, "start"); err != nil {
+		return err
+	}
+	// 验证 FPM 是否真的起来（systemctl 经常假成功）
+	if !s.isServiceRunning(svcName) {
+		global.LOG.Warnf("[PHP] systemctl start %s returned success but service not running, trying direct start", svcName)
+		// 回退：直接启动 php-fpm 进程
+		return s.startFpmDirect(version)
+	}
+	return nil
+}
+
+// startFpmDirect 直接启动 php-fpm 进程（systemctl 失败时的备选）
+func (s *PhpService) startFpmDirect(version string) error {
+	fpmBin := fmt.Sprintf("/usr/sbin/php-fpm%s", version)
+	if _, err := os.Stat(fpmBin); err != nil {
+		fpmBin = fmt.Sprintf("/usr/sbin/php-fpm%s.0", version)
+		if _, err := os.Stat(fpmBin); err != nil {
+			return fmt.Errorf("找不到 php-fpm 可执行文件，请确认 PHP 已正确安装")
+		}
+	}
+	// 用默认配置启动，nodaemonize 模式
+	cmd := exec.Command(fpmBin, "-D")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("直接启动 php-fpm 失败: %v\n%s", err, string(out))
+	}
+	// 等待 2 秒让 FPM 完成启动
+	time.Sleep(2 * time.Second)
+	// 再次验证
+	if !s.isFpmProcessRunning(version) {
+		return fmt.Errorf("php-fpm 启动后未检测到运行进程，请查看 /var/log/php%s-fpm.log", version)
+	}
+	global.LOG.Infof("[PHP] php-fpm %s started directly (not via systemctl)", version)
+	return nil
+}
+
+// isFpmProcessRunning 检查 php-fpm 进程是否在运行
+func (s *PhpService) isFpmProcessRunning(version string) bool {
+	// 方式1: ps 命令查找 php-fpm 进程
+	patterns := []string{
+		fmt.Sprintf("php-fpm%s", version),
+		"php-fpm: master",
+	}
+	for _, pattern := range patterns {
+		cmd := exec.Command("pgrep", "-f", pattern)
+		if out, err := cmd.CombinedOutput(); err == nil && strings.TrimSpace(string(out)) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // StopFpm 停止 PHP-FPM
