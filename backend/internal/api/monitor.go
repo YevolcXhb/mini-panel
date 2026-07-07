@@ -1,4 +1,4 @@
-package api
+﻿package api
 
 import (
 	"net/http"
@@ -21,7 +21,7 @@ func (a *MonitorAPI) List(c *gin.Context) {
 		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "1440"))
 		items, err := a.service.List(limit)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+			c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, dto.Response{Code: 200, Data: items})
@@ -30,7 +30,7 @@ func (a *MonitorAPI) List(c *gin.Context) {
 	func (a *MonitorAPI) GetRealtime(c *gin.Context) {
 		metrics, err := a.service.GetRealtime()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+			c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, dto.Response{Code: 200, Data: metrics})

@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/minipanel/minipanel/internal/global"
 	"github.com/minipanel/minipanel/internal/model"
@@ -101,6 +102,26 @@ func (s *FirewallService) GetStatus() (map[string]interface{}, error) {
 		"installed":          backend != "none",
 		"running":            false,
 	}
+
+	// 平台检查（非 Linux 时直接给出明确说明）
+	if runtime.GOOS != "linux" {
+		result["running"] = false
+		result["installed"] = false
+		result["platform_unsupported"] = true
+		result["message"] = fmt.Sprintf("防火墙管理仅支持 Linux 系统，当前系统为 %s", runtime.GOOS)
+		result["diagnosis"] = "MiniPanel 防火墙功能依赖 Linux 内核的 netfilter 子系统，Windows/macOS 无法使用"
+		return result, nil
+	}
+
+	// backend == none：内核或软件缺失，给出诊断
+	if backend == "none" {
+		result["running"] = false
+		result["installed"] = false
+		result["message"] = "未检测到任何防火墙后端"
+		result["diagnosis"] = s.diagnoseNoBackend()
+		return result, nil
+	}
+
 	switch backend {
 	case "firewalld":
 		out, err := exec.Command("firewall-cmd", "--state").CombinedOutput()
@@ -115,36 +136,229 @@ func (s *FirewallService) GetStatus() (map[string]interface{}, error) {
 		if err == nil && strings.Contains(string(out), "Status: active") {
 			result["running"] = true
 		}
+		// 检查内核模块
+		if modErr := s.checkKernelModule("ufw"); modErr != "" {
+			result["kernel_warning"] = modErr
+		}
 	case "nftables":
 		out, err := exec.Command("nft", "list", "ruleset").CombinedOutput()
 		if err == nil {
 			outStr := strings.TrimSpace(string(out))
 			result["running"] = len(outStr) > 0
-			// nftables只要有基础表就认为是启用状态
 			if strings.Contains(outStr, "table inet filter") {
 				result["running"] = true
 			}
+		} else {
+			// nft 命令存在但执行失败，可能是内核 netfilter 子系统不可用
+			result["kernel_warning"] = fmt.Sprintf("nft 命令执行失败: %s（可能内核 netfilter 模块不可用）", strings.TrimSpace(string(out)))
 		}
 	case "iptables":
 		out, err := exec.Command("iptables", "-L", "-n").CombinedOutput()
 		result["running"] = err == nil && len(out) > 0
-	default:
-		if runtime.GOOS != "linux" {
-			result["message"] = "防火墙管理仅支持Linux系统"
-		} else {
-			result["message"] = "未检测到可用的防火墙后端 (nftables/iptables/firewalld/ufw)"
+		if err != nil {
+			errStr := strings.TrimSpace(string(out))
+			if strings.Contains(errStr, "Permission denied") || strings.Contains(err.Error(), "permission") {
+				result["kernel_warning"] = "iptables 执行权限不足，请确保 MiniPanel 以 root 运行"
+			} else if strings.Contains(errStr, "not found") || strings.Contains(errStr, "no chain") {
+				result["kernel_warning"] = "iptables 内核模块未加载，请执行: modprobe ip_tables"
+			} else {
+				result["kernel_warning"] = fmt.Sprintf("iptables 执行失败: %s（可能内核 netfilter 不可用）", errStr)
+			}
 		}
 	}
 	return result, nil
+}
+
+// diagnoseNoBackend 诊断为什么没有可用后端
+func (s *FirewallService) diagnoseNoBackend() string {
+	var reasons []string
+
+	// 平台检查放在最前，非 Linux 直接给出明确结论
+	if runtime.GOOS != "linux" {
+		reasons = append(reasons, fmt.Sprintf("当前系统为 %s，防火墙管理仅支持 Linux", runtime.GOOS))
+		reasons = append(reasons, "MiniPanel 防火墙功能依赖 Linux 内核的 netfilter 子系统，Windows/macOS 内核不具备该子系统，无法使用")
+		return strings.Join(reasons, "\n")
+	}
+
+	// 检查常见后端是否安装
+	missingTools := []string{}
+	if !syscmd.Which("nft") {
+		missingTools = append(missingTools, "nft")
+	}
+	if !syscmd.Which("iptables") {
+		missingTools = append(missingTools, "iptables")
+	}
+	if !syscmd.Which("firewall-cmd") {
+		missingTools = append(missingTools, "firewall-cmd (firewalld)")
+	}
+	if !syscmd.Which("ufw") {
+		missingTools = append(missingTools, "ufw")
+	}
+
+	if len(missingTools) == 4 {
+		reasons = append(reasons, "未安装任何防火墙管理工具 (nftables/iptables/firewalld/ufw)")
+		reasons = append(reasons, "建议安装:")
+		reasons = append(reasons, "  Debian/Ubuntu: apt install -y nftables iptables ufw")
+		reasons = append(reasons, "  CentOS/RHEL: yum install -y nftables iptables firewalld")
+	} else if len(missingTools) > 0 {
+		reasons = append(reasons, fmt.Sprintf("部分工具未安装: %s", strings.Join(missingTools, ", ")))
+	}
+
+	// 检查内核模块
+	if syscmd.Which("iptables") {
+		if _, err := exec.Command("iptables", "-L", "-n").CombinedOutput(); err != nil {
+			reasons = append(reasons, "iptables 命令存在但执行失败，可能内核 netfilter 模块未加载")
+			reasons = append(reasons, "  请尝试: modprobe ip_tables && modprobe iptable_filter")
+		}
+	}
+	if syscmd.Which("nft") {
+		if _, err := exec.Command("nft", "list", "ruleset").CombinedOutput(); err != nil {
+			reasons = append(reasons, "nft 命令存在但执行失败，可能内核 nf_tables 模块未加载")
+			reasons = append(reasons, "  请尝试: modprobe nf_tables")
+		}
+	}
+
+	// 检查是否在容器中运行（共享内核场景）
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		reasons = append(reasons, "检测到在 Docker 容器中运行，容器通常共享宿主机内核，netfilter 操作可能受限")
+	}
+	if _, err := os.Stat("/proc/1/cgroup"); err == nil {
+		if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
+			cgroupStr := string(data)
+			if strings.Contains(cgroupStr, "lxc") || strings.Contains(cgroupStr, "container") {
+				if !strings.Contains(strings.Join(reasons, "\n"), "容器") {
+					reasons = append(reasons, "检测到在 LXC/容器环境中运行，netfilter 操作可能被宿主机限制")
+				}
+			}
+		}
+	}
+
+	// 检查权限
+	if os.Geteuid() != 0 {
+		reasons = append(reasons, fmt.Sprintf("MiniPanel 当前以非 root 用户运行 (uid=%d)，防火墙操作需要 root 权限", os.Geteuid()))
+	}
+
+	if len(reasons) == 0 {
+		return "无法确定具体原因，请检查系统日志或联系支持"
+	}
+	return strings.Join(reasons, "\n")
+}
+
+// checkKernelModule 检查后端依赖的内核模块是否可用
+func (s *FirewallService) checkKernelModule(backend string) string {
+	switch backend {
+	case "ufw":
+		// ufw 实际使用 iptables，检查 ip_tables
+		out, err := exec.Command("modprobe", "-n", "ip_tables").CombinedOutput()
+		if err != nil {
+			return fmt.Sprintf("ip_tables 内核模块不可用: %s", strings.TrimSpace(string(out)))
+		}
+	case "iptables":
+		out, err := exec.Command("modprobe", "-n", "ip_tables").CombinedOutput()
+		if err != nil {
+			return fmt.Sprintf("ip_tables 内核模块不可用: %s", strings.TrimSpace(string(out)))
+		}
+	case "nftables":
+		out, err := exec.Command("modprobe", "-n", "nf_tables").CombinedOutput()
+		if err != nil {
+			return fmt.Sprintf("nf_tables 内核模块不可用: %s", strings.TrimSpace(string(out)))
+		}
+	}
+	return ""
+}
+
+// Diagnose 一键诊断：返回完整的防火墙环境诊断报告
+func (s *FirewallService) Diagnose() map[string]interface{} {
+	report := map[string]interface{}{
+		"timestamp": time.Now().Format(time.RFC3339),
+	}
+
+	// 平台检查
+	report["platform"] = runtime.GOOS
+	report["platform_supported"] = runtime.GOOS == "linux"
+
+	if runtime.GOOS != "linux" {
+		report["summary"] = fmt.Sprintf("当前系统 %s 不支持防火墙管理，仅 Linux 可用", runtime.GOOS)
+		report["recommendation"] = "请在 Linux 服务器上部署 MiniPanel 以使用防火墙功能"
+		return report
+	}
+
+	// 权限检查
+	uid := os.Geteuid()
+	report["uid"] = uid
+	report["is_root"] = uid == 0
+
+	// 容器检测
+	isContainer := false
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		isContainer = true
+		report["container_type"] = "docker"
+	}
+	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
+		cgroupStr := string(data)
+		if strings.Contains(cgroupStr, "lxc") {
+			isContainer = true
+			report["container_type"] = "lxc"
+		}
+	}
+	report["in_container"] = isContainer
+
+	// 后端工具检测
+	backends := s.getAvailableBackends()
+	report["available_backends"] = backends
+	report["tools_installed"] = map[string]bool{
+		"nft":          syscmd.Which("nft"),
+		"iptables":     syscmd.Which("iptables"),
+		"firewall-cmd": syscmd.Which("firewall-cmd"),
+		"ufw":          syscmd.Which("ufw"),
+	}
+
+	// 内核模块检测
+	kernelModules := map[string]string{}
+	if syscmd.Which("iptables") {
+		if out, err := exec.Command("iptables", "-L", "-n").CombinedOutput(); err != nil {
+			kernelModules["ip_tables"] = fmt.Sprintf("unavailable: %s", strings.TrimSpace(string(out)))
+		} else {
+			kernelModules["ip_tables"] = "ok"
+		}
+	}
+	if syscmd.Which("nft") {
+		if out, err := exec.Command("nft", "list", "ruleset").CombinedOutput(); err != nil {
+			kernelModules["nf_tables"] = fmt.Sprintf("unavailable: %s", strings.TrimSpace(string(out)))
+		} else {
+			kernelModules["nf_tables"] = "ok"
+		}
+	}
+	report["kernel_modules"] = kernelModules
+
+	// 总结
+	if backends[0] == "none" {
+		report["summary"] = "无法使用防火墙功能"
+		report["recommendation"] = s.diagnoseNoBackend()
+	} else if isRoot, ok := report["is_root"].(bool); !ok || !isRoot {
+		report["summary"] = "防火墙工具已安装，但 MiniPanel 未以 root 运行，操作将被拒绝"
+		report["recommendation"] = "请以 root 用户或 sudo 启动 MiniPanel"
+	} else if isContainer {
+		report["summary"] = "在容器环境中运行，netfilter 操作可能受限"
+		report["recommendation"] = "建议在宿主机上使用防火墙功能，或在容器启动时加 --privileged 参数"
+	} else {
+		report["summary"] = fmt.Sprintf("防火墙后端可用: %s", strings.Join(backends, ", "))
+		report["recommendation"] = "环境正常，可正常使用防火墙功能"
+	}
+
+	return report
 }
 
 func (s *FirewallService) Start() error {
 	backends := s.getAvailableBackends()
 	global.LOG.Infof("[Firewall] available backends: %v", backends)
 	if backends[0] == "none" {
-		return fmt.Errorf("未检测到可用的防火墙后端 (nftables/iptables/firewalld/ufw)")
+		diagnosis := s.diagnoseNoBackend()
+		return fmt.Errorf("未检测到可用的防火墙后端\n\n诊断信息:\n%s", diagnosis)
 	}
 
+	// 收集所有后端的失败原因，便于排查
+	var failures []string
 	var lastErr error
 	for _, backend := range backends {
 		global.LOG.Infof("[Firewall] trying to start with backend: %s", backend)
@@ -171,6 +385,7 @@ func (s *FirewallService) Start() error {
 					strings.Contains(outStr, "couldn't load") ||
 					strings.Contains(outStr, "invalid port/service") {
 					lastErr = fmt.Errorf("ufw: %s", outStr)
+					failures = append(failures, fmt.Sprintf("ufw: %s", outStr))
 					global.LOG.Warnf("[Firewall] ufw not usable, trying next backend: %v", lastErr)
 					continue
 				}
@@ -196,13 +411,18 @@ func (s *FirewallService) Start() error {
 			}
 			global.LOG.Warnf("[Firewall] backend %s returned success but not running, trying next", backend)
 			lastErr = fmt.Errorf("%s 启动后未检测到运行状态", backend)
+			failures = append(failures, lastErr.Error())
 		} else {
 			lastErr = err
+			failures = append(failures, fmt.Sprintf("%s: %v", backend, err))
 			global.LOG.Warnf("[Firewall] backend %s failed: %v, trying next", backend, err)
 		}
 	}
 
-	return fmt.Errorf("所有防火墙后端启动均失败: %v", lastErr)
+	// 所有后端都失败，返回完整失败链 + 诊断
+	diagnosis := s.diagnoseNoBackend()
+	return fmt.Errorf("所有防火墙后端启动均失败\n\n尝试的后端及失败原因:\n%s\n\n环境诊断:\n%s",
+		strings.Join(failures, "\n"), diagnosis)
 }
 
 func (s *FirewallService) checkBackendRunning(backend string) bool {

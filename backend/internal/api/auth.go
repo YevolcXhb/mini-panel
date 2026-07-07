@@ -1,4 +1,4 @@
-package api
+﻿package api
 
 import (
 	"encoding/base64"
@@ -77,7 +77,7 @@ func (a *AuthAPI) Captcha(c *gin.Context) {
 	id, code := captcha.Generate()
 	imgBytes, err := captcha.GenerateImage(code)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: "生成验证码失败"})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: "生成验证码失败"})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{
@@ -92,25 +92,25 @@ func (a *AuthAPI) Captcha(c *gin.Context) {
 func (a *AuthAPI) Login(c *gin.Context) {
 	var req dto.LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 400, Message: err.Error()})
 		return
 	}
 
 	ip := c.ClientIP()
 
 	if ipTrack.isLocked(ip) {
-		c.JSON(http.StatusTooManyRequests, dto.Response{Code: 429, Message: "登录尝试过多，请15分钟后再试"})
+		c.JSON(http.StatusOK, dto.Response{Code: 429, Message: "登录尝试过多，请15分钟后再试"})
 		return
 	}
 
 	if ipTrack.needCaptcha(ip) {
 		if req.Captcha == "" || req.CaptchaID == "" {
-			c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "需要验证码"})
+			c.JSON(http.StatusOK, dto.Response{Code: 400, Message: "需要验证码"})
 			return
 		}
 		if !captcha.Verify(req.CaptchaID, req.Captcha) {
 			ipTrack.recordFailure(ip)
-			c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "验证码错误"})
+			c.JSON(http.StatusOK, dto.Response{Code: 400, Message: "验证码错误"})
 			return
 		}
 	}
@@ -135,7 +135,7 @@ func (a *AuthAPI) Logout(c *gin.Context) {
 func (a *AuthAPI) ChangePassword(c *gin.Context) {
 	var req dto.ChangePasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 400, Message: err.Error()})
 		return
 	}
 	user, _ := c.Get("user")
@@ -145,7 +145,7 @@ func (a *AuthAPI) ChangePassword(c *gin.Context) {
 		return
 	}
 	if err := a.service.ChangePassword(username, req.OldPassword, req.NewPassword); err != nil {
-		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 400, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "password changed"})

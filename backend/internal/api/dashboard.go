@@ -1,4 +1,4 @@
-package api
+﻿package api
 
 import (
 	"net/http"
@@ -19,7 +19,7 @@ func NewDashboardAPI() *DashboardAPI {
 func (a *DashboardAPI) GetInfo(c *gin.Context) {
 	info, err := a.service.GetSystemInfo()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	cpu, err := a.service.GetCPUInfo()
@@ -46,7 +46,7 @@ func (a *DashboardAPI) GetMonitor(c *gin.Context) {
 	mode := c.DefaultQuery("mode", "chroot")
 	data, err := a.service.GetMonitor(mode)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: data})

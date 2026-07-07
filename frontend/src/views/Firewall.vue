@@ -6,18 +6,25 @@
       </h2>
     </div>
 
-    <el-alert v-if="!serviceStatus.installed" type="warning" show-icon style="margin-bottom: 16px">
+    <el-alert v-if="!serviceStatus.installed" type="warning" show-icon :closable="false" style="margin-bottom: 16px">
       <template #title>
-        未检测到防火墙服务 (firewalld/ufw)，仅支持 Linux 系统
+        <div style="display: flex; align-items: center; justify-content: space-between; width: 100%">
+          <span>{{ serviceStatus.message || '防火墙功能不可用' }}</span>
+          <el-button size="small" type="primary" @click="runDiagnose" :loading="diagnosing">一键诊断</el-button>
+        </div>
       </template>
       <template #default>
         <div style="margin-top: 8px">
-          <p style="margin: 0; color: #666; font-size: 13px">请手动安装 firewalld 或 ufw：</p>
-          <ul style="margin: 8px 0; padding-left: 20px; font-size: 13px; color: #666">
-            <li>CentOS/RHEL: yum install firewalld</li>
-            <li>Ubuntu/Debian: apt install ufw</li>
-          </ul>
+          <pre v-if="serviceStatus.diagnosis" style="margin: 0; white-space: pre-wrap; color: #666; font-size: 13px; font-family: monospace">{{ serviceStatus.diagnosis }}</pre>
+          <p v-else style="margin: 0; color: #666; font-size: 13px">点击"一键诊断"获取详细原因</p>
         </div>
+      </template>
+    </el-alert>
+
+    <el-alert v-else-if="serviceStatus.kernel_warning" type="warning" show-icon :closable="false" style="margin-bottom: 16px">
+      <template #title>内核模块警告</template>
+      <template #default>
+        <div style="margin-top: 8px; color: #666; font-size: 13px">{{ serviceStatus.kernel_warning }}</div>
       </template>
     </el-alert>
 
@@ -74,6 +81,40 @@
         </el-table-column>
       </el-table>
     </template>
+
+    <el-dialog v-model="diagnoseDialogVisible" title="防火墙环境诊断报告" width="700px">
+      <div v-if="diagnoseReport">
+        <el-descriptions :column="1" border>
+          <el-descriptions-item label="诊断时间">{{ diagnoseReport.timestamp }}</el-descriptions-item>
+          <el-descriptions-item label="操作系统">{{ diagnoseReport.platform }} {{ diagnoseReport.platform_supported ? '(支持)' : '(不支持)' }}</el-descriptions-item>
+          <el-descriptions-item label="运行权限">
+            <el-tag :type="diagnoseReport.is_root ? 'success' : 'danger'">{{ diagnoseReport.is_root ? 'root (有权限)' : '非 root (权限不足)' }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="容器环境">
+            <el-tag :type="diagnoseReport.in_container ? 'warning' : 'success'">{{ diagnoseReport.in_container ? `在容器中 (${diagnoseReport.container_type || 'unknown'})` : '物理机/虚拟机' }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="可用后端">{{ (diagnoseReport.available_backends || []).join(', ') || 'none' }}</el-descriptions-item>
+          <el-descriptions-item label="工具安装情况">
+            <div style="display: flex; gap: 8px; flex-wrap: wrap">
+              <el-tag v-for="(installed, tool) in (diagnoseReport.tools_installed || {})" :key="tool" :type="installed ? 'success' : 'info'">{{ tool }}: {{ installed ? '已装' : '未装' }}</el-tag>
+            </div>
+          </el-descriptions-item>
+          <el-descriptions-item label="内核模块">
+            <div v-if="diagnoseReport.kernel_modules" style="display: flex; gap: 8px; flex-wrap: wrap">
+              <el-tag v-for="(status, mod) in diagnoseReport.kernel_modules" :key="mod" :type="status === 'ok' ? 'success' : 'danger'">{{ mod }}: {{ status }}</el-tag>
+            </div>
+            <span v-else style="color: #c0c4cc">无</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="总结">
+            <span style="color: #f56c6c; font-weight: bold">{{ diagnoseReport.summary }}</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="建议">
+            <pre style="margin: 0; white-space: pre-wrap; color: #666; font-size: 13px">{{ diagnoseReport.recommendation }}</pre>
+          </el-descriptions-item>
+        </el-descriptions>
+      </div>
+      <div v-else style="text-align: center; padding: 20px">诊断中...</div>
+    </el-dialog>
 
     <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑规则' : '添加规则'" width="500px">
       <el-form :model="form" label-width="100px" ref="formRef" :rules="formRules">
@@ -139,6 +180,9 @@ const dialogVisible = ref(false)
 const isEdit = ref(false)
 const formRef = ref<any>(null)
 const serviceStatus = ref<any>({ installed: false, running: false, version: '', name: 'firewalld' })
+const diagnosing = ref(false)
+const diagnoseDialogVisible = ref(false)
+const diagnoseReport = ref<any>(null)
 
 const firewallType = computed(() => {
   const name = serviceStatus.value.backend || serviceStatus.value.name || 'firewalld'
@@ -197,6 +241,19 @@ async function checkStatus() {
     serviceStatus.value = res.data || { installed: false, running: false, name: 'firewalld' }
   } catch (e: any) {
     ElMessage.error(e?.message || '检查服务状态失败')
+  }
+}
+
+async function runDiagnose() {
+  diagnosing.value = true
+  try {
+    const res: any = await firewallApi.diagnose()
+    diagnoseReport.value = res.data
+    diagnoseDialogVisible.value = true
+  } catch (e: any) {
+    ElMessage.error(e?.message || '诊断失败')
+  } finally {
+    diagnosing.value = false
   }
 }
 

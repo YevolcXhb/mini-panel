@@ -784,11 +784,23 @@ func (s *WebsiteService) ReloadNginx() error {
 	}
 	// 尝试reload
 	reloadCmd := exec.Command("nginx", "-s", "reload")
-	if _, err := reloadCmd.CombinedOutput(); err != nil {
-		_ = exec.Command("systemctl", "reload", "nginx").Run()
-		_ = exec.Command("systemctl", "restart", "nginx").Run()
+	if _, err := reloadCmd.CombinedOutput(); err == nil {
+		return nil
 	}
-	return nil
+	// nginx -s reload 失败，尝试 systemctl reload
+	if out, err := exec.Command("systemctl", "reload", "nginx").CombinedOutput(); err == nil {
+		return nil
+	} else {
+		global.LOG.Warnf("[Website] systemctl reload nginx failed: %s, trying restart", strings.TrimSpace(string(out)))
+	}
+	// 最后尝试 restart（影响连接，但确保配置生效）
+	if out, err := exec.Command("systemctl", "restart", "nginx").CombinedOutput(); err == nil {
+		if s.waitForNginxRunning(3) {
+			return nil
+		}
+		return fmt.Errorf("nginx restart 后未检测到运行: %s", strings.TrimSpace(string(out)))
+	}
+	return fmt.Errorf("nginx reload 失败，请检查 nginx 是否正在运行")
 }
 
 func (s *WebsiteService) GetNginxConfigDir() string {

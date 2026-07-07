@@ -212,6 +212,8 @@ export const databaseApi = {
   listTables: (id: number, dbName?: string) => api.get(`/databases/${id}/tables`, { params: dbName ? { db_name: dbName } : {} }),
   createDatabase: (id: number, dbName: string) => api.post(`/databases/${id}/create-db`, { db_name: dbName }),
   createUser: (id: number, data: any) => api.post(`/databases/${id}/create-user`, data),
+  dropDatabase: (id: number, dbName: string) => api.delete(`/databases/${id}/dbs/${dbName}`),
+  dropUser: (id: number, username: string) => api.delete(`/databases/${id}/users/${username}`),
   describeTable: (id: number, dbName: string, tableName: string) => api.get(`/databases/${id}/tables/${dbName}/${tableName}`),
 	  executeQuery: (id: number, dbName: string, query: string) => api.post(`/databases/${id}/query`, { db_name: dbName, query }),
 	  backup: (id: number, dbName: string) => api.post(`/databases/${id}/backup/${dbName}`),
@@ -226,7 +228,8 @@ export const firewallApi = {
   apply: () => api.post('/firewall/apply'),
   status: () => api.get('/firewall/status'),
   start: () => api.post('/firewall/start'),
-  stop: () => api.post('/firewall/stop')
+  stop: () => api.post('/firewall/stop'),
+  diagnose: () => api.get('/firewall/diagnose')
 }
 
 export const systemApi = {

@@ -38,6 +38,22 @@ func (r *DatabaseRepository) GetByName(name string) (*model.DatabaseInstance, er
 	return &item, nil
 }
 
+// GetByNameWithUnscoped 查找同名记录（包括软删除的）
+// 用于检测软删除记录是否存在，避免 uniqueIndex 冲突
+func (r *DatabaseRepository) GetByNameWithUnscoped(name string) (*model.DatabaseInstance, error) {
+	var item model.DatabaseInstance
+	err := r.db.Unscoped().Where("name = ?", name).First(&item).Error
+	if err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
+// RestoreSoftDeleted 物理删除软删除的同名记录，为新建腾出 uniqueIndex 槽位
+func (r *DatabaseRepository) RestoreSoftDeleted(name string) error {
+	return r.db.Unscoped().Where("name = ?", name).Delete(&model.DatabaseInstance{}).Error
+}
+
 func (r *DatabaseRepository) Update(item *model.DatabaseInstance) error {
 	return r.db.Save(item).Error
 }

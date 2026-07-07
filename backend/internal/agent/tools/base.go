@@ -5,12 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/minipanel/minipanel/internal/agent/compression"
 	"github.com/minipanel/minipanel/internal/agent/provider"
 	"github.com/minipanel/minipanel/internal/global"
 )
 
 const maxOutputLength = 4000
+
+// lazyRefThreshold 超过此长度则注册 lazy-ref，返回预览+引用
+const lazyRefThreshold = 4000
 
 type ToolExecResult struct {
 	Output string
@@ -18,11 +23,13 @@ type ToolExecResult struct {
 }
 
 type ToolResult struct {
-	CallID  string
-	Name    string
-	Success bool
-	Result  string
-	Error   string
+	CallID   string
+	Name     string
+	Success  bool
+	Result   string
+	Error    string
+	CacheKey string // 命中缓存时填充
+	Cached   bool   // 是否来自缓存
 }
 
 type Tool interface {
@@ -61,11 +68,25 @@ func normalizeName(name string) string {
 	return strings.ToLower(strings.ReplaceAll(name, "_", ""))
 }
 
+// truncateOutput 简单截断（用于引擎层兜底）
 func truncateOutput(s string) string {
 	if len(s) > maxOutputLength {
 		return s[:maxOutputLength] + fmt.Sprintf("\n... [输出过长已截断，原长度 %d 字符]", len(s))
 	}
 	return s
+}
+
+// prepareOutput 对工具输出进行处理：超阈值时注册 lazy-ref，返回预览+引用。
+// LLM 可通过 resolve_lazy_ref 工具按需取回完整内容。
+func prepareOutput(s string) string {
+	if len(s) <= lazyRefThreshold {
+		return s
+	}
+	preview := s[:maxOutputLength]
+	ref := compression.RegisterLazyRef(s)
+	global.LOG.Infof("[Tools] 输出过长(len=%d)，注册 lazy-ref=%s", len(s), ref)
+	return fmt.Sprintf("%s\n\n[lazy-ref:%s] 完整内容已缓存，可调用 resolve_lazy_ref 工具取回（hash=%s）",
+		preview, ref, ref)
 }
 
 func (r *Registry) ToDefinitions() []provider.ToolDefinition {
@@ -141,9 +162,34 @@ func (e *Executor) Execute(ctx context.Context, call provider.ToolCall) ToolResu
 		}
 	}
 
+	// 缓存检查：仅对实现 CacheableTool 接口且返回 true 的工具生效
+	cacheKey := ""
+	if cacheable, ok := tool.(CacheableTool); ok && cacheable.Cacheable() {
+		cacheKey = CacheKey(toolName, call.Function.Arguments)
+		if cached, hit := GetGlobalToolCache().Get(cacheKey); hit {
+			global.LOG.Infof("[Tools] 缓存命中: %s key=%s", toolName, cacheKey)
+			return ToolResult{
+				CallID:   call.ID,
+				Name:     toolName,
+				Success:  true,
+				Result:   cached,
+				CacheKey: cacheKey,
+				Cached:   true,
+			}
+		}
+	}
+
 	result := e.executeSafely(ctx, tool, args)
 	result.CallID = call.ID
 	result.Name = toolName
+	result.CacheKey = cacheKey
+
+	// 缓存写入：仅成功的查询类工具结果
+	if cacheKey != "" && result.Success {
+		GetGlobalToolCache().Set(cacheKey, result.Result, 5*time.Minute)
+		global.LOG.Debugf("[Tools] 缓存写入: %s key=%s", toolName, cacheKey)
+	}
+
 	return result
 }
 
@@ -160,13 +206,13 @@ func (e *Executor) executeSafely(ctx context.Context, tool Tool, args map[string
 	if execRes.Error != "" {
 		return ToolResult{
 			Success: false,
-			Result:  truncateOutput(execRes.Output),
+			Result:  prepareOutput(execRes.Output),
 			Error:   execRes.Error,
 		}
 	}
 	return ToolResult{
 		Success: true,
-		Result:  truncateOutput(execRes.Output),
+		Result:  prepareOutput(execRes.Output),
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/minipanel/minipanel/internal/agent/compression"
 	"github.com/minipanel/minipanel/internal/agent/provider"
 	"github.com/minipanel/minipanel/internal/agent/repository"
 	"github.com/minipanel/minipanel/internal/agent/tools"
@@ -31,24 +32,26 @@ type recentToolCall struct {
 }
 
 type Engine struct {
-	provider     provider.Provider
-	registry     *tools.Registry
-	executor     *tools.Executor
-	sessionMgr   *repository.SessionManager
-	systemPrompt string
-	maxSteps     int
-	maxErrors    int
+	provider        provider.Provider
+	registry        *tools.Registry
+	executor        *tools.Executor
+	sessionMgr      *repository.SessionManager
+	systemPrompt    string
+	maxSteps        int
+	maxErrors       int
+	microCompressor *compression.MicroCompressionStrategy
 }
 
 func NewEngine(p provider.Provider, registry *tools.Registry, systemPrompt string, maxSteps int) *Engine {
 	return &Engine{
-		provider:     p,
-		registry:     registry,
-		executor:     tools.NewExecutor(registry),
-		sessionMgr:   repository.NewSessionManager(),
-		systemPrompt: systemPrompt,
-		maxSteps:     maxSteps,
-		maxErrors:    5,
+		provider:        p,
+		registry:        registry,
+		executor:        tools.NewExecutor(registry),
+		sessionMgr:      repository.NewSessionManager(),
+		systemPrompt:    systemPrompt,
+		maxSteps:        maxSteps,
+		maxErrors:       5,
+		microCompressor: compression.NewMicroCompressionStrategy(),
 	}
 }
 
@@ -170,6 +173,7 @@ func (e *Engine) RunWithConfirm(ctx context.Context, sessionID uint, toolCallID 
 func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []provider.LLMMessage, stream chan<- StreamChunk) error {
 	toolDefs := e.registry.ToDefinitions()
 	consecutiveErrors := 0
+	lastCompressionStep := 0
 	var recentCalls []recentToolCall
 	finalMessageSent := false
 
@@ -356,8 +360,28 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 			break
 		}
 
-		messages = e.sessionMgr.CompressIfNeeded(messages)
-		global.LOG.Infof("[Engine] 会话%d: 消息压缩后数量=%d，进入下一轮循环", sessionID, len(messages))
+		// 微压缩检查：双触发（语义边界 ∨ 步数/错误阈值）
+		compCtx := compression.CompressionContext{
+			StepNumber:          step + 1,
+			MessageCount:        len(messages),
+			ConsecutiveErrors:   consecutiveErrors,
+			PhaseName:           "react",
+			LastMessage:         e.getLastAssistantContent(messages),
+			LastCompressionStep: lastCompressionStep,
+		}
+		if e.microCompressor.ShouldCompress(compCtx) {
+			var report compression.CompressionReport
+			messages, report = e.microCompressor.Compress(messages, compCtx)
+			lastCompressionStep = step + 1
+			global.LOG.Infof("[Engine] 会话%d: 压缩触发 trigger=%s, tokens_saved=%d, messages=%d→%d",
+				sessionID, report.Trigger, report.TokensSaved, report.MessagesCompressed, len(messages))
+			stream <- StreamChunk{
+				Type:        "compression_triggered",
+				TokensSaved: report.TokensSaved,
+				Content:     string(report.Trigger),
+			}
+		}
+		global.LOG.Infof("[Engine] 会话%d: 消息数量=%d，进入下一轮循环", sessionID, len(messages))
 	}
 
 	global.LOG.Infof("[Engine] 会话%d: ====== 开始生成最终总结，不传递工具定义 ======", sessionID)
@@ -402,6 +426,16 @@ func (e *Engine) ensureSystemPrompt(messages []provider.LLMMessage) []provider.L
 		}
 	}
 	return append([]provider.LLMMessage{{Role: "system", Content: e.systemPrompt}}, messages...)
+}
+
+// getLastAssistantContent 获取消息列表中最后一条 assistant 消息的内容（用于压缩语义触发检测）
+func (e *Engine) getLastAssistantContent(messages []provider.LLMMessage) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "assistant" && messages[i].Content != "" {
+			return messages[i].Content
+		}
+	}
+	return ""
 }
 
 func (e *Engine) formatToolResult(result tools.ToolResult) string {

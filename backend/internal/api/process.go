@@ -1,4 +1,4 @@
-package api
+﻿package api
 
 import (
 	"net/http"
@@ -19,7 +19,7 @@ func NewProcessAPI() *ProcessAPI {
 func (a *ProcessAPI) List(c *gin.Context) {
 	procs, err := a.service.List()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: procs})
@@ -31,7 +31,7 @@ func (a *ProcessAPI) Kill(c *gin.Context) {
 		Force bool   `json:"force"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "invalid request"})
+		c.JSON(http.StatusOK, dto.Response{Code: 400, Message: "invalid request"})
 		return
 	}
 	var err error
@@ -41,7 +41,7 @@ func (a *ProcessAPI) Kill(c *gin.Context) {
 		err = a.service.Kill(req.Pid)
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "killed"})

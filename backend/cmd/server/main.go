@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/minipanel/minipanel/internal/agent/tools"
 	"github.com/minipanel/minipanel/internal/config"
 	"github.com/minipanel/minipanel/internal/global"
 	"github.com/minipanel/minipanel/internal/router"
@@ -26,7 +27,7 @@ func init() {
 }
 
 var (
-	version   = "4.4.5"
+	version   = "4.6.0"
 	buildTime = "unknown"
 	gitCommit = "unknown"
 )
@@ -360,6 +361,8 @@ func run() error {
 	if err := global.InitDB(cfg.DBPath); err != nil {
 		return fmt.Errorf("init db: %w", err)
 	}
+	// 初始化持久化 lazy-ref 存储（用于 agent 上下文压缩的大输出缓存）
+	tools.InitPersistentLazyRefStore()
 	if err := global.InitCron(); err != nil {
 		return fmt.Errorf("init cron: %w", err)
 	}

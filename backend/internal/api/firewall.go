@@ -104,3 +104,9 @@ func (h *FirewallAPI) Stop(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "Firewall stopped"})
 }
+
+// Diagnose 一键诊断防火墙环境
+func (h *FirewallAPI) Diagnose(c *gin.Context) {
+	report := h.service.Diagnose()
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": report})
+}

@@ -442,8 +442,14 @@ async function createDb() {
 async function dropDb(dbName: string) {
 	  try {
 	    await ElMessageBox.confirm(`确定要删除数据库 ${dbName} 吗？此操作不可恢复！`, '危险操作', { type: 'error' })
-	    ElMessage.info('暂不支持删除数据库操作')
-	  } catch (e) {}
+	    await databaseApi.dropDatabase(currentDbInstance.value.id, dbName)
+	    ElMessage.success(`数据库 ${dbName} 已删除`)
+	    loadDbs()
+	  } catch (e: any) {
+	    if (e !== 'cancel') {
+	      ElMessage.error(e?.message || '删除失败')
+	    }
+	  }
 	}
 
 	async function openTableDialog(dbName: string) {

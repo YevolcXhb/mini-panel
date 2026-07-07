@@ -1,4 +1,4 @@
-package api
+﻿package api
 
 import (
 	"net/http"
@@ -22,18 +22,18 @@ func NewWebsiteAPI() *WebsiteAPI {
 func (a *WebsiteAPI) Create(c *gin.Context) {
 	var req dto.WebsiteCreateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 400, Message: err.Error()})
 		return
 	}
 	// 联动建库走新路径，否则走旧 Create 保持向下兼容
 	if req.DBCreate {
 		if err := a.service.CreateWithDB(&req); err != nil {
-			c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+			c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 			return
 		}
 	} else {
 		if err := a.service.Create(&req.Website); err != nil {
-			c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+			c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 			return
 		}
 	}
@@ -44,21 +44,21 @@ func (a *WebsiteAPI) Update(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	var w model.Website
 	if err := c.ShouldBindJSON(&w); err != nil {
-		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 400, Message: err.Error()})
 		return
 	}
 	w.ID = uint(id)
 	// 外部站点（id=0）当作新建处理
 	if id == 0 {
 		if err := a.service.Create(&w); err != nil {
-			c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+			c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "created"})
 		return
 	}
 	if err := a.service.Update(&w); err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "updated"})
@@ -72,11 +72,11 @@ func (a *WebsiteAPI) Delete(c *gin.Context) {
 		portStr := c.Query("port")
 		port, _ := strconv.Atoi(portStr)
 		if domain == "" || port == 0 {
-			c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "缺少 domain/port 参数"})
+			c.JSON(http.StatusOK, dto.Response{Code: 400, Message: "缺少 domain/port 参数"})
 			return
 		}
 		if err := a.service.DeleteExternal(domain, port); err != nil {
-			c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+			c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "deleted"})
@@ -86,7 +86,7 @@ func (a *WebsiteAPI) Delete(c *gin.Context) {
 	cascadeStr := strings.ToLower(c.DefaultQuery("cascade_db", "true"))
 	cascadeDB := !(cascadeStr == "false" || cascadeStr == "0" || cascadeStr == "no" || cascadeStr == "")
 	if err := a.service.DeleteWithCascade(uint(id), cascadeDB); err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "deleted"})
@@ -95,7 +95,7 @@ func (a *WebsiteAPI) Delete(c *gin.Context) {
 func (a *WebsiteAPI) List(c *gin.Context) {
 	items, err := a.service.List()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: items})
@@ -105,7 +105,7 @@ func (a *WebsiteAPI) GetByID(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	w, err := a.service.GetByID(uint(id))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: w})
@@ -115,12 +115,12 @@ func (a *WebsiteAPI) GetByID(c *gin.Context) {
 func (a *WebsiteAPI) ListDatabasesByWebsite(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "invalid id"})
+		c.JSON(http.StatusOK, dto.Response{Code: 400, Message: "invalid id"})
 		return
 	}
 	items, err := a.service.ListDatabasesByWebsiteID(uint(id))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: items})
@@ -130,12 +130,12 @@ func (a *WebsiteAPI) ListDatabasesByWebsite(c *gin.Context) {
 func (a *WebsiteAPI) ListWebsitesByDB(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "invalid id"})
+		c.JSON(http.StatusOK, dto.Response{Code: 400, Message: "invalid id"})
 		return
 	}
 	items, err := a.service.ListWebsitesByInstanceID(uint(id))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: items})
@@ -147,7 +147,7 @@ func (a *WebsiteAPI) Toggle(c *gin.Context) {
 		Enabled bool `json:"enabled"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 400, Message: err.Error()})
 		return
 	}
 	if id == 0 {
@@ -156,18 +156,18 @@ func (a *WebsiteAPI) Toggle(c *gin.Context) {
 		portStr := c.Query("port")
 		port, _ := strconv.Atoi(portStr)
 		if domain == "" || port == 0 {
-			c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "缺少 domain/port 参数"})
+			c.JSON(http.StatusOK, dto.Response{Code: 400, Message: "缺少 domain/port 参数"})
 			return
 		}
 		if err := a.service.ToggleExternal(domain, port, req.Enabled); err != nil {
-			c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+			c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "toggled"})
 		return
 	}
 	if err := a.service.ToggleEnable(uint(id), req.Enabled); err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "toggled"})
@@ -175,7 +175,7 @@ func (a *WebsiteAPI) Toggle(c *gin.Context) {
 
 func (a *WebsiteAPI) ReloadNginx(c *gin.Context) {
 	if err := a.service.ReloadNginx(); err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "nginx reloaded"})
@@ -184,7 +184,7 @@ func (a *WebsiteAPI) ReloadNginx(c *gin.Context) {
 func (a *WebsiteAPI) GetNginxStatus(c *gin.Context) {
 	status, err := a.service.GetNginxStatus()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: status})
@@ -192,7 +192,7 @@ func (a *WebsiteAPI) GetNginxStatus(c *gin.Context) {
 
 func (a *WebsiteAPI) StartNginx(c *gin.Context) {
 	if err := a.service.StartNginx(); err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "nginx started"})
@@ -200,7 +200,7 @@ func (a *WebsiteAPI) StartNginx(c *gin.Context) {
 
 func (a *WebsiteAPI) StopNginx(c *gin.Context) {
 	if err := a.service.StopNginx(); err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "nginx stopped"})
@@ -208,7 +208,7 @@ func (a *WebsiteAPI) StopNginx(c *gin.Context) {
 
 func (a *WebsiteAPI) RestartNginx(c *gin.Context) {
 	if err := a.service.RestartNginx(); err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "nginx restarted"})
@@ -218,7 +218,7 @@ func (a *WebsiteAPI) GetAccessLogs(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	w, err := a.service.GetByID(uint(id))
 	if err != nil {
-		c.JSON(http.StatusNotFound, dto.Response{Code: 404, Message: "website not found"})
+		c.JSON(http.StatusOK, dto.Response{Code: 404, Message: "website not found"})
 		return
 	}
 	var filters service.AccessLogFilter
@@ -234,7 +234,7 @@ func (a *WebsiteAPI) GetAccessLogs(c *gin.Context) {
 	}
 	entries, total, err := a.service.ParseAccessLogs(w, filters)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: gin.H{"entries": entries, "total": total}})
@@ -244,13 +244,13 @@ func (a *WebsiteAPI) GetTrafficStats(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	w, err := a.service.GetByID(uint(id))
 	if err != nil {
-		c.JSON(http.StatusNotFound, dto.Response{Code: 404, Message: "website not found"})
+		c.JSON(http.StatusOK, dto.Response{Code: 404, Message: "website not found"})
 		return
 	}
 	period := c.DefaultQuery("period", "24h")
 	stats, err := a.service.GetTrafficStats(w, period)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: stats})

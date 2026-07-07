@@ -102,23 +102,12 @@ func (sm *SessionManager) UpdateSessionTitle(sessionID uint, title string) {
 	global.DB.Model(&model.AgentSession{}).Where("id = ?", sessionID).Update("title", title)
 }
 
+// CompressIfNeeded 已废弃：压缩逻辑已迁移到 engine.go 的 MicroCompressionStrategy。
+// 保留此方法仅为向后兼容，直接返回原消息列表不做任何压缩。
+// 新代码应使用 compression.MicroCompressionStrategy.ShouldCompress + Compress。
+// Deprecated:
 func (sm *SessionManager) CompressIfNeeded(messages []provider.LLMMessage) []provider.LLMMessage {
-	if len(messages) <= 30 {
-		return messages
-	}
-	// 保留系统消息、最近20条
-	var compressed []provider.LLMMessage
-	for _, m := range messages {
-		if m.Role == "system" {
-			compressed = append(compressed, m)
-		}
-	}
-	start := len(messages) - 20
-	if start < 0 {
-		start = 0
-	}
-	compressed = append(compressed, messages[start:]...)
-	return compressed
+	return messages
 }
 
 // ConfigRepo 配置仓库

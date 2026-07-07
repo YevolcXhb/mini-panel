@@ -6,22 +6,65 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/gin-contrib/sse"
 	"github.com/gin-gonic/gin"
 	"github.com/minipanel/minipanel/internal/agent"
 	"github.com/minipanel/minipanel/internal/agent/provider"
 	"github.com/minipanel/minipanel/internal/agent/repository"
+	"github.com/minipanel/minipanel/internal/global"
 	"github.com/minipanel/minipanel/internal/model"
 	"github.com/minipanel/minipanel/internal/service"
 )
 
 type AgentAPI struct {
 	service *service.AgentService
+
+	// orchestrators 管理 sessionID → Orchestrator 的映射。
+	// Orchestrate 时创建并存入，ConfirmPlan 时取出并删除。
+	// 30分钟未确认的计划由 cleanupOrchestrators 自动清理。
+	orchMu        sync.Mutex
+	orchestrators map[uint]*orchEntry
 }
 
+// orchEntry 编排器条目，记录创建时间用于超时清理
+type orchEntry struct {
+	orch      *agent.Orchestrator
+	createdAt time.Time
+}
+
+// orchCleanupInterval 编排器超时清理间隔
+const orchCleanupInterval = 10 * time.Minute
+
+// orchTimeout 编排器等待确认的超时时间
+const orchTimeout = 30 * time.Minute
+
 func NewAgentAPI() *AgentAPI {
-	return &AgentAPI{service: service.NewAgentService()}
+	a := &AgentAPI{
+		service:       service.NewAgentService(),
+		orchestrators: make(map[uint]*orchEntry),
+	}
+	go a.cleanupOrchestrators()
+	return a
+}
+
+// cleanupOrchestrators 定期清理超时的待确认编排器，防止内存泄漏
+func (a *AgentAPI) cleanupOrchestrators() {
+	ticker := time.NewTicker(orchCleanupInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		a.orchMu.Lock()
+		now := time.Now()
+		for sid, entry := range a.orchestrators {
+			if now.Sub(entry.createdAt) > orchTimeout {
+				global.LOG.Infof("[AgentAPI] 清理超时编排器: sessionID=%d", sid)
+				delete(a.orchestrators, sid)
+			}
+		}
+		a.orchMu.Unlock()
+	}
 }
 
 // RegisterRoutes 注册路由
@@ -36,6 +79,8 @@ func (a *AgentAPI) RegisterRoutes(r *gin.RouterGroup) {
 		agentGroup.GET("/sessions/:id/messages", a.GetSessionMessages)
 		agentGroup.POST("/chat", a.Chat)
 		agentGroup.POST("/confirm", a.Confirm)
+		agentGroup.POST("/orchestrate", a.Orchestrate)
+		agentGroup.POST("/confirm-plan", a.ConfirmPlan)
 	}
 }
 
@@ -262,6 +307,156 @@ func (a *AgentAPI) Confirm(c *gin.Context) {
 		_ = json.Unmarshal([]byte(cfg.Skills), &skillIDs)
 		engine := agent.NewEngineWithProvider(p, skillIDs, cfg.SystemPrompt)
 		_ = engine.RunWithConfirm(ctx, req.SessionID, req.ToolCallID, req.Confirmed, stream)
+	}()
+
+	c.Stream(func(w io.Writer) bool {
+		select {
+		case chunk, ok := <-stream:
+			if !ok {
+				return false
+			}
+			c.Render(-1, sse.Event{Event: "message", Data: chunk})
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	})
+}
+
+// Orchestrate 触发三阶段编排（PLANNING → plan_ready → 等待确认）
+// 用户确认后通过 ConfirmPlan 端点继续 CODING → REVIEWING。
+func (a *AgentAPI) Orchestrate(c *gin.Context) {
+	userID := a.getUserID(c)
+	var req struct {
+		SessionID uint   `json:"session_id"`
+		Message   string `json:"message"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 400, "message": err.Error()})
+		return
+	}
+	if req.Message == "" {
+		c.JSON(http.StatusOK, gin.H{"code": 400, "message": "消息不能为空"})
+		return
+	}
+
+	cfg, err := a.service.GetConfig(userID)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 500, "message": "获取配置失败: " + err.Error()})
+		return
+	}
+	if !cfg.Enabled {
+		c.JSON(http.StatusOK, gin.H{"code": 403, "message": "Agent 未启用"})
+		return
+	}
+
+	// 更新会话标题
+	sm := repository.NewSessionManager()
+	session, _ := sm.GetSession(req.SessionID, userID)
+	if session != nil && session.Title == "新会话" {
+		sm.UpdateSessionTitle(req.SessionID, agent.BuildTitleFromContent(req.Message))
+	}
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+
+	stream := make(chan agent.StreamChunk, 10)
+	ctx, cancel := context.WithCancel(c.Request.Context())
+	defer cancel()
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				global.LOG.Errorf("[AgentAPI] Orchestrate panic: %v", r)
+			}
+			close(stream)
+		}()
+		p, err := provider.NewProvider(cfg.Provider, cfg.BaseURL, cfg.APIKey, cfg.Model, float32(cfg.Temperature), cfg.MaxTokens)
+		if err != nil {
+			stream <- agent.StreamChunk{Type: "error", Error: "创建 Provider 失败: " + err.Error()}
+			return
+		}
+		var skillIDs []string
+		_ = json.Unmarshal([]byte(cfg.Skills), &skillIDs)
+		_, orchestrator := agent.NewOrchestratorWithProvider(p, skillIDs, cfg.SystemPrompt)
+
+		// 存入 map 供后续 ConfirmPlan 使用
+		a.orchMu.Lock()
+		a.orchestrators[req.SessionID] = &orchEntry{
+			orch:      orchestrator,
+			createdAt: time.Now(),
+		}
+		a.orchMu.Unlock()
+		global.LOG.Infof("[AgentAPI] 编排器已创建: sessionID=%d", req.SessionID)
+
+		_ = orchestrator.Orchestrate(ctx, req.SessionID, req.Message, stream)
+	}()
+
+	c.Stream(func(w io.Writer) bool {
+		select {
+		case chunk, ok := <-stream:
+			if !ok {
+				return false
+			}
+			c.Render(-1, sse.Event{Event: "message", Data: chunk})
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	})
+}
+
+// ConfirmPlan 确认或取消编排计划。
+// confirmed=true 时继续 CODING → REVIEWING；confirmed=false 时取消执行。
+func (a *AgentAPI) ConfirmPlan(c *gin.Context) {
+	userID := a.getUserID(c)
+	var req struct {
+		SessionID uint `json:"session_id"`
+		Confirmed bool `json:"confirmed"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 400, "message": err.Error()})
+		return
+	}
+
+	cfg, err := a.service.GetConfig(userID)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 500, "message": "获取配置失败: " + err.Error()})
+		return
+	}
+	if !cfg.Enabled {
+		c.JSON(http.StatusOK, gin.H{"code": 403, "message": "Agent 未启用"})
+		return
+	}
+
+	// 从 map 中取出编排器（取出后删除，ConfirmPlan 只能调用一次）
+	a.orchMu.Lock()
+	entry := a.orchestrators[req.SessionID]
+	delete(a.orchestrators, req.SessionID)
+	a.orchMu.Unlock()
+
+	if entry == nil {
+		c.JSON(http.StatusOK, gin.H{"code": 404, "message": "找不到待确认的计划，可能已超时或未发起编排"})
+		return
+	}
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+
+	stream := make(chan agent.StreamChunk, 10)
+	ctx, cancel := context.WithCancel(c.Request.Context())
+	defer cancel()
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				global.LOG.Errorf("[AgentAPI] ConfirmPlan panic: %v", r)
+			}
+			close(stream)
+		}()
+		_ = entry.orch.ConfirmPlan(ctx, req.SessionID, req.Confirmed, stream)
 	}()
 
 	c.Stream(func(w io.Writer) bool {

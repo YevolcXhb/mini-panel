@@ -29,9 +29,16 @@
         <div class="header-left">
           <el-icon class="agent-icon"><ChatDotRound /></el-icon>
           <span class="agent-title">Mini Agent</span>
-          <el-tag v-if="streaming" type="warning" size="small">思考中...</el-tag>
+          <el-tag v-if="orchestrateMode" type="success" size="small">编排模式</el-tag>
+          <el-tag v-if="streaming" type="warning" size="small">{{ phaseLabel || '思考中...' }}</el-tag>
         </div>
         <div class="header-right">
+          <TokenStats
+            v-if="tokensSaved > 0 || compressionCount > 0"
+            :tokens-saved="tokensSaved"
+            :compression-count="compressionCount"
+            :cache-hits="cacheHits"
+          />
           <el-button text @click="showSettings = true">
             <el-icon><Setting /></el-icon> 设置
           </el-button>
@@ -40,6 +47,15 @@
           </el-button>
         </div>
       </div>
+
+      <!-- 阶段进度条 -->
+      <PhaseProgress
+        v-if="orchestrateMode && currentPhase"
+        :current-phase="currentPhase"
+        :completed-phases="completedPhases"
+        :step-number="stepNumber"
+        :max-steps="maxSteps"
+      />
 
       <!-- 消息区域 -->
       <div class="messages-area" ref="messagesRef">
@@ -67,21 +83,21 @@
             <div class="message-body">
               <div v-if="msg.content" class="message-text" v-html="renderMarkdown(msg.content)"></div>
               <span v-if="streaming && idx === messages.length - 1 && streamBuffer.length > 0" class="typing-cursor">▌</span>
-              <!-- 工具调用展示 -->
+              <!-- 实时工具调用卡片 -->
               <div v-if="msg.toolCalls && msg.toolCalls.length > 0" class="tool-calls">
-                <div v-for="tc in msg.toolCalls" :key="tc.id" class="tool-call-card">
-                  <div class="tool-call-header">
-                    <el-icon><Tools /></el-icon>
-                    <span>调用工具: <strong>{{ tc.function.name }}</strong></span>
-                  </div>
-                  <pre class="tool-args">{{ formatJson(tc.function.arguments) }}</pre>
-                </div>
+                <ToolCallCard
+                  v-for="tc in msg.toolCalls"
+                  :key="tc.id"
+                  :tool-call="tc"
+                  :tool-result="msg.toolResults ? msg.toolResults[tc.id] || null : null"
+                  :phase="msg.phase || currentPhase"
+                />
               </div>
             </div>
           </div>
 
-          <!-- 工具结果 -->
-          <div v-else-if="msg.role === 'tool'" class="message tool-message">
+          <!-- 工具结果（仅在历史加载时显示，实时模式已聚合到 assistant 消息） -->
+          <div v-else-if="msg.role === 'tool' && !msg.aggregated" class="message tool-message">
             <div class="tool-result-card">
               <div class="tool-result-header">
                 <el-icon><CircleCheck /></el-icon>
@@ -92,7 +108,16 @@
           </div>
         </div>
 
-        <!-- 确认对话框 -->
+        <!-- 计划确认面板 -->
+        <PlanPanel
+          v-if="pendingPlan"
+          :plan="pendingPlan.plan"
+          @confirm="handlePlanConfirm(true)"
+          @cancel="handlePlanConfirm(false)"
+          @modify="handlePlanModify"
+        />
+
+        <!-- 确认对话框（工具调用确认，非计划确认） -->
         <div v-if="pendingConfirm" class="confirm-card">
           <el-alert type="warning" :closable="false">
             <template #title>
@@ -120,20 +145,39 @@
           @keydown.enter.prevent="handleSend"
           :disabled="streaming"
         />
-        <el-button
-          type="primary"
-          :icon="Promotion"
-          :loading="streaming"
-          @click="handleSend"
-          class="send-btn"
-        >
-          发送
-        </el-button>
+        <div class="action-buttons">
+          <el-button
+            v-if="streaming"
+            type="danger"
+            @click="handleStop"
+          >
+            停止
+          </el-button>
+          <el-button
+            v-if="!streaming && lastInput"
+            @click="handleRegenerate"
+          >
+            重新生成
+          </el-button>
+          <el-button
+            type="primary"
+            :icon="Promotion"
+            :loading="streaming"
+            @click="handleSend"
+            class="send-btn"
+          >
+            发送
+          </el-button>
+        </div>
       </div>
 
       <!-- 设置抽屉 -->
       <el-drawer v-model="showSettings" title="Agent 设置" size="500px">
         <el-form :model="config" label-width="120px">
+          <el-form-item label="编排模式">
+            <el-switch v-model="orchestrateMode" active-text="三阶段编排" inactive-text="单轮对话" />
+            <div class="form-tip">编排模式：PLANNING → CODING → REVIEWING，复杂任务时启用</div>
+          </el-form-item>
           <el-form-item label="提供商">
             <el-select v-model="config.provider" style="width: 100%">
               <el-option label="OpenAI" value="openai" />
@@ -177,15 +221,33 @@
 
 <script setup lang="ts">
 import { ref, onMounted, nextTick } from 'vue'
-import { ChatDotRound, Setting, Delete, ChatLineRound, Tools, CircleCheck, Promotion, Plus } from '@element-plus/icons-vue'
+import { ChatDotRound, Setting, Delete, ChatLineRound, CircleCheck, Promotion, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { agentApi, type AgentConfig, type StreamChunk } from '../api/agent'
+import PhaseProgress from '../components/agent/PhaseProgress.vue'
+import PlanPanel from '../components/agent/PlanPanel.vue'
+import ToolCallCard from '../components/agent/ToolCallCard.vue'
+import TokenStats from '../components/agent/TokenStats.vue'
+
+interface ToolCallInfo {
+  id: string
+  name: string
+  arguments: string
+}
+
+interface ToolResultInfo {
+  content: string
+  success: boolean
+}
 
 interface ChatMessage {
   role: string
   content: string
-  toolCalls?: any[]
+  toolCalls?: ToolCallInfo[]
+  toolResults?: Record<string, ToolResultInfo>
   toolName?: string
+  aggregated?: boolean // 历史加载时已聚合到 assistant 消息的 tool 消息标记
+  phase?: string
 }
 
 interface Session {
@@ -202,14 +264,32 @@ const showSettings = ref(false)
 const messages = ref<ChatMessage[]>([])
 const currentStream = ref<string[]>([])
 const pendingConfirm = ref<{ toolCallId: string; command: string; message: string } | null>(null)
+const pendingPlan = ref<{ plan: string } | null>(null)
 const currentSessionId = ref(0)
 let currentController: AbortController | null = null
 
 const sessions = ref<Session[]>([])
 
+// 三阶段编排状态
+const orchestrateMode = ref(false)
+const currentPhase = ref('')
+const completedPhases = ref<string[]>([])
+const stepNumber = ref(0)
+const maxSteps = ref(0)
+
+// 压缩和缓存统计
+const tokensSaved = ref(0)
+const compressionCount = ref(0)
+const cacheHits = ref(0)
+
+// 上次输入（用于重新生成）
+const lastInput = ref('')
+
 // 打字机效果状态
 const streamBuffer = ref('')
 let typewriterTimer: number | null = null
+
+const phaseLabel = ref('')
 
 function startTypewriter() {
   if (typewriterTimer) return
@@ -218,9 +298,10 @@ function startTypewriter() {
       stopTypewriter()
       return
     }
+    // 长文本立即显示，短文本打字效果
     let charsToAdd = 1
-    if (streamBuffer.value.length > 80) charsToAdd = 4
-    else if (streamBuffer.value.length > 40) charsToAdd = 2
+    if (streamBuffer.value.length > 100) charsToAdd = streamBuffer.value.length
+    else if (streamBuffer.value.length > 40) charsToAdd = 3
     const lastMsg = messages.value[messages.value.length - 1]
     if (lastMsg && lastMsg.role === 'assistant') {
       lastMsg.content += streamBuffer.value.substring(0, charsToAdd)
@@ -346,7 +427,9 @@ async function createNewSession() {
     }
     stopTypewriter()
     pendingConfirm.value = null
+    pendingPlan.value = null
     streaming.value = false
+    resetOrchestrationState()
 
     const res: any = await agentApi.createSession()
     if (res.code === 200) {
@@ -364,6 +447,14 @@ async function createNewSession() {
   }
 }
 
+function resetOrchestrationState() {
+  currentPhase.value = ''
+  completedPhases.value = []
+  stepNumber.value = 0
+  maxSteps.value = 0
+  phaseLabel.value = ''
+}
+
 async function switchSession(sessionId: number) {
   if (streaming.value) {
     if (currentController) {
@@ -373,6 +464,8 @@ async function switchSession(sessionId: number) {
   }
   stopTypewriter()
   pendingConfirm.value = null
+  pendingPlan.value = null
+  resetOrchestrationState()
   currentSessionId.value = sessionId
   await loadSessionMessages(sessionId)
 }
@@ -383,8 +476,8 @@ async function loadSessionMessages(sessionId: number) {
     if (res.code === 200) {
       const rawMessages = res.data || []
       messages.value = []
-      
-      // 转换后端消息格式到前端格式
+
+      // 转换后端消息格式到前端格式，聚合工具调用和结果
       for (let i = 0; i < rawMessages.length; i++) {
         const m = rawMessages[i]
         if (m.role === 'user') {
@@ -393,19 +486,49 @@ async function loadSessionMessages(sessionId: number) {
           const msg: ChatMessage = { role: 'assistant', content: m.content || '' }
           if (m.tool_calls && m.tool_calls.trim()) {
             try {
-              msg.toolCalls = JSON.parse(m.tool_calls)
+              const rawToolCalls = JSON.parse(m.tool_calls)
+              msg.toolCalls = rawToolCalls.map((tc: any) => ({
+                id: tc.id || tc.ID || '',
+                name: tc.function?.name || '',
+                arguments: tc.function?.arguments || '{}'
+              }))
+              msg.toolResults = {}
             } catch {}
           }
           messages.value.push(msg)
         } else if (m.role === 'tool') {
-          messages.value.push({
-            role: 'tool',
-            content: m.content,
-            toolName: m.tool_name
-          })
+          // 尝试聚合到前一个 assistant 消息的 toolResults
+          const lastAssistant = messages.value[messages.value.length - 1]
+          if (lastAssistant && lastAssistant.role === 'assistant' && lastAssistant.toolResults) {
+            // 通过 tool_name 匹配（历史消息可能没有 tool_call_id）
+            const tcId = m.tool_call_id || ''
+            if (tcId && lastAssistant.toolResults[tcId]) {
+              // 已存在，跳过
+            } else if (tcId) {
+              lastAssistant.toolResults[tcId] = {
+                content: m.content,
+                success: !m.content.startsWith('执行失败') && !m.content.startsWith('Error')
+              }
+            } else {
+              // 无 tool_call_id，作为独立 tool 消息显示
+              messages.value.push({
+                role: 'tool',
+                content: m.content,
+                toolName: m.tool_name,
+                aggregated: false
+              })
+            }
+          } else {
+            messages.value.push({
+              role: 'tool',
+              content: m.content,
+              toolName: m.tool_name,
+              aggregated: false
+            })
+          }
         }
       }
-      
+
       nextTick(() => scrollToBottom())
     }
   } catch (err: any) {
@@ -421,7 +544,7 @@ async function deleteSession(sessionId: number) {
       cancelButtonText: '取消',
       type: 'warning',
     })
-    
+
     const res: any = await agentApi.deleteSession(sessionId)
     if (res.code === 200) {
       ElMessage.success('已删除')
@@ -450,6 +573,7 @@ function handleSend() {
   const text = inputMessage.value.trim()
   if (!text || streaming.value || currentSessionId.value === 0) return
 
+  lastInput.value = text
   messages.value.push({ role: 'user', content: text })
   messages.value.push({ role: 'assistant', content: '' })
   inputMessage.value = ''
@@ -457,20 +581,40 @@ function handleSend() {
   currentStream.value = []
   streamBuffer.value = ''
   stopTypewriter()
+  resetOrchestrationState()
+  // 重置压缩统计（每次新对话清零）
+  tokensSaved.value = 0
+  compressionCount.value = 0
+  cacheHits.value = 0
   scrollToBottom()
 
-  const chunks: StreamChunk[] = []
+  if (orchestrateMode.value) {
+    startOrchestration(text)
+  } else {
+    startChat(text)
+  }
+}
 
+function startChat(text: string) {
   currentController = agentApi.chat(
     currentSessionId.value,
     text,
-    (chunk) => {
-      chunks.push(chunk)
-      handleChunk(chunk)
-    },
-    () => {
-      finalizeStream(chunks)
-    },
+    (chunk) => handleChunk(chunk),
+    () => finalizeStream(),
+    (err) => {
+      streaming.value = false
+      messages.value.push({ role: 'assistant', content: `❌ 错误: ${err}` })
+      scrollToBottom()
+    }
+  )
+}
+
+function startOrchestration(text: string) {
+  currentController = agentApi.orchestrate(
+    currentSessionId.value,
+    text,
+    (chunk) => handleChunk(chunk),
+    () => finalizeStream(),
     (err) => {
       streaming.value = false
       messages.value.push({ role: 'assistant', content: `❌ 错误: ${err}` })
@@ -488,12 +632,65 @@ function handleChunk(chunk: StreamChunk) {
         startTypewriter()
       }
       break
+
     case 'tool_call':
-      // 工具调用会在 finalize 时统一添加
+      // 实时添加工具调用到当前 assistant 消息
+      {
+        const lastMsg = messages.value[messages.value.length - 1]
+        if (lastMsg && lastMsg.role === 'assistant') {
+          if (!lastMsg.toolCalls) lastMsg.toolCalls = []
+          if (!lastMsg.toolResults) lastMsg.toolResults = {}
+          lastMsg.toolCalls.push({
+            id: chunk.tool_call_id || '',
+            name: chunk.tool_name || '',
+            arguments: chunk.content || '{}'
+          })
+          scrollToBottom()
+        }
+      }
       break
+
     case 'tool_result':
-      // 工具结果会在 finalize 时统一添加
+      // 实时更新对应工具调用的结果
+      {
+        const lastMsg = messages.value[messages.value.length - 1]
+        if (lastMsg && lastMsg.role === 'assistant' && lastMsg.toolResults && chunk.tool_call_id) {
+          lastMsg.toolResults[chunk.tool_call_id] = {
+            content: chunk.content || '',
+            success: chunk.success ?? true
+          }
+          scrollToBottom()
+        }
+      }
       break
+
+    case 'phase_start':
+      currentPhase.value = chunk.phase || ''
+      maxSteps.value = chunk.max_steps || 0
+      stepNumber.value = 0
+      updatePhaseLabel(chunk.phase || '')
+      // 从已完成列表中移除（重新进入该阶段时）
+      completedPhases.value = completedPhases.value.filter(p => p !== chunk.phase)
+      break
+
+    case 'phase_complete':
+      if (chunk.phase && !completedPhases.value.includes(chunk.phase)) {
+        completedPhases.value.push(chunk.phase)
+      }
+      break
+
+    case 'plan_ready':
+      pendingPlan.value = { plan: chunk.plan || '' }
+      streaming.value = false
+      stopTypewriter()
+      break
+
+    case 'compression_triggered':
+      tokensSaved.value += chunk.tokens_saved || 0
+      compressionCount.value++
+      if (chunk.step_number) stepNumber.value = chunk.step_number
+      break
+
     case 'confirm_required':
       pendingConfirm.value = {
         toolCallId: chunk.tool_call_id || '',
@@ -503,49 +700,38 @@ function handleChunk(chunk: StreamChunk) {
       streaming.value = false
       stopTypewriter()
       break
+
     case 'error':
       streaming.value = false
       stopTypewriter()
       messages.value.push({ role: 'assistant', content: `❌ 错误: ${chunk.error}` })
       scrollToBottom()
       break
+
     case 'done':
       streaming.value = false
+      // 编排模式下 done 可能表示阶段完成，不重置 currentPhase
+      if (chunk.success === false && !pendingPlan.value) {
+        // 错误退出，重置阶段状态
+        resetOrchestrationState()
+      }
       break
   }
 }
 
-function finalizeStream(chunks: StreamChunk[]) {
+function updatePhaseLabel(phase: string) {
+  switch (phase) {
+    case 'planning': phaseLabel.value = '规划中...'; break
+    case 'coding': phaseLabel.value = '执行中...'; break
+    case 'reviewing': phaseLabel.value = '审查中...'; break
+    default: phaseLabel.value = '思考中...'
+  }
+}
+
+function finalizeStream() {
   streaming.value = false
   currentStream.value = []
-
-  const toolCalls: any[] = []
-  const toolResults: ChatMessage[] = []
-
-  for (const chunk of chunks) {
-    if (chunk.type === 'tool_call') {
-      toolCalls.push({
-        id: chunk.tool_call_id,
-        function: { name: chunk.tool_name, arguments: chunk.content }
-      })
-    } else if (chunk.type === 'tool_result') {
-      toolResults.push({
-        role: 'tool',
-        content: chunk.content || '',
-        toolName: chunk.tool_name || ''
-      })
-    }
-  }
-
-  const lastMsg = messages.value[messages.value.length - 1]
-  if (lastMsg && lastMsg.role === 'assistant') {
-    if (toolCalls.length > 0) {
-      lastMsg.toolCalls = toolCalls
-    }
-  }
-  for (const tr of toolResults) {
-    messages.value.push(tr)
-  }
+  stopTypewriter()
 
   // 刷新会话列表，更新标题
   loadSessions().then(() => {})
@@ -569,16 +755,12 @@ function handleConfirm(confirmed: boolean) {
   streaming.value = true
   messages.value.push({ role: 'assistant', content: '' })
 
-  const chunks: StreamChunk[] = []
-
   currentController = agentApi.confirm(
     currentSessionId.value,
     toolCallId,
     confirmed,
     (chunk) => handleChunk(chunk),
-    () => {
-      finalizeStream(chunks)
-    },
+    () => finalizeStream(),
     (err) => {
       streaming.value = false
       messages.value.push({ role: 'assistant', content: `❌ 错误: ${err}` })
@@ -587,15 +769,92 @@ function handleConfirm(confirmed: boolean) {
   )
 }
 
+// 计划确认处理
+function handlePlanConfirm(confirmed: boolean) {
+  if (!pendingPlan.value) return
+  pendingPlan.value = null
+  streamBuffer.value = ''
+  stopTypewriter()
+
+  if (confirmed) {
+    messages.value.push({ role: 'assistant', content: '✅ 已确认计划，开始执行...' })
+  } else {
+    messages.value.push({ role: 'assistant', content: '❌ 已取消执行计划' })
+    resetOrchestrationState()
+    return
+  }
+  scrollToBottom()
+
+  streaming.value = true
+  messages.value.push({ role: 'assistant', content: '' })
+
+  currentController = agentApi.confirmPlan(
+    currentSessionId.value,
+    confirmed,
+    (chunk) => handleChunk(chunk),
+    () => finalizeStream(),
+    (err) => {
+      streaming.value = false
+      messages.value.push({ role: 'assistant', content: `❌ 错误: ${err}` })
+      scrollToBottom()
+    }
+  )
+}
+
+// 计划修改：将计划回填到输入框，用户编辑后重新发起编排
+function handlePlanModify(modifiedPlan: string) {
+  pendingPlan.value = null
+  inputMessage.value = modifiedPlan
+  ElMessage.info('计划已回填到输入框，编辑后重新发送')
+  resetOrchestrationState()
+}
+
+// 停止生成
+function handleStop() {
+  if (currentController) {
+    currentController.abort()
+    currentController = null
+  }
+  streaming.value = false
+  stopTypewriter()
+  if (streamBuffer.value) {
+    const lastMsg = messages.value[messages.value.length - 1]
+    if (lastMsg && lastMsg.role === 'assistant') {
+      lastMsg.content += streamBuffer.value
+    }
+    streamBuffer.value = ''
+  }
+}
+
+// 重新生成
+function handleRegenerate() {
+  if (!lastInput.value || streaming.value) return
+  const text = lastInput.value
+  // 移除最后的 assistant 消息
+  if (messages.value.length > 0) {
+    const last = messages.value[messages.value.length - 1]
+    if (last.role === 'assistant') {
+      messages.value.pop()
+    }
+  }
+  inputMessage.value = text
+  handleSend()
+}
+
 function clearCurrentChat() {
   messages.value = []
   currentStream.value = []
   streamBuffer.value = ''
   stopTypewriter()
   pendingConfirm.value = null
+  pendingPlan.value = null
   if (currentController) {
     currentController.abort()
   }
+  resetOrchestrationState()
+  tokensSaved.value = 0
+  compressionCount.value = 0
+  cacheHits.value = 0
   createNewSession()
 }
 
@@ -618,14 +877,6 @@ function renderMarkdown(text: string): string {
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
   html = html.replace(/\n/g, '<br>')
   return html
-}
-
-function formatJson(str: string): string {
-  try {
-    return JSON.stringify(JSON.parse(str), null, 2)
-  } catch {
-    return str
-  }
 }
 </script>
 
@@ -745,6 +996,7 @@ function formatJson(str: string): string {
 
 .header-right {
   display: flex;
+  align-items: center;
   gap: 8px;
 }
 
@@ -869,31 +1121,6 @@ function formatJson(str: string): string {
   gap: 8px;
 }
 
-.tool-call-card {
-  background: var(--acc-bg);
-  border: 1px solid var(--acc);
-  border-radius: 8px;
-  padding: 10px;
-}
-
-.tool-call-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--acc);
-  font-size: 13px;
-  margin-bottom: 6px;
-}
-
-.tool-args {
-  margin: 0;
-  padding: 8px;
-  background: var(--bg2);
-  border-radius: 4px;
-  font-size: 12px;
-  overflow-x: auto;
-}
-
 .tool-result-card {
   background: rgba(52, 211, 153, 0.08);
   border: 1px solid var(--grn);
@@ -957,9 +1184,15 @@ function formatJson(str: string): string {
   border-top: 1px solid var(--bdr);
 }
 
+.action-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
 .send-btn {
-  align-self: flex-end;
-  height: 52px;
+  min-width: 80px;
 }
 
 .typing-cursor {
@@ -972,5 +1205,12 @@ function formatJson(str: string): string {
 @keyframes blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
+}
+
+.form-tip {
+  font-size: 11px;
+  color: var(--txt2);
+  margin-top: 4px;
+  line-height: 1.4;
 }
 </style>

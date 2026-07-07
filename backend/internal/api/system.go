@@ -1,4 +1,4 @@
-package api
+﻿package api
 
 import (
 	"net/http"
@@ -21,8 +21,12 @@ func (a *SystemAPI) CheckServices(c *gin.Context) {
 
 func (a *SystemAPI) InstallService(c *gin.Context) {
 	name := c.Param("name")
+	if name == "" {
+		c.JSON(http.StatusOK, dto.Response{Code: 400, Message: "请指定服务名"})
+		return
+	}
 	if err := systemutil.InstallService(name); err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: name + " installed successfully"})
@@ -30,8 +34,12 @@ func (a *SystemAPI) InstallService(c *gin.Context) {
 
 func (a *SystemAPI) StartService(c *gin.Context) {
 	name := c.Param("name")
+	if name == "" {
+		c.JSON(http.StatusOK, dto.Response{Code: 400, Message: "请指定服务名"})
+		return
+	}
 	if err := systemutil.StartService(name); err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: name + " started successfully"})
@@ -39,8 +47,12 @@ func (a *SystemAPI) StartService(c *gin.Context) {
 
 func (a *SystemAPI) StopService(c *gin.Context) {
 	name := c.Param("name")
+	if name == "" {
+		c.JSON(http.StatusOK, dto.Response{Code: 400, Message: "请指定服务名"})
+		return
+	}
 	if err := systemutil.StopService(name); err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: name + " stopped successfully"})
@@ -48,8 +60,12 @@ func (a *SystemAPI) StopService(c *gin.Context) {
 
 func (a *SystemAPI) RestartService(c *gin.Context) {
 	name := c.Param("name")
+	if name == "" {
+		c.JSON(http.StatusOK, dto.Response{Code: 400, Message: "请指定服务名"})
+		return
+	}
 	if err := systemutil.RestartService(name); err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: name + " restarted successfully"})

@@ -1,4 +1,4 @@
-package api
+﻿package api
 
 import (
 	"io"
@@ -35,7 +35,7 @@ func (a *AppAPI) List(c *gin.Context) {
 	category := c.Query("category")
 	apps, err := a.service.List(category)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: apps})
@@ -45,7 +45,7 @@ func (a *AppAPI) Search(c *gin.Context) {
 	keyword := c.Query("q")
 	apps, err := a.service.Search(keyword)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: apps})
@@ -54,12 +54,12 @@ func (a *AppAPI) Search(c *gin.Context) {
 func (a *AppAPI) Detail(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "invalid id"})
+		c.JSON(http.StatusOK, dto.Response{Code: 400, Message: "invalid id"})
 		return
 	}
 	app, details, err := a.service.GetWithDetails(uint(id))
 	if err != nil {
-		c.JSON(http.StatusNotFound, dto.Response{Code: 404, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 404, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: gin.H{
@@ -71,7 +71,7 @@ func (a *AppAPI) Detail(c *gin.Context) {
 func (a *AppAPI) Installed(c *gin.Context) {
 	items, err := a.service.Installed()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: items})
@@ -80,12 +80,12 @@ func (a *AppAPI) Installed(c *gin.Context) {
 func (a *AppAPI) Install(c *gin.Context) {
 	var req dto.AppInstallRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 400, Message: err.Error()})
 		return
 	}
 	inst, err := a.service.Install(req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error(), Data: inst})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error(), Data: inst})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: inst})
@@ -94,12 +94,12 @@ func (a *AppAPI) Install(c *gin.Context) {
 func (a *AppAPI) InstallStatus(c *gin.Context) {
 	name := c.Param("name")
 	if name == "" {
-		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "name is required"})
+		c.JSON(http.StatusOK, dto.Response{Code: 400, Message: "name is required"})
 		return
 	}
 	inst, err := a.service.GetInstallStatus(name)
 	if err != nil {
-		c.JSON(http.StatusNotFound, dto.Response{Code: 404, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 404, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: inst})
@@ -108,11 +108,11 @@ func (a *AppAPI) InstallStatus(c *gin.Context) {
 func (a *AppAPI) Uninstall(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "invalid id"})
+		c.JSON(http.StatusOK, dto.Response{Code: 400, Message: "invalid id"})
 		return
 	}
 	if err := a.service.Uninstall(uint(id)); err != nil {
-		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 400, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "uninstalled"})
@@ -120,7 +120,7 @@ func (a *AppAPI) Uninstall(c *gin.Context) {
 
 func (a *AppAPI) ClearHistory(c *gin.Context) {
 	if err := a.service.ClearHistory(); err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "cleared"})
@@ -129,11 +129,11 @@ func (a *AppAPI) ClearHistory(c *gin.Context) {
 func (a *AppAPI) Sync(c *gin.Context) {
 	var req dto.AppSyncRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 400, Message: err.Error()})
 		return
 	}
 	if err := a.service.SyncFromRemote(req.SourceID); err != nil {
-		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 400, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "synced"})
@@ -142,7 +142,7 @@ func (a *AppAPI) Sync(c *gin.Context) {
 func (a *AppAPI) Sources(c *gin.Context) {
 	items, err := a.service.ListSources()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, dto.Response{Code: 500, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: items})
@@ -151,12 +151,12 @@ func (a *AppAPI) Sources(c *gin.Context) {
 func (a *AppAPI) AddSource(c *gin.Context) {
 	var req dto.AppSourceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 400, Message: err.Error()})
 		return
 	}
 	source, err := a.service.AddSource(req.Name, req.URL)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 400, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: source})
@@ -165,11 +165,11 @@ func (a *AppAPI) AddSource(c *gin.Context) {
 func (a *AppAPI) RemoveSource(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: "invalid id"})
+		c.JSON(http.StatusOK, dto.Response{Code: 400, Message: "invalid id"})
 		return
 	}
 	if err := a.service.RemoveSource(uint(id)); err != nil {
-		c.JSON(http.StatusBadRequest, dto.Response{Code: 400, Message: err.Error()})
+		c.JSON(http.StatusOK, dto.Response{Code: 400, Message: err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "removed"})
@@ -178,7 +178,7 @@ func (a *AppAPI) RemoveSource(c *gin.Context) {
 func (a *AppAPI) Icon(c *gin.Context) {
 	key := c.Param("key")
 	if key == "" {
-		c.Status(http.StatusBadRequest)
+		c.Status(http.StatusOK)
 		return
 	}
 

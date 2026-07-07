@@ -61,6 +61,9 @@ func (t *SystemInfoTool) Execute(ctx context.Context, args map[string]interface{
 	return SuccessResult(sb.String())
 }
 
+// Cacheable 系统信息查询可缓存（5分钟TTL）
+func (t *SystemInfoTool) Cacheable() bool { return true }
+
 // ProcessListTool 获取进程列表
 type ProcessListTool struct{}
 
@@ -116,3 +119,6 @@ func (t *ProcessListTool) Execute(ctx context.Context, args map[string]interface
 	}
 	return SuccessResult(sb.String())
 }
+
+// Cacheable 进程列表查询可缓存（带 filter 参数时缓存键不同）
+func (t *ProcessListTool) Cacheable() bool { return true }

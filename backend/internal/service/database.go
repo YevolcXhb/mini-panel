@@ -38,6 +38,18 @@ func maskPassword(pwd string) string {
 	return pwd[:1] + "***" + pwd[len(pwd)-1:]
 }
 
+// escapeIdent 转义 MySQL 标识符（库名/表名）：将内部反引号翻倍
+func escapeIdent(s string) string {
+	return strings.ReplaceAll(s, "`", "``")
+}
+
+// escapeStr 转义 MySQL 字符串字面量（用户名/密码）：将反斜杠和单引号翻倍
+func escapeStr(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "'", "''")
+	return s
+}
+
 // logItem 打印实例连接信息（密码脱敏）
 func logItem(prefix string, item *model.DatabaseInstance) {
 	global.LOG.Infof("[DB] %s id=%d name=%s type=%s host=%s port=%d user=%s pass=%s db=%s",
@@ -58,11 +70,20 @@ func (s *DatabaseService) Create(item *model.DatabaseInstance) error {
 	if item.Name == "" {
 		return fmt.Errorf("数据库实例名称不能为空")
 	}
-	// 检查重名
+	// 检查重名（仅活跃记录）
 	existing, _ := s.repo.GetByName(item.Name)
 	if existing != nil && existing.ID > 0 {
 		global.LOG.Warnf("[DB] Create rejected: name=%s already exists (id=%d)", item.Name, existing.ID)
 		return fmt.Errorf("数据库实例名称 '%s' 已存在", item.Name)
+	}
+	// 检查是否存在同名软删除记录（uniqueIndex 不区分软删除，会导致插入失败）
+	softDeleted, _ := s.repo.GetByNameWithUnscoped(item.Name)
+	if softDeleted != nil && softDeleted.ID > 0 && softDeleted.DeletedAt.Valid {
+		global.LOG.Infof("[DB] Create: 检测到同名软删除记录 (id=%d name=%s)，物理删除以释放唯一索引", softDeleted.ID, item.Name)
+		if err := s.repo.RestoreSoftDeleted(item.Name); err != nil {
+			global.LOG.Errorf("[DB] Create: 清理软删除记录失败: %v", err)
+			return fmt.Errorf("清理历史同名记录失败: %v", err)
+		}
 	}
 	if err := s.repo.Create(item); err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint") {
@@ -190,7 +211,7 @@ func (s *DatabaseService) CreateDatabase(item *model.DatabaseInstance, dbName st
 		return fmt.Errorf("mysql client not found, please install mysql first")
 	}
 	args := s.getMysqlArgs(item, "")
-	query := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", dbName)
+	query := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", escapeIdent(dbName))
 	args = append(args, "-e", query)
 	if out, err := s.runMysqlCmd(item, args...); err != nil {
 		global.LOG.Errorf("[DB] CreateDatabase FAILED: db=%s err=%v", dbName, err)
@@ -212,11 +233,11 @@ func (s *DatabaseService) CreateUser(item *model.DatabaseInstance, username, pas
 	if privDB == "" || privDB == "*" {
 		privDB = "*.*"
 	} else {
-		privDB = fmt.Sprintf("`%s`.*", privDB)
+		privDB = fmt.Sprintf("`%s`.*", escapeIdent(privDB))
 	}
 	queries := []string{
-		fmt.Sprintf("CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED BY '%s'", username, password),
-		fmt.Sprintf("GRANT ALL PRIVILEGES ON %s TO '%s'@'%%'", privDB, username),
+		fmt.Sprintf("CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED BY '%s'", escapeStr(username), escapeStr(password)),
+		fmt.Sprintf("GRANT ALL PRIVILEGES ON %s TO '%s'@'%%'", privDB, escapeStr(username)),
 		"FLUSH PRIVILEGES",
 	}
 	fullQuery := strings.Join(queries, "; ")
@@ -241,7 +262,7 @@ func (s *DatabaseService) DropDatabase(item *model.DatabaseInstance, dbName stri
 		return fmt.Errorf("mysql client not found, please install mysql first")
 	}
 	args := s.getMysqlArgs(item, "")
-	query := fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", dbName)
+	query := fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", escapeIdent(dbName))
 	args = append(args, "-e", query)
 	if out, err := s.runMysqlCmd(item, args...); err != nil {
 		global.LOG.Errorf("[DB] DropDatabase FAILED: db=%s err=%v", dbName, err)
@@ -263,7 +284,7 @@ func (s *DatabaseService) DropUser(item *model.DatabaseInstance, username string
 	}
 	args := s.getMysqlArgs(item, "")
 	queries := []string{
-		fmt.Sprintf("DROP USER IF EXISTS '%s'@'%%'", username),
+		fmt.Sprintf("DROP USER IF EXISTS '%s'@'%%'", escapeStr(username)),
 		"FLUSH PRIVILEGES",
 	}
 	fullQuery := strings.Join(queries, "; ")
@@ -375,7 +396,7 @@ func (s *DatabaseService) ChangePassword(item *model.DatabaseInstance, newPasswo
 		return fmt.Errorf("mysql client not found")
 	}
 	args := s.getMysqlArgs(item, "")
-	query := fmt.Sprintf("ALTER USER '%s'@'%%' IDENTIFIED BY '%s'", item.Username, newPassword)
+	query := fmt.Sprintf("ALTER USER '%s'@'%%' IDENTIFIED BY '%s'", escapeStr(item.Username), escapeStr(newPassword))
 	args = append(args, "-e", query)
 	if out, err := s.runMysqlCmd(item, args...); err != nil {
 		global.LOG.Errorf("[DB] ChangePassword FAILED: user=%s err=%v", item.Username, err)
@@ -406,7 +427,7 @@ func (s *DatabaseService) DescribeTable(item *model.DatabaseInstance, dbName, ta
 		return nil, fmt.Errorf("mysql client not found")
 	}
 	args := s.getMysqlArgs(item, dbName)
-	args = append(args, "-N", "-B", "-e", fmt.Sprintf("SHOW FULL COLUMNS FROM `%s`", tableName))
+	args = append(args, "-N", "-B", "-e", fmt.Sprintf("SHOW FULL COLUMNS FROM `%s`", escapeIdent(tableName)))
 	out, err := s.runMysqlCmd(item, args...)
 	if err != nil {
 		return nil, fmt.Errorf("describe table failed: %s: %v", string(out), err)
