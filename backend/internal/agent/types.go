@@ -4,8 +4,18 @@ import "fmt"
 
 // StreamChunk SSE 流式响应分片
 type StreamChunk struct {
-	Type       string `json:"type"`        // message/tool_call/tool_result/confirm_required/error/done/phase_start/phase_complete/plan_ready/compression_triggered
-	Content    string `json:"content"`     // 内容/结果
+	// type 取值：
+	//   token           - LLM 流式生成的文本增量（真正的逐 token 推送，前端累积到打字机缓冲）
+	//   message         - 完整文本消息（非流式回退路径，或最终总结）
+	//   tool_call       - 工具调用开始
+	//   tool_result     - 工具执行结果
+	//   confirm_required - 需要用户确认
+	//   error / done    - 错误 / 流结束
+	//   phase_start / phase_complete - 三阶段编排
+	//   plan_ready      - 计划已生成，等待用户确认
+	//   compression_triggered - 上下文压缩已触发
+	Type       string `json:"type"`
+	Content    string `json:"content"`     // 内容/结果（token 增量也用此字段）
 	ToolCallID string `json:"tool_call_id"` // 工具调用 ID
 	ToolName   string `json:"tool_name"`    // 工具名称
 	Command    string `json:"command"`      // 需要确认的命令

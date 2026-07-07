@@ -203,7 +203,7 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 		global.LOG.Infof("[Engine] 会话%d: ====== 第%d/%d步，开始调用LLM，当前消息数=%d，连续错误=%d ======",
 			sessionID, step+1, e.maxSteps, len(messages), consecutiveErrors)
 
-		resp, err := e.chatWithRetry(ctx, messages, toolDefs, 3)
+		resp, err := e.chatStreamWithRetry(ctx, messages, toolDefs, 3, stream, "")
 		if err != nil {
 			global.LOG.Errorf("[Engine] 会话%d: ❌ LLM调用失败: %v", sessionID, err)
 			stream <- StreamChunk{Type: "error", Error: "LLM 调用失败: " + err.Error()}
@@ -224,10 +224,11 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 			if strings.TrimSpace(content) == "" {
 				global.LOG.Warnf("[Engine] 会话%d: LLM无工具调用且内容为空，使用默认回复", sessionID)
 				content = "工具执行完成，结果已展示。如果需要进一步操作，请告诉我。"
+				stream <- StreamChunk{Type: "message", Content: content}
 			} else {
 				global.LOG.Infof("[Engine] 会话%d: ✅ LLM无工具调用，直接发送最终回复", sessionID)
+				// 流式路径已逐 token 推送，此处无需再推 message
 			}
-			stream <- StreamChunk{Type: "message", Content: content}
 			messages = append(messages, provider.LLMMessage{Role: "assistant", Content: content})
 			_ = e.sessionMgr.SaveAssistantMessage(sessionID, content, nil)
 			finalMessageSent = true
@@ -236,11 +237,7 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 			return nil
 		}
 
-		if contentLen > 0 {
-			global.LOG.Infof("[Engine] 会话%d: LLM有中间说明文本，推送给前端", sessionID)
-			stream <- StreamChunk{Type: "message", Content: resp.Content}
-		}
-
+		// 流式路径已逐 token 推送中间说明文本，此处无需再推 message
 		messages = append(messages, provider.LLMMessage{
 			Role:      "assistant",
 			Content:   resp.Content,
@@ -386,7 +383,7 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 
 	global.LOG.Infof("[Engine] 会话%d: ====== 开始生成最终总结，不传递工具定义 ======", sessionID)
 	toolDefsEmpty := []provider.ToolDefinition{}
-	finalResp, err := e.chatWithRetry(ctx, messages, toolDefsEmpty, 2)
+	finalResp, err := e.chatStreamWithRetry(ctx, messages, toolDefsEmpty, 2, stream, "")
 	if err != nil {
 		global.LOG.Errorf("[Engine] 会话%d: ❌ 最终总结LLM调用失败: %v，发送兜底消息", sessionID, err)
 		stream <- StreamChunk{Type: "message", Content: "操作已执行，但生成总结时遇到问题。请查看上方工具执行结果。如果需要进一步分析，请告诉我。"}
@@ -397,10 +394,11 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 		if contentLen == 0 {
 			global.LOG.Warnf("[Engine] 会话%d: 最终总结内容为空，使用默认回复", sessionID)
 			content = "工具执行完成，结果已展示。如果需要进一步操作，请告诉我。"
+			stream <- StreamChunk{Type: "message", Content: content}
 		} else {
 			global.LOG.Debugf("[Engine] 会话%d: 最终总结预览: %s", sessionID, truncateStr(content, 200))
+			// 流式路径已逐 token 推送，此处无需再推 message
 		}
-		stream <- StreamChunk{Type: "message", Content: content}
 		_ = e.sessionMgr.SaveAssistantMessage(sessionID, content, nil)
 	}
 	finalMessageSent = true
@@ -479,6 +477,114 @@ func (e *Engine) chatWithRetry(ctx context.Context, messages []provider.LLMMessa
 		}
 	}
 	return nil, lastErr
+}
+
+// chatStreamWithRetry 流式调用 LLM，边收 token 边推送到前端 stream。
+// 若 Provider 未实现 Streamer 接口，自动回退到非流式 chatWithRetry（推送 Type="message"）。
+// 返回聚合后的 *LLMResponse，保持 ReAct 循环逻辑不变。
+// phaseLabel 仅用于日志标识（如 "planning"），可为空。
+func (e *Engine) chatStreamWithRetry(ctx context.Context, messages []provider.LLMMessage, tools []provider.ToolDefinition, maxRetries int, stream chan<- StreamChunk, phaseLabel string) (*provider.LLMResponse, error) {
+	streamer, ok := e.provider.(provider.Streamer)
+	if !ok {
+		// 回退：非流式调用，并一次性推送完整内容作为 message 事件
+		global.LOG.Infof("[Engine] Provider 未实现 Streamer，回退非流式调用%s", logPhase(phaseLabel))
+		resp, err := e.chatWithRetry(ctx, messages, tools, maxRetries)
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(resp.Content) != "" {
+			stream <- StreamChunk{Type: "message", Content: resp.Content, Phase: phaseLabel}
+		}
+		return resp, nil
+	}
+
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			waitMs := int(math.Pow(2, float64(attempt-1))) * 1000
+			global.LOG.Warnf("[Engine] 流式调用限流，等待 %dms 后重试 (第%d次)%s", waitMs, attempt, logPhase(phaseLabel))
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(waitMs) * time.Millisecond):
+			}
+		}
+
+		deltaCh, err := streamer.ChatStream(ctx, messages, tools)
+		if err != nil {
+			lastErr = err
+			errStr := err.Error()
+			isRateLimit := strings.Contains(errStr, "429") ||
+				strings.Contains(errStr, "Too Many Requests") ||
+				strings.Contains(errStr, "rate limit")
+			if !isRateLimit || attempt == maxRetries {
+				return nil, err
+			}
+			continue
+		}
+
+		// 聚合 LLMResponse
+		resp := &provider.LLMResponse{}
+		var toolCalls []provider.ToolCall
+		tokenCount := 0
+
+		for delta := range deltaCh {
+			switch delta.Type {
+			case "content":
+				resp.Content += delta.Content
+				tokenCount++
+				// 真正的逐 token 推送到前端
+				stream <- StreamChunk{Type: "token", Content: delta.Content, Phase: phaseLabel}
+			case "tool_call":
+				tc := provider.ToolCall{
+					ID:   delta.ToolCallID,
+					Type: delta.ToolCallType,
+				}
+				tc.Function.Name = delta.FunctionName
+				tc.Function.Arguments = delta.ArgumentsDelta
+				toolCalls = append(toolCalls, tc)
+			case "usage":
+				if delta.Usage != nil {
+					resp.Usage = *delta.Usage
+				}
+			case "error":
+				// 流内部错误，作为本次调用失败处理
+				lastErr = fmt.Errorf("stream error: %s", delta.Content)
+				global.LOG.Errorf("[Engine] 流式响应内部错误%s: %s", logPhase(phaseLabel), delta.Content)
+				break
+			case "done":
+				// 流正常结束
+			}
+			if delta.Type == "error" {
+				break
+			}
+		}
+
+		if lastErr != nil {
+			errStr := lastErr.Error()
+			isRateLimit := strings.Contains(errStr, "429") ||
+				strings.Contains(errStr, "Too Many Requests") ||
+				strings.Contains(errStr, "rate limit")
+			if !isRateLimit || attempt == maxRetries {
+				return nil, lastErr
+			}
+			continue
+		}
+
+		resp.ToolCalls = toolCalls
+		global.LOG.Infof("[Engine] 流式调用完成%s，token分片数=%d，内容长度=%d，工具调用数=%d",
+			logPhase(phaseLabel), tokenCount, len(resp.Content), len(resp.ToolCalls))
+		return resp, nil
+	}
+	return nil, lastErr
+}
+
+// logPhase 返回带阶段标签的日志后缀（带前导空格），phaseLabel 为空时返回空串
+func logPhase(phaseLabel string) string {
+	if phaseLabel == "" {
+		return ""
+	}
+	return " [phase=" + phaseLabel + "]"
 }
 
 func argsStrToMap(args string) map[string]interface{} {

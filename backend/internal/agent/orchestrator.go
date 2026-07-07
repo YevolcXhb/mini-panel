@@ -228,8 +228,8 @@ func (o *Orchestrator) runPhase(ctx context.Context, sessionID uint, phase Orche
 			}
 		}
 
-		// 调用 LLM
-		resp, err := o.engine.chatWithRetry(ctx, messages, phaseToolDefs, 3)
+		// 调用 LLM（流式）
+		resp, err := o.engine.chatStreamWithRetry(ctx, messages, phaseToolDefs, 3, stream, string(phase))
 		if err != nil {
 			global.LOG.Errorf("[Orchestrator] 会话%d: [%s] LLM调用失败: %v", sessionID, phase, err)
 			stream <- StreamChunk{Type: "error", Error: "LLM 调用失败: " + err.Error()}
@@ -241,16 +241,7 @@ func (o *Orchestrator) runPhase(ctx context.Context, sessionID uint, phase Orche
 		global.LOG.Infof("[Orchestrator] 会话%d: [%s] LLM返回: 有工具调用=%v, 文本长度=%d",
 			sessionID, phase, hasToolCalls, contentLen)
 
-		// 推送文本内容到前端
-		if contentLen > 0 {
-			stream <- StreamChunk{
-				Type:       "message",
-				Content:    resp.Content,
-				Phase:      string(phase),
-				StepNumber: step + 1,
-				MaxSteps:   MaxStepsPerPhase,
-			}
-		}
+		// 流式路径已逐 token 推送文本，此处无需再推 message
 
 		// 检查阶段完成
 		if PhaseComplete(phase, resp) {
@@ -387,9 +378,9 @@ func (o *Orchestrator) runPhase(ctx context.Context, sessionID uint, phase Orche
 		}
 	}
 
-	// 阶段超步数，调用 LLM 生成总结
+	// 阶段超步数，调用 LLM 生成总结（流式）
 	global.LOG.Infof("[Orchestrator] 会话%d: [%s] 阶段达到步数限制，生成总结", sessionID, phase)
-	finalResp, err := o.engine.chatWithRetry(ctx, messages, []provider.ToolDefinition{}, 2)
+	finalResp, err := o.engine.chatStreamWithRetry(ctx, messages, []provider.ToolDefinition{}, 2, stream, string(phase))
 	if err != nil {
 		return fmt.Sprintf("[%s phase exceeded max steps]", phase), messages, nil
 	}

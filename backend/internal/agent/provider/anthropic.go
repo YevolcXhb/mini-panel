@@ -1,12 +1,14 @@
 package provider
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 // AnthropicProvider Claude API
@@ -37,6 +39,220 @@ func NewAnthropicProvider(baseURL, apiKey, model string, temperature float32, ma
 }
 
 func (p *AnthropicProvider) SupportsToolCalling() bool { return true }
+
+// ChatStream 流式调用 Anthropic Messages API（SSE）。
+// Anthropic SSE 事件类型：message_start / content_block_start / content_block_delta / content_block_stop / message_delta / message_stop
+func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []LLMMessage, tools []ToolDefinition) (<-chan StreamDelta, error) {
+	var systemPrompt string
+	var claudeMessages []map[string]interface{}
+	for _, m := range messages {
+		if m.Role == "system" {
+			if systemPrompt != "" {
+				systemPrompt += "\n"
+			}
+			systemPrompt += m.Content
+			continue
+		}
+		msg := map[string]interface{}{
+			"role":    m.Role,
+			"content": m.Content,
+		}
+		if m.Role == "tool" {
+			msg["role"] = "user"
+			msg["content"] = fmt.Sprintf("<tool_result>\nTool: %s\nResult: %s\n</tool_result>", m.ToolCallID, m.Content)
+		}
+		claudeMessages = append(claudeMessages, msg)
+	}
+
+	reqBody := map[string]interface{}{
+		"model":       p.model,
+		"max_tokens":  p.maxTokens,
+		"messages":    claudeMessages,
+		"temperature": p.temperature,
+		"stream":      true,
+	}
+	if systemPrompt != "" {
+		reqBody["system"] = systemPrompt
+	}
+	if len(tools) > 0 {
+		var claudeTools []map[string]interface{}
+		for _, t := range tools {
+			claudeTools = append(claudeTools, map[string]interface{}{
+				"name":         t.Function.Name,
+				"description":  t.Function.Description,
+				"input_schema": t.Function.Parameters,
+			})
+		}
+		reqBody["tools"] = claudeTools
+	}
+
+	b, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/messages", bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("x-api-key", p.apiKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+
+	client := &http.Client{Transport: defaultHTTPClient.Transport}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("anthropic stream error %d: %s", resp.StatusCode, string(body))
+	}
+
+	out := make(chan StreamDelta, 64)
+	go func() {
+		defer func() {
+			resp.Body.Close()
+			close(out)
+		}()
+
+		// 工具调用累积（content_block_index → accum）
+		type toolAccum struct {
+			ID        string
+			Name      string
+			Arguments string
+		}
+		toolMap := map[int]*toolAccum{}
+
+		decoder := bufio.NewReader(resp.Body)
+		var currentBlockIdx int
+
+		for {
+			select {
+			case <-ctx.Done():
+				out <- StreamDelta{Type: "done"}
+				return
+			default:
+			}
+
+			line, err := decoder.ReadString('\n')
+			if err != nil {
+				if err == io.EOF {
+					out <- StreamDelta{Type: "done"}
+					return
+				}
+				out <- StreamDelta{Type: "error", Content: err.Error()}
+				return
+			}
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+
+			// Anthropic SSE 格式：event: xxx\ndata: {...}
+			if strings.HasPrefix(line, "event:") {
+				continue
+			}
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+
+			var event struct {
+				Type         string `json:"type"`
+				Index        int    `json:"index"`
+				ContentBlock *struct {
+					Type  string          `json:"type"`
+					Text  string          `json:"text"`
+					ID    string          `json:"id"`
+					Name  string          `json:"name"`
+					Input json.RawMessage `json:"input"`
+				} `json:"content_block"`
+				Delta *struct {
+					Type        string `json:"type"`
+					Text        string `json:"text"`
+					PartialJSON string `json:"partial_json"`
+				} `json:"delta"`
+				Message *struct {
+					Usage struct {
+						InputTokens  int `json:"input_tokens"`
+						OutputTokens int `json:"output_tokens"`
+					} `json:"usage"`
+				} `json:"message"`
+				Usage *struct {
+					InputTokens  int `json:"input_tokens"`
+					OutputTokens int `json:"output_tokens"`
+				} `json:"usage"`
+			}
+			if err := json.Unmarshal([]byte(data), &event); err != nil {
+				continue
+			}
+
+			switch event.Type {
+			case "content_block_start":
+				currentBlockIdx = event.Index
+				if event.ContentBlock != nil {
+					switch event.ContentBlock.Type {
+					case "text":
+						// 文本块开始，无需操作（等待 delta）
+					case "tool_use":
+						toolMap[event.Index] = &toolAccum{
+							ID:   event.ContentBlock.ID,
+							Name: event.ContentBlock.Name,
+						}
+					}
+				}
+			case "content_block_delta":
+				if event.Delta != nil {
+					switch event.Delta.Type {
+					case "text_delta":
+						out <- StreamDelta{Type: "content", Content: event.Delta.Text}
+					case "input_json_delta":
+						if accum, ok := toolMap[currentBlockIdx]; ok {
+							accum.Arguments += event.Delta.PartialJSON
+						}
+					}
+				}
+			case "content_block_stop":
+				// 工具调用块结束时发送完整工具调用
+				if accum, ok := toolMap[event.Index]; ok {
+					out <- StreamDelta{
+						Type:           "tool_call",
+						ToolCallIndex:  event.Index,
+						ToolCallID:     accum.ID,
+						ToolCallType:   "function",
+						FunctionName:   accum.Name,
+						ArgumentsDelta: accum.Arguments,
+					}
+				}
+			case "message_delta":
+				// 消息级别的 usage 增量（output_tokens）
+			case "message_stop":
+				if event.Usage != nil {
+					out <- StreamDelta{
+						Type: "usage",
+						Usage: &struct {
+							PromptTokens     int `json:"prompt_tokens"`
+							CompletionTokens int `json:"completion_tokens"`
+							TotalTokens      int `json:"total_tokens"`
+						}{
+							PromptTokens:     event.Usage.InputTokens,
+							CompletionTokens: event.Usage.OutputTokens,
+							TotalTokens:      event.Usage.InputTokens + event.Usage.OutputTokens,
+						},
+					}
+				}
+				out <- StreamDelta{Type: "done"}
+				return
+			}
+		}
+	}()
+
+	return out, nil
+}
 
 func (p *AnthropicProvider) Chat(ctx context.Context, messages []LLMMessage, tools []ToolDefinition) (*LLMResponse, error) {
 	// Claude 格式转换: system 消息需要单独提取

@@ -298,17 +298,18 @@ function startTypewriter() {
       stopTypewriter()
       return
     }
-    // 长文本立即显示，短文本打字效果
+    // 根据缓冲区大小动态调整速度：长文本加速但仍保持打字效果
     let charsToAdd = 1
-    if (streamBuffer.value.length > 100) charsToAdd = streamBuffer.value.length
-    else if (streamBuffer.value.length > 40) charsToAdd = 3
+    if (streamBuffer.value.length > 200) charsToAdd = 8
+    else if (streamBuffer.value.length > 100) charsToAdd = 4
+    else if (streamBuffer.value.length > 40) charsToAdd = 2
     const lastMsg = messages.value[messages.value.length - 1]
     if (lastMsg && lastMsg.role === 'assistant') {
       lastMsg.content += streamBuffer.value.substring(0, charsToAdd)
     }
     streamBuffer.value = streamBuffer.value.substring(charsToAdd)
     scrollToBottom()
-  }, 20)
+  }, 16)
 }
 
 function stopTypewriter() {
@@ -625,7 +626,17 @@ function startOrchestration(text: string) {
 
 function handleChunk(chunk: StreamChunk) {
   switch (chunk.type) {
+    case 'token':
+      // 真正的 LLM 流式 token 增量，直接累积到打字机缓冲
+      if (chunk.content) {
+        currentStream.value.push(chunk.content)
+        streamBuffer.value += chunk.content
+        startTypewriter()
+      }
+      break
+
     case 'message':
+      // 完整文本消息（非流式回退路径，或空回复兜底）
       if (chunk.content) {
         currentStream.value.push(chunk.content)
         streamBuffer.value += chunk.content
