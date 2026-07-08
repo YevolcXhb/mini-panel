@@ -5,16 +5,50 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/minipanel/minipanel/internal/agent/provider"
 )
 
-// 危险命令黑名单
+// 危险命令黑名单：匹配规则为命令小写后是否包含模式
 var dangerousPatterns = []string{
 	"rm -rf /", "rm -rf /*", "mkfs", "dd if=/dev/zero",
 	":(){:|:&};:", "shutdown", "poweroff", "halt -p",
 	"> /dev/sda", "> /dev/hda", "chmod -R 777 /",
+}
+
+// ExecOptions ExecTool 运行时配置（用于控制危险命令拦截和超时）
+type ExecOptions struct {
+	AllowDangerous bool          // true 时跳过 dangerousPatterns 拦截（仍拦截 docker）
+	Timeout        time.Duration // 工具执行超时；<=0 时使用 defaultExecTimeout
+}
+
+const defaultExecTimeout = 120 * time.Second
+
+// globalExecOptions 全局 ExecTool 配置，由 API 层在请求时设置
+var (
+	execOptionsMu sync.RWMutex
+	execOptions   ExecOptions
+)
+
+// SetExecOptions 设置全局 ExecTool 配置（在每次请求开始时调用）
+func SetExecOptions(opts ExecOptions) {
+	execOptionsMu.Lock()
+	defer execOptionsMu.Unlock()
+	execOptions = opts
+}
+
+// GetExecOptionsForTest 获取当前 ExecTool 配置（供 engine 等模块临时保存/恢复配置用）
+func GetExecOptionsForTest() ExecOptions {
+	return getExecOptions()
+}
+
+// getExecOptions 获取当前 ExecTool 配置
+func getExecOptions() ExecOptions {
+	execOptionsMu.RLock()
+	defer execOptionsMu.RUnlock()
+	return execOptions
 }
 
 // ExecTool 命令执行（带安全检查）
@@ -24,25 +58,37 @@ func NewExecTool() *ExecTool { return &ExecTool{} }
 
 func (t *ExecTool) Name() string { return "execute_command" }
 func (t *ExecTool) Description() string {
-	return "执行 Shell 命令。支持查看系统状态、配置文件等。危险操作会被拦截。"
+	return "执行 Shell 命令。支持查看系统状态、配置文件等。危险操作需要用户确认（可在设置中开启自动执行）。"
 }
 func (t *ExecTool) Parameters() []provider.ToolParam {
 	return []provider.ToolParam{
 		{Name: "command", Type: "string", Description: "要执行的命令", Required: true},
-		{Name: "timeout", Type: "integer", Description: "超时秒数，默认 30", Required: false},
+		{Name: "timeout", Type: "integer", Description: "超时秒数，默认 120（可在 Agent 设置中调整）", Required: false},
 	}
 }
 func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) ToolExecResult {
 	command := GetString(args, "command")
-	timeout := GetInt(args, "timeout")
+	requestedTimeout := GetInt(args, "timeout")
+
+	opts := getExecOptions()
+	// 优先级：参数指定 timeout > 全局 ExecTimeoutSeconds > 默认 120s
+	timeout := opts.Timeout
+	if requestedTimeout > 0 {
+		timeout = time.Duration(requestedTimeout) * time.Second
+	}
 	if timeout <= 0 {
-		timeout = 30
+		timeout = defaultExecTimeout
 	}
 
 	cmdLower := strings.ToLower(command)
 	for _, p := range dangerousPatterns {
 		if strings.Contains(cmdLower, strings.ToLower(p)) {
-			return ErrorResult("危险命令被拦截: %s", p)
+			if opts.AllowDangerous {
+				// 用户已开启危险操作自动执行，跳过拦截
+				break
+			}
+			// 返回 confirm required 信号，让 engine 推送 confirm_required 事件给前端询问
+			return ErrorResult("confirm required: 危险命令 %s 已被拦截。如需执行请在 Agent 设置中开启'允许危险操作自动执行'，或在前端确认执行。", p)
 		}
 	}
 
@@ -50,7 +96,7 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) Too
 		return ErrorResult("请使用 container_op 工具管理容器，不要直接执行 docker 命令")
 	}
 
-	ctx2, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+	ctx2, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx2, "sh", "-c", command)
@@ -58,7 +104,7 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) Too
 	result := string(output)
 	if err != nil {
 		if ctx2.Err() == context.DeadlineExceeded {
-			return SuccessResult(result + "\n[命令执行超时]")
+			return SuccessResult(result + fmt.Sprintf("\n[命令执行超时，限制 %v]", timeout))
 		}
 		return SuccessResult(result + fmt.Sprintf("\n[退出码: %v]", err))
 	}

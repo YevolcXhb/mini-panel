@@ -57,9 +57,17 @@ func (o *Orchestrator) Orchestrate(ctx context.Context, sessionID uint, task str
 		global.LOG.Errorf("[Orchestrator] 会话%d: 保存用户消息失败: %v", sessionID, err)
 	}
 
+	// 加载历史消息作为上下文（与单轮对话模式共享同一会话）
+	historyMessages, err := o.engine.sessionMgr.LoadMessages(sessionID)
+	if err != nil {
+		global.LOG.Errorf("[Orchestrator] 会话%d: 加载历史消息失败: %v", sessionID, err)
+		historyMessages = nil
+	}
+	global.LOG.Infof("[Orchestrator] 会话%d: 加载历史消息 %d 条作为上下文", sessionID, len(historyMessages))
+
 	// Phase 1: PLANNING
 	stream <- StreamChunk{Type: "phase_start", Phase: string(PhasePlanning), MaxSteps: MaxStepsPerPhase}
-	plan, planningMessages, err := o.runPhase(ctx, sessionID, PhasePlanning, PLANNER_SYSTEM_PROMPT, task, stream)
+	plan, planningMessages, err := o.runPhase(ctx, sessionID, PhasePlanning, PLANNER_SYSTEM_PROMPT, task, stream, historyMessages)
 	if err != nil {
 		return err
 	}
@@ -137,7 +145,7 @@ func (o *Orchestrator) ConfirmPlan(ctx context.Context, sessionID uint, confirme
 		codingContext += "\n\n## 规划阶段结构化摘要\n" + planningSummary.RawSummary
 	}
 	stream <- StreamChunk{Type: "phase_start", Phase: string(PhaseCoding), MaxSteps: MaxStepsPerPhase}
-	codeResult, codingMessages, err := o.runPhase(ctx, sessionID, PhaseCoding, CODER_SYSTEM_PROMPT, codingContext, stream)
+	codeResult, codingMessages, err := o.runPhase(ctx, sessionID, PhaseCoding, CODER_SYSTEM_PROMPT, codingContext, stream, nil)
 	if err != nil {
 		return err
 	}
@@ -154,7 +162,7 @@ func (o *Orchestrator) ConfirmPlan(ctx context.Context, sessionID uint, confirme
 		reviewContext += "\n\n## 执行阶段结构化摘要\n" + codingSummary.RawSummary
 	}
 	stream <- StreamChunk{Type: "phase_start", Phase: string(PhaseReviewing), MaxSteps: MaxStepsPerPhase}
-	reviewResult, _, err := o.runPhase(ctx, sessionID, PhaseReviewing, REVIEWER_SYSTEM_PROMPT, reviewContext, stream)
+	reviewResult, _, err := o.runPhase(ctx, sessionID, PhaseReviewing, REVIEWER_SYSTEM_PROMPT, reviewContext, stream, nil)
 	if err != nil {
 		return err
 	}
@@ -174,8 +182,9 @@ func (o *Orchestrator) ConfirmPlan(ctx context.Context, sessionID uint, confirme
 
 // runPhase 执行单个阶段的 ReAct 循环。
 // 返回值：phaseOutput 阶段产出文本，phaseMessages 该阶段累积的消息列表（用于 sessionCompressor 生成摘要），err 错误。
+// historyMessages 为该会话的历史消息（用于跨模式/跨阶段共享上下文），可为空。
 func (o *Orchestrator) runPhase(ctx context.Context, sessionID uint, phase OrchestratorPhase,
-	systemPrompt, handoffContext string, stream chan<- StreamChunk) (phaseOutput string, phaseMessages []provider.LLMMessage, err error) {
+	systemPrompt, handoffContext string, stream chan<- StreamChunk, historyMessages []provider.LLMMessage) (phaseOutput string, phaseMessages []provider.LLMMessage, err error) {
 
 	global.LOG.Infof("[Orchestrator] 会话%d: 开始 %s 阶段", sessionID, phase)
 
@@ -183,11 +192,15 @@ func (o *Orchestrator) runPhase(ctx context.Context, sessionID uint, phase Orche
 	allToolDefs := o.engine.registry.ToDefinitions()
 	phaseToolDefs := filterToolsByPhase(phase, allToolDefs)
 
-	// 初始化阶段消息（fresh start）
+	// 初始化阶段消息：system + 历史上下文（如有）+ 当前任务
 	messages := []provider.LLMMessage{
 		{Role: "system", Content: systemPrompt},
-		{Role: "user", Content: handoffContext},
 	}
+	// PLANNING 阶段注入历史消息，让规划能继承之前的对话内容
+	if phase == PhasePlanning && len(historyMessages) > 0 {
+		messages = append(messages, historyMessages...)
+	}
+	messages = append(messages, provider.LLMMessage{Role: "user", Content: handoffContext})
 
 	consecutiveErrors := 0
 	lastCompressionStep := 0
@@ -253,14 +266,33 @@ func (o *Orchestrator) runPhase(ctx context.Context, sessionID uint, phase Orche
 			return resp.Content, messages, nil
 		}
 
-		// 无工具调用且未完成阶段
-		if !hasToolCalls {
-			global.LOG.Infof("[Orchestrator] 会话%d: [%s] 无工具调用，视为阶段完成", sessionID, phase)
-			_ = o.engine.sessionMgr.SaveAssistantMessage(sessionID, resp.Content, nil)
-			if contentLen == 0 {
-				return "(阶段完成，无文本输出)", messages, nil
+		// CODING 阶段特殊处理：必须有显式 "execution completed" 信号才结束。
+		// 即使 LLM 没有调用工具，只要没输出完成标志，就追加引导消息让 LLM 继续执行，
+		// 防止 LLM 输出说明性文字时被误判为阶段完成。
+		if phase == PhaseCoding {
+			if !hasToolCalls {
+				global.LOG.Infof("[Orchestrator] 会话%d: [coding] LLM未调用工具且未输出完成标志，追加引导消息继续执行", sessionID)
+				messages = append(messages, provider.LLMMessage{
+					Role:    "assistant",
+					Content: resp.Content,
+				})
+				messages = append(messages, provider.LLMMessage{
+					Role:    "user",
+					Content: "请继续按计划执行任务，使用可用的工具完成操作。如果所有步骤都已执行完成，请输出 \"execution completed\"。",
+				})
+				_ = o.engine.sessionMgr.SaveAssistantMessage(sessionID, resp.Content, nil)
+				continue
 			}
-			return resp.Content, messages, nil
+		} else {
+			// PLANNING/REVIEWING 阶段：无工具调用视为完成
+			if !hasToolCalls {
+				global.LOG.Infof("[Orchestrator] 会话%d: [%s] 无工具调用，视为阶段完成", sessionID, phase)
+				_ = o.engine.sessionMgr.SaveAssistantMessage(sessionID, resp.Content, nil)
+				if contentLen == 0 {
+					return "(阶段完成，无文本输出)", messages, nil
+				}
+				return resp.Content, messages, nil
+			}
 		}
 
 		// 保存 assistant 消息

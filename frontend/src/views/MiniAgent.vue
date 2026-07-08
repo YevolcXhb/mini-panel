@@ -202,6 +202,22 @@
           <el-form-item label="Max Tokens">
             <el-input-number v-model="config.max_tokens" :min="512" :max="131072" :step="1024" />
           </el-form-item>
+          <el-divider content-position="left">安全设置</el-divider>
+          <el-form-item label="危险操作自动执行">
+            <el-switch
+              v-model="config.allow_dangerous_commands"
+              active-text="开启（自动执行危险命令）"
+              inactive-text="关闭（危险命令询问用户）"
+              inline-prompt
+            />
+            <div class="form-tip danger-tip">
+              ⚠️ 开启后，rm -rf /、shutdown、mkfs 等危险命令将自动执行，不再询问确认。请仅在受信任环境启用。
+            </div>
+          </el-form-item>
+          <el-form-item label="工具执行超时（秒）">
+            <el-input-number v-model="config.exec_timeout_seconds" :min="10" :max="3600" :step="30" />
+            <div class="form-tip">execute_command 工具的最大执行时间，默认 120 秒</div>
+          </el-form-item>
           <el-form-item label="启用技能">
             <el-checkbox-group v-model="config.skills">
               <el-checkbox v-for="skill in availableSkills" :key="skill.id" :label="skill.id">
@@ -335,7 +351,7 @@ const examples = [
   '重启 MySQL 容器',
 ]
 
-const config = ref<AgentConfig & { apiKey: string; skills: string[] }>({
+const config = ref<AgentConfig & { apiKey: string; skills: string[]; allow_dangerous_commands: boolean; exec_timeout_seconds: number }>({
   provider: 'openai',
   base_url: '',
   model: 'gpt-4o-mini',
@@ -344,7 +360,9 @@ const config = ref<AgentConfig & { apiKey: string; skills: string[] }>({
   enabled: true,
   system_prompt: '',
   apiKey: '',
-  skills: ['system', 'container', 'website', 'database', 'firewall', 'file', 'backup', 'web']
+  skills: ['system', 'container', 'website', 'database', 'firewall', 'file', 'backup', 'web'],
+  allow_dangerous_commands: false,
+  exec_timeout_seconds: 120
 })
 
 const availableSkills = ref<{ id: string; name: string; description: string; icon: string }[]>([])
@@ -389,7 +407,9 @@ async function saveConfig() {
       max_tokens: config.value.max_tokens,
       enabled: config.value.enabled,
       system_prompt: config.value.system_prompt,
-      skills: JSON.stringify(config.value.skills)
+      skills: JSON.stringify(config.value.skills),
+      allow_dangerous_commands: config.value.allow_dangerous_commands,
+      exec_timeout_seconds: config.value.exec_timeout_seconds
     }
     if (config.value.apiKey && config.value.apiKey.trim()) {
       payload.api_key = config.value.apiKey.trim()

@@ -14,6 +14,7 @@ import (
 	"github.com/minipanel/minipanel/internal/agent"
 	"github.com/minipanel/minipanel/internal/agent/provider"
 	"github.com/minipanel/minipanel/internal/agent/repository"
+	"github.com/minipanel/minipanel/internal/agent/tools"
 	"github.com/minipanel/minipanel/internal/global"
 	"github.com/minipanel/minipanel/internal/model"
 	"github.com/minipanel/minipanel/internal/service"
@@ -95,6 +96,20 @@ func (a *AgentAPI) getUserID(c *gin.Context) uint {
 	return 0
 }
 
+// applyExecOptionsFromConfig 根据用户配置设置 ExecTool 的全局运行时配置。
+// 必须在 Chat/Confirm/Orchestrate/ConfirmPlan 入口处、GetConfig 之后调用。
+func (a *AgentAPI) applyExecOptionsFromConfig(cfg *model.AgentConfig) {
+	timeout := time.Duration(cfg.ExecTimeoutSeconds) * time.Second
+	if cfg.ExecTimeoutSeconds <= 0 {
+		timeout = 120 * time.Second
+	}
+	tools.SetExecOptions(tools.ExecOptions{
+		AllowDangerous: cfg.AllowDangerousCommands,
+		Timeout:        timeout,
+	})
+	global.LOG.Infof("[AgentAPI] 已应用 ExecOptions: AllowDangerous=%v, Timeout=%v", cfg.AllowDangerousCommands, timeout)
+}
+
 // GetConfig 获取配置
 func (a *AgentAPI) GetConfig(c *gin.Context) {
 	userID := a.getUserID(c)
@@ -106,14 +121,16 @@ func (a *AgentAPI) GetConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"code": 200,
 		"data": gin.H{
-			"provider":      cfg.Provider,
-			"base_url":      cfg.BaseURL,
-			"model":         cfg.Model,
-			"temperature":   cfg.Temperature,
-			"max_tokens":    cfg.MaxTokens,
-			"enabled":       cfg.Enabled,
-			"system_prompt": cfg.SystemPrompt,
-			"skills":        cfg.Skills,
+			"provider":                 cfg.Provider,
+			"base_url":                 cfg.BaseURL,
+			"model":                    cfg.Model,
+			"temperature":              cfg.Temperature,
+			"max_tokens":               cfg.MaxTokens,
+			"enabled":                  cfg.Enabled,
+			"system_prompt":            cfg.SystemPrompt,
+			"skills":                   cfg.Skills,
+			"allow_dangerous_commands": cfg.AllowDangerousCommands,
+			"exec_timeout_seconds":     cfg.ExecTimeoutSeconds,
 		},
 		"available_skills": agent.GetAllSkills(),
 	})
@@ -212,6 +229,7 @@ func (a *AgentAPI) Chat(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"code": 403, "message": "Agent 未启用"})
 		return
 	}
+	a.applyExecOptionsFromConfig(cfg)
 
 	// 更新会话标题
 	sm := repository.NewSessionManager()
@@ -282,6 +300,7 @@ func (a *AgentAPI) Confirm(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"code": 403, "message": "Agent 未启用"})
 		return
 	}
+	a.applyExecOptionsFromConfig(cfg)
 
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
@@ -349,6 +368,7 @@ func (a *AgentAPI) Orchestrate(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"code": 403, "message": "Agent 未启用"})
 		return
 	}
+	a.applyExecOptionsFromConfig(cfg)
 
 	// 更新会话标题
 	sm := repository.NewSessionManager()
@@ -429,6 +449,7 @@ func (a *AgentAPI) ConfirmPlan(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"code": 403, "message": "Agent 未启用"})
 		return
 	}
+	a.applyExecOptionsFromConfig(cfg)
 
 	// 从 map 中取出编排器（取出后删除，ConfirmPlan 只能调用一次）
 	a.orchMu.Lock()

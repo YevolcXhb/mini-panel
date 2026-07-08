@@ -26,14 +26,16 @@ func (s *AgentService) GetConfig(userID uint) (*model.AgentConfig, error) {
 // UpdateConfig 更新配置
 func (s *AgentService) UpdateConfig(userID uint, cfg *model.AgentConfig) error {
 	updates := map[string]interface{}{
-		"provider":      cfg.Provider,
-		"base_url":      cfg.BaseURL,
-		"model":         cfg.Model,
-		"temperature":   cfg.Temperature,
-		"max_tokens":    cfg.MaxTokens,
-		"enabled":       cfg.Enabled,
-		"system_prompt": cfg.SystemPrompt,
-		"skills":        cfg.Skills,
+		"provider":                 cfg.Provider,
+		"base_url":                 cfg.BaseURL,
+		"model":                    cfg.Model,
+		"temperature":              cfg.Temperature,
+		"max_tokens":               cfg.MaxTokens,
+		"enabled":                  cfg.Enabled,
+		"system_prompt":            cfg.SystemPrompt,
+		"skills":                   cfg.Skills,
+		"allow_dangerous_commands": cfg.AllowDangerousCommands,
+		"exec_timeout_seconds":     cfg.ExecTimeoutSeconds,
 	}
 	if cfg.APIKey != "" {
 		updates["api_key"] = cfg.APIKey

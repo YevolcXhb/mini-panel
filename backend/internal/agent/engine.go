@@ -141,7 +141,15 @@ func (e *Engine) RunWithConfirm(ctx context.Context, sessionID uint, toolCallID 
 			Content:    targetTC.Function.Arguments,
 		}
 
+		// 用户已确认：临时允许危险命令执行（仅本次调用）
+		prevOpts := tools.GetExecOptionsForTest()
+		tools.SetExecOptions(tools.ExecOptions{
+			AllowDangerous: true,
+			Timeout:        prevOpts.Timeout,
+		})
 		toolResult := e.executor.Execute(ctx, *targetTC)
+		// 恢复原配置，避免影响后续同连接内的其他请求
+		tools.SetExecOptions(prevOpts)
 		resultContent = e.formatToolResult(toolResult)
 		global.LOG.Infof("[Engine] 会话%d: 确认执行的工具%s完成，成功=%v，结果长度=%d",
 			sessionID, targetTC.Function.Name, toolResult.Success, len(resultContent))
