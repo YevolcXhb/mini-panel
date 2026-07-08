@@ -42,7 +42,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   Odometer, Folder, Monitor, Cpu, Box, Shop, Timer, Document, Setting,
@@ -56,11 +56,11 @@ const auth = useAuthStore()
 const themeStore = useThemeStore()
 const sidebarCollapsed = ref(false)
 
-const menus = [
+const allMenus = [
   { path: '/dashboard', label: '仪表盘', icon: Odometer },
   { path: '/monitor', label: '监控中心', icon: Monitor },
   { path: '/backups', label: '备份恢复', icon: Folder },
-  { path: '/users', label: '用户管理', icon: User },
+  { path: '/users', label: '用户管理', icon: User, adminOnly: true },
   { path: '/containers', label: '容器管理', icon: Box },
   { path: '/apps', label: '应用商店', icon: Shop },
   { path: '/websites', label: '网站管理', icon: Monitor },
@@ -74,6 +74,16 @@ const menus = [
   { path: '/logs', label: '系统日志', icon: Document },
   { path: '/settings', label: '设置', icon: Setting },
 ]
+
+const menus = computed(() => {
+  // 管理员拥有全部菜单
+  if (auth.isAdmin) return allMenus
+  // 普通用户：按权限过滤 + 隐藏 adminOnly
+  return allMenus.filter(m => {
+    if (m.adminOnly) return false
+    return auth.hasFeature(m.path)
+  })
+})
 
 function logout() {
   authApi.logout()

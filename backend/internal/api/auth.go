@@ -1,4 +1,4 @@
-﻿package api
+package api
 
 import (
 	"encoding/base64"
@@ -21,10 +21,10 @@ func NewAuthAPI() *AuthAPI {
 }
 
 type ipTracker struct {
-	mu         sync.Mutex
-	failures   map[string]int
-	lockUntil  map[string]time.Time
-	lastFail   map[string]time.Time
+	mu        sync.Mutex
+	failures  map[string]int
+	lockUntil map[string]time.Time
+	lastFail  map[string]time.Time
 }
 
 var ipTrack = &ipTracker{
@@ -117,7 +117,7 @@ func (a *AuthAPI) Login(c *gin.Context) {
 
 	_ = a.service.InitAdmin("admin", "admin123")
 
-	token, err := a.service.Login(req.Username, req.Password, ip)
+	token, role, perms, err := a.service.Login(req.Username, req.Password, ip)
 	if err != nil {
 		ipTrack.recordFailure(ip)
 		c.JSON(http.StatusUnauthorized, dto.Response{Code: 401, Message: err.Error()})
@@ -125,7 +125,7 @@ func (a *AuthAPI) Login(c *gin.Context) {
 	}
 
 	ipTrack.recordSuccess(ip)
-	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: dto.LoginResponse{Token: token, Username: req.Username}})
+	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: dto.LoginResponse{Token: token, Username: req.Username, Role: role, Permissions: perms}})
 }
 
 func (a *AuthAPI) Logout(c *gin.Context) {

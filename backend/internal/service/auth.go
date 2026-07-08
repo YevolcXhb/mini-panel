@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -37,28 +38,47 @@ func (s *AuthService) CheckLock(username, ip string) (*time.Time, error) {
 	return lock.LockedUntil, nil
 }
 
-func (s *AuthService) Login(username, password, ip string) (string, error) {
+func (s *AuthService) Login(username, password, ip string) (string, string, []string, error) {
 	lockUntil, _ := s.CheckLock(username, ip)
 	if lockUntil != nil {
 		remaining := int(time.Until(*lockUntil).Minutes())
 		if remaining > 0 {
 			s.recordAttempt(username, ip, false, nil)
-			return "", fmt.Errorf("account locked, try again in %d minutes", remaining)
+			return "", "", nil, fmt.Errorf("account locked, try again in %d minutes", remaining)
 		}
 	}
 
 	user, err := s.userRepo.GetByUsername(username)
 	if err != nil {
 		s.recordFailedAttempt(username, ip)
-		return "", fmt.Errorf("invalid credentials")
+		return "", "", nil, fmt.Errorf("invalid credentials")
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)); err != nil {
 		s.recordFailedAttempt(username, ip)
-		return "", fmt.Errorf("invalid credentials")
+		return "", "", nil, fmt.Errorf("invalid credentials")
 	}
 
 	s.recordAttempt(username, ip, true, nil)
-	return middleware.GenerateToken(username, user.Role, user.ID)
+	perms := parsePermissions(user.Permissions)
+	if user.Role == "admin" && len(perms) == 0 {
+		perms = AdminFeatures()
+	}
+	token, err := middleware.GenerateToken(username, user.Role, user.ID, perms)
+	if err != nil {
+		return "", "", nil, err
+	}
+	return token, user.Role, perms, nil
+}
+
+func parsePermissions(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	var arr []string
+	if err := json.Unmarshal([]byte(raw), &arr); err != nil {
+		return nil
+	}
+	return arr
 }
 
 func (s *AuthService) recordFailedAttempt(username, ip string) {

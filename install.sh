@@ -70,7 +70,7 @@ get_latest_version() {
 
 VERSION=$(get_latest_version)
 if [ -z "$VERSION" ]; then
-    VERSION="4.6.0"
+    VERSION="5.0.0"
     log_warn "Failed to detect latest version, fallback to v${VERSION}"
 else
     log_info "Latest version detected: v${VERSION}"

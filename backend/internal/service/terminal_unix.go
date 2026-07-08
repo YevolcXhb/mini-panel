@@ -12,7 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func NewTerminalSession(id string, conn *websocket.Conn, shell string) (*TerminalSession, error) {
+func NewTerminalSession(id string, conn *websocket.Conn, shell string, role string) (*TerminalSession, error) {
 	if shell == "" {
 		shell = "/bin/bash"
 		if _, err := os.Stat(shell); err != nil {
@@ -21,9 +21,19 @@ func NewTerminalSession(id string, conn *websocket.Conn, shell string) (*Termina
 	}
 
 	if ptmx, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0); err == nil {
-		return newPTYSession(id, conn, shell, ptmx)
+		sess, err := newPTYSession(id, conn, shell, ptmx)
+		if err != nil {
+			return nil, err
+		}
+		sess.role = role
+		return sess, nil
 	}
-	return newExecSession(id, conn, shell)
+	sess, err := newExecSession(id, conn, shell)
+	if err != nil {
+		return nil, err
+	}
+	sess.role = role
+	return sess, nil
 }
 
 func newPTYSession(id string, conn *websocket.Conn, shell string, ptmx *os.File) (*TerminalSession, error) {

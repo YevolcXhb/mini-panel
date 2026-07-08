@@ -112,6 +112,12 @@ func NewRouter() *gin.Engine {
 		apiV1.POST("/settings/reset", setting.Reset)
 		apiV1.POST("/settings/clear-data", setting.ClearData)
 
+		update := api.NewUpdateAPI()
+		apiV1.GET("/update/check", update.Check)
+		apiV1.POST("/update/apply", update.Apply)
+		apiV1.GET("/update/status", update.Status)
+		apiV1.GET("/update/log", update.Log)
+
 		monitor := api.NewMonitorAPI()
 		apiV1.GET("/monitor/history", monitor.List)
 		apiV1.GET("/monitor/realtime", monitor.GetRealtime)
@@ -207,6 +213,7 @@ func NewRouter() *gin.Engine {
 		adminV1 := apiV1.Group("/")
 		adminV1.Use(middleware.AdminMiddleware())
 		{
+			adminV1.GET("/users/features", user.ListFeatures)
 			adminV1.GET("/users", user.List)
 			adminV1.POST("/users", user.Create)
 			adminV1.PUT("/users/:id", user.Update)

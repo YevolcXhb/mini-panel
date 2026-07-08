@@ -55,13 +55,19 @@ func (a *TerminalAPI) HandleWS(c *gin.Context) {
 	}
 	defer conn.Close()
 
-	_, ok := service.GetSession(id)
-	if ok {
+	role := "user"
+	if claims, ok := token.Claims.(jwt.MapClaims); ok {
+		if r, ok := claims["role"].(string); ok {
+			role = r
+		}
+	}
+
+	if _, ok := service.GetSession(id); ok {
 		service.RemoveSession(id)
 	}
 
 	shell := c.Query("shell")
-	sess, err := service.NewTerminalSession(id, conn, shell)
+	sess, err := service.NewTerminalSession(id, conn, shell, role)
 	if err != nil {
 		conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Error: %v\n", err)))
 		return

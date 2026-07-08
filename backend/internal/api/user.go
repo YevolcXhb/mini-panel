@@ -16,6 +16,11 @@ func NewUserAPI() *UserAPI {
 	return &UserAPI{service: service.NewUserService()}
 }
 
+// ListFeatures 返回面板全部功能模块列表（供编辑用户时勾选）
+func (h *UserAPI) ListFeatures(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": service.Features})
+}
+
 func (h *UserAPI) List(c *gin.Context) {
 	users, err := h.service.List()
 	if err != nil {
@@ -27,15 +32,16 @@ func (h *UserAPI) List(c *gin.Context) {
 
 func (h *UserAPI) Create(c *gin.Context) {
 	var req struct {
-		Username string `json:"username" binding:"required"`
-		Password string `json:"password" binding:"required"`
-		Role     string `json:"role"`
+		Username    string   `json:"username" binding:"required"`
+		Password    string   `json:"password" binding:"required"`
+		Role        string   `json:"role"`
+		Permissions []string `json:"permissions"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": 400, "message": err.Error()})
 		return
 	}
-	user, err := h.service.Create(req.Username, req.Password, req.Role)
+	user, err := h.service.Create(req.Username, req.Password, req.Role, req.Permissions)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
 		return
@@ -46,13 +52,14 @@ func (h *UserAPI) Create(c *gin.Context) {
 func (h *UserAPI) Update(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	var req struct {
-		Role string `json:"role"`
+		Role        string   `json:"role"`
+		Permissions []string `json:"permissions"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": 400, "message": err.Error()})
 		return
 	}
-	if err := h.service.Update(uint(id), req.Role); err != nil {
+	if err := h.service.Update(uint(id), req.Role, req.Permissions); err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
 		return
 	}

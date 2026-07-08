@@ -111,7 +111,7 @@ async function handleLogin() {
       captcha: form.captcha,
       captcha_id: captchaID.value
     })
-    auth.setAuth(res.data.token, res.data.username)
+    auth.setAuth(res.data.token, res.data.username, res.data.role, res.data.permissions || [])
     router.push('/')
   } catch (e: any) {
     const msg = e?.response?.data?.message || e?.message || '登录失败'

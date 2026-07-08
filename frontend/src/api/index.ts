@@ -85,7 +85,7 @@ export const fileApi = {
 	    files.forEach(f => form.append('files', f))
 	    return api.post('/files/upload-multiple', form)
 	  },
-	  downloadZip: (path: string) => api.get('/files/download-zip', { params: { path }, responseType: 'blob' }),
+	  downloadZip: (path: string) => api.get('/files/download-zip', { params: { path } }),
 	  rename: (path: string, newName: string) => api.post('/files/rename', { path, new_name: newName }),
 	  chmod: (path: string, mode: string, recursive: boolean) => api.post('/files/chmod', { path, mode, recursive }),
 	  compress: (paths: string[], output: string, format: string) => api.post('/files/compress', { paths, output, format }),
@@ -178,6 +178,13 @@ export const versionApi = {
   get: () => api.get('/version')
 }
 
+export const updateApi = {
+  check: () => api.get('/update/check'),
+  apply: () => api.post('/update/apply'),
+  status: () => api.get('/update/status'),
+  log: (tail = 100) => api.get('/update/log', { params: { tail } })
+}
+
 export const monitorApi = {
 	  history: (limit?: number) => api.get('/monitor/history', { params: { limit } }),
 	  realtime: () => api.get('/monitor/realtime')
@@ -242,6 +249,7 @@ export const systemApi = {
 
 export const userApi = {
   list: () => api.get('/users'),
+  listFeatures: () => api.get('/users/features'),
   create: (data: any) => api.post('/users', data),
   update: (id: number, data: any) => api.put(`/users/${id}`, data),
   resetPassword: (id: number, data: any) => api.post(`/users/${id}/reset-password`, data),

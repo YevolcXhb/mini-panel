@@ -42,6 +42,8 @@ router.beforeEach((to, _from, next) => {
   const auth = useAuthStore()
   if (to.path !== '/login' && !auth.token) {
     next('/login')
+  } else if (to.path === '/users' && auth.role !== 'admin') {
+    next('/dashboard')
   } else {
     next()
   }
