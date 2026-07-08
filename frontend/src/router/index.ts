@@ -1,6 +1,25 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '../store'
 
+// 需要进行功能权限检查的路由（登录页和首页除外）
+const permissionRoutes: Record<string, boolean> = {
+  '/dashboard': true,
+  '/monitor': true,
+  '/backups': true,
+  '/containers': true,
+  '/apps': true,
+  '/websites': true,
+  '/databases': true,
+  '/firewall': true,
+  '/files': true,
+  '/processes': true,
+  '/cronjobs': true,
+  '/ssh': true,
+  '/agent': true,
+  '/logs': true,
+  '/settings': true
+}
+
 const routes = [
   {
     path: '/login',
@@ -42,11 +61,18 @@ router.beforeEach((to, _from, next) => {
   const auth = useAuthStore()
   if (to.path !== '/login' && !auth.token) {
     next('/login')
-  } else if (to.path === '/users' && auth.role !== 'admin') {
-    next('/dashboard')
-  } else {
-    next()
+    return
   }
+  if (to.path === '/users' && auth.role !== 'admin') {
+    next('/dashboard')
+    return
+  }
+  // 普通用户访问无权限页面时跳回 dashboard
+  if (to.path !== '/login' && auth.token && auth.role !== 'admin' && permissionRoutes[to.path] && !auth.hasFeature(to.path)) {
+    next('/dashboard')
+    return
+  }
+  next()
 })
 
 export default router

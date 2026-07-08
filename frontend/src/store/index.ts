@@ -25,14 +25,24 @@ function decodeToken(token: string): { userId: number; role: string; permissions
 }
 
 export const useAuthStore = defineStore('auth', () => {
+  const DEFAULT_USER_PERMISSIONS = ['/dashboard', '/monitor', '/logs']
+
   const token = ref(localStorage.getItem('token') || '')
   const username = ref(localStorage.getItem('username') || '')
   const role = ref(localStorage.getItem('role') || '')
   const userId = ref(Number(localStorage.getItem('userId') || '0'))
-  const permissions = ref<string[]>(JSON.parse(localStorage.getItem('permissions') || '[]'))
+  const rawPermissions = JSON.parse(localStorage.getItem('permissions') || '[]')
+  const permissions = ref<string[]>(Array.isArray(rawPermissions) ? rawPermissions : [])
 
   const isLoggedIn = computed(() => !!token.value)
   const isAdmin = computed(() => role.value === 'admin')
+
+  // 兼容老数据：普通用户 permissions 为空时返回默认查看权限
+  const effectivePermissions = computed(() => {
+    if (role.value === 'admin') return []
+    if (!permissions.value || permissions.value.length === 0) return DEFAULT_USER_PERMISSIONS
+    return permissions.value
+  })
 
   function setAuth(t: string, u: string, r: string = '', perms: string[] = []) {
     token.value = t
@@ -67,10 +77,10 @@ export const useAuthStore = defineStore('auth', () => {
 
   function hasFeature(key: string): boolean {
     if (role.value === 'admin') return true
-    return permissions.value.includes(key)
+    return effectivePermissions.value.includes(key)
   }
 
-  return { token, username, role, userId, permissions, isLoggedIn, isAdmin, setAuth, clearAuth, hasFeature }
+  return { token, username, role, userId, permissions, isLoggedIn, isAdmin, setAuth, clearAuth, hasFeature, effectivePermissions }
 })
 
 type ThemeMode = 'light' | 'dark' | 'auto'

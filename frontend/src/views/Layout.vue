@@ -79,10 +79,15 @@ const menus = computed(() => {
   // 管理员拥有全部菜单
   if (auth.isAdmin) return allMenus
   // 普通用户：按权限过滤 + 隐藏 adminOnly
-  return allMenus.filter(m => {
+  const filtered = allMenus.filter(m => {
     if (m.adminOnly) return false
     return auth.hasFeature(m.path)
   })
+  // 兜底：过滤后为空时至少显示默认菜单（防止老用户 permissions 为空导致左侧空白）
+  if (filtered.length === 0) {
+    return allMenus.filter(m => !m.adminOnly && ['/dashboard', '/monitor', '/logs'].includes(m.path))
+  }
+  return filtered
 })
 
 function logout() {
