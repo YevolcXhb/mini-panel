@@ -237,6 +237,23 @@ DREOF
     fi
 
     log_ok "Binary installed to ${INSTALL_DIR}"
+
+    # Check if frontend static files exist
+    if [ ! -f "${INSTALL_DIR}/static/index.html" ]; then
+        log_warn "Frontend static files not found in release package!"
+        log_info "Attempting to download frontend assets separately..."
+        local static_url="https://github.com/${GITHUB_REPO}/releases/download/v${VERSION}/static.tar.gz"
+        if download_with_fallback "$static_url" "${INSTALL_DIR}/static.tar.gz"; then
+            mkdir -p "${INSTALL_DIR}/static"
+            tar -xzf "${INSTALL_DIR}/static.tar.gz" -C "${INSTALL_DIR}/static"
+            rm -f "${INSTALL_DIR}/static.tar.gz"
+            log_ok "Frontend assets downloaded and extracted"
+        else
+            log_err "Failed to download frontend assets!"
+            log_info "The panel will not work properly without frontend files."
+            log_info "Please build from source: git clone and run install.sh from source directory"
+        fi
+    fi
 }
 
 install_from_source() {

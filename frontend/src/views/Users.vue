@@ -106,7 +106,6 @@
                   v-for="f in group.features"
                   :key="f.key"
                   :value="f.key"
-                  :label="f.key"
                   class="perm-checkbox"
                 >
                   <div class="perm-item">

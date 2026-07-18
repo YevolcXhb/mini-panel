@@ -19,7 +19,6 @@ go.work.sum
 # Backend build outputs
 /backend/build/
 /backend/dist/
-/backend/static/
 /minipanel
 /minipanel-*
 
