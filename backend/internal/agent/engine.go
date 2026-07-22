@@ -204,6 +204,9 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 		select {
 		case <-ctx.Done():
 			global.LOG.Infof("[Engine] 会话%d: 上下文取消，退出循环", sessionID)
+			// 保存中断标记：如果最后一条 assistant 消息含 tool_calls 但缺少 tool result，
+			// 补充虚拟 result 到数据库，避免下次对话时 LLM API 400 错误
+			e.saveInterruptedToolResults(sessionID, messages)
 			return ctx.Err()
 		default:
 		}
@@ -455,6 +458,37 @@ func (e *Engine) formatToolResult(result tools.ToolResult) string {
 		return fmt.Sprintf("执行失败: %s\n输出:\n%s", result.Error, result.Result)
 	}
 	return fmt.Sprintf("执行失败: %s", result.Error)
+}
+
+// saveInterruptedToolResults 检查内存中的消息列表，如果最后一条 assistant 消息
+// 含有 tool_calls 但缺少对应的 tool result（说明用户中断了回复），
+// 则将虚拟中断 result 保存到数据库，避免下次对话时 LLM API 报 400 错误。
+func (e *Engine) saveInterruptedToolResults(sessionID uint, messages []provider.LLMMessage) {
+	if len(messages) == 0 {
+		return
+	}
+
+	// 收集已有的 tool_call_id
+	toolResults := make(map[string]bool)
+	for _, m := range messages {
+		if m.Role == "tool" && m.ToolCallID != "" {
+			toolResults[m.ToolCallID] = true
+		}
+	}
+
+	// 检查所有 assistant 消息的 tool_calls
+	for _, m := range messages {
+		if m.Role != "assistant" || len(m.ToolCalls) == 0 {
+			continue
+		}
+		for _, tc := range m.ToolCalls {
+			if !toolResults[tc.ID] {
+				global.LOG.Warnf("[Engine] 会话%d: 检测到中断的 tool_call(id=%s, name=%s)，保存中断标记",
+					sessionID, tc.ID, tc.Function.Name)
+				_ = e.sessionMgr.SaveToolResult(sessionID, tc.ID, tc.Function.Name, "[操作已中断：用户停止了回复]")
+			}
+		}
+	}
 }
 
 func (e *Engine) chatWithRetry(ctx context.Context, messages []provider.LLMMessage, tools []provider.ToolDefinition, maxRetries int) (*provider.LLMResponse, error) {

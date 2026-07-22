@@ -63,7 +63,56 @@ func (sm *SessionManager) LoadMessages(sessionID uint) ([]provider.LLMMessage, e
 		}
 		llmMessages = append(llmMessages, msg)
 	}
+
+	// 修复中断导致的消息序列不完整：
+	// 如果 assistant 消息含 tool_calls，但后续缺少对应的 tool result，
+	// 自动补充"操作已中断"的虚拟 result，避免 LLM API 400 错误
+	llmMessages = sm.fixIncompleteToolCalls(sessionID, llmMessages)
+
 	return llmMessages, nil
+}
+
+// fixIncompleteToolCalls 修复不完整的 tool_calls 消息对。
+// 当用户中断回复时，assistant(tool_calls) 消息可能已保存但 tool result 未保存，
+// 导致下次对话时 LLM API 报错 "tool_calls must be followed by tool messages"。
+// 此函数检测并补充缺失的虚拟 tool result。
+func (sm *SessionManager) fixIncompleteToolCalls(sessionID uint, messages []provider.LLMMessage) []provider.LLMMessage {
+	if len(messages) == 0 {
+		return messages
+	}
+
+	// 收集已有的 tool_call_id → tool result 映射
+	toolResults := make(map[string]bool)
+	for _, m := range messages {
+		if m.Role == "tool" && m.ToolCallID != "" {
+			toolResults[m.ToolCallID] = true
+		}
+	}
+
+	// 检查每条 assistant 消息的 tool_calls 是否都有对应 result
+	var result []provider.LLMMessage
+	for _, m := range messages {
+		result = append(result, m)
+
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+			for _, tc := range m.ToolCalls {
+				if !toolResults[tc.ID] {
+					// 缺少对应的 tool result，补充虚拟中断消息
+					global.LOG.Warnf("[Session] 检测到不完整的 tool_call(id=%s, name=%s)，补充中断标记",
+						tc.ID, tc.Function.Name)
+					result = append(result, provider.LLMMessage{
+						Role:       "tool",
+						ToolCallID: tc.ID,
+						Content:    "[操作已中断：用户停止了回复]",
+					})
+					// 同步保存到数据库，避免下次重复修复
+					_ = sm.SaveToolResult(sessionID, tc.ID, tc.Function.Name, "[操作已中断：用户停止了回复]")
+				}
+			}
+		}
+	}
+
+	return result
 }
 
 func (sm *SessionManager) SaveUserMessage(sessionID uint, content string) error {
