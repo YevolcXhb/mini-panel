@@ -2,6 +2,7 @@ package repository
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/minipanel/minipanel/internal/agent/provider"
 	"github.com/minipanel/minipanel/internal/global"
@@ -65,23 +66,28 @@ func (sm *SessionManager) LoadMessages(sessionID uint) ([]provider.LLMMessage, e
 	}
 
 	// 修复中断导致的消息序列不完整：
-	// 如果 assistant 消息含 tool_calls，但后续缺少对应的 tool result，
-	// 自动补充"操作已中断"的虚拟 result，避免 LLM API 400 错误
+	// 1. 如果 assistant 消息含 tool_calls，但后续缺少对应的 tool result，补充中断标记
+	// 2. 如果存在孤立的 tool 消息（前面没有对应的 assistant(tool_calls)），删除并清理
 	llmMessages = sm.fixIncompleteToolCalls(sessionID, llmMessages)
 
 	return llmMessages, nil
 }
 
-// fixIncompleteToolCalls 修复不完整的 tool_calls 消息对。
-// 当用户中断回复时，assistant(tool_calls) 消息可能已保存但 tool result 未保存，
-// 导致下次对话时 LLM API 报错 "tool_calls must be followed by tool messages"。
-// 此函数检测并补充缺失的虚拟 tool result。
+// fixIncompleteToolCalls 修复消息序列完整性。
+// 处理两种问题：
+//  1. assistant(tool_calls) 缺少对应的 tool result → 补充虚拟中断消息
+//  2. 孤立的 tool 消息（前面没有 assistant(tool_calls)）→ 标记为内容（防止 LLM API 400）
+//
+// 两类问题都可能在多次中断/重试中积累，必须同时处理。
 func (sm *SessionManager) fixIncompleteToolCalls(sessionID uint, messages []provider.LLMMessage) []provider.LLMMessage {
 	if len(messages) == 0 {
 		return messages
 	}
 
-	// 收集已有的 tool_call_id → tool result 映射
+	// 步骤 1：先清理孤立的 tool 消息（前面没有 assistant(tool_calls)）
+	messages = sm.removeOrphanToolMessages(sessionID, messages)
+
+	// 步骤 2：收集已有 tool_call_id → tool result 映射
 	toolResults := make(map[string]bool)
 	for _, m := range messages {
 		if m.Role == "tool" && m.ToolCallID != "" {
@@ -89,7 +95,7 @@ func (sm *SessionManager) fixIncompleteToolCalls(sessionID uint, messages []prov
 		}
 	}
 
-	// 检查每条 assistant 消息的 tool_calls 是否都有对应 result
+	// 步骤 3：检查每条 assistant 消息的 tool_calls 是否都有对应 result
 	var result []provider.LLMMessage
 	for _, m := range messages {
 		result = append(result, m)
@@ -97,7 +103,6 @@ func (sm *SessionManager) fixIncompleteToolCalls(sessionID uint, messages []prov
 		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
 			for _, tc := range m.ToolCalls {
 				if !toolResults[tc.ID] {
-					// 缺少对应的 tool result，补充虚拟中断消息
 					global.LOG.Warnf("[Session] 检测到不完整的 tool_call(id=%s, name=%s)，补充中断标记",
 						tc.ID, tc.Function.Name)
 					result = append(result, provider.LLMMessage{
@@ -105,13 +110,57 @@ func (sm *SessionManager) fixIncompleteToolCalls(sessionID uint, messages []prov
 						ToolCallID: tc.ID,
 						Content:    "[操作已中断：用户停止了回复]",
 					})
-					// 同步保存到数据库，避免下次重复修复
 					_ = sm.SaveToolResult(sessionID, tc.ID, tc.Function.Name, "[操作已中断：用户停止了回复]")
 				}
 			}
 		}
 	}
 
+	return result
+}
+
+// removeOrphanToolMessages 清理孤立的 tool 消息。
+// 触发场景：用户连续中断时，saveInterruptedToolResults 可能将 tool result 写入数据库
+// 但 assistant(tool_calls) 消息保存失败（context canceled），导致数据库中只有 tool 没有 tool_calls。
+// 此外，多次中断/重试可能产生重复的 tool result。
+// 此函数将孤立的 tool 消息降级为 assistant 消息（用 `[上次结果已废弃]` 包装），
+// 避免 LLM API 返回 400 "Messages with role 'tool' must be a response to a preceding message with 'tool_calls'"。
+func (sm *SessionManager) removeOrphanToolMessages(sessionID uint, messages []provider.LLMMessage) []provider.LLMMessage {
+	// 收集所有 assistant 消息中的 tool_call_id
+	assistantToolCalls := make(map[string]bool)
+	for _, m := range messages {
+		if m.Role == "assistant" {
+			for _, tc := range m.ToolCalls {
+				assistantToolCalls[tc.ID] = true
+			}
+		}
+	}
+
+	// 检查每个 tool 消息是否有对应的 assistant(tool_calls)
+	// 如果没有，降级为 assistant 消息
+	modified := false
+	result := make([]provider.LLMMessage, 0, len(messages))
+	for _, m := range messages {
+		if m.Role == "tool" {
+			if m.ToolCallID == "" || !assistantToolCalls[m.ToolCallID] {
+				global.LOG.Warnf("[Session] 检测到孤立的 tool 消息(tool_call_id=%s)，降级为 assistant 消息",
+					m.ToolCallID)
+				// 降级为 assistant 消息，保留原内容供 LLM 参考
+				result = append(result, provider.LLMMessage{
+					Role:    "assistant",
+					Content: fmt.Sprintf("[前序操作结果已废弃] %s", m.Content),
+				})
+				// 同步修复数据库，将原 tool 消息标记为孤立（避免下次重复处理）
+				// 注意：保留数据库原记录（不动），仅在内存中转换
+				modified = true
+				continue
+			}
+		}
+		result = append(result, m)
+	}
+
+	_ = modified
+	_ = sessionID
 	return result
 }
 

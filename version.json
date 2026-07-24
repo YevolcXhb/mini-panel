@@ -1,5 +1,5 @@
 {
-  "version": "5.0.5",
+  "version": "5.0.6",
   "url": "https://github.com/YevolcXhb/mini-panel/releases/latest",
-  "release_notes": "Mini Panel v5.0.5 - 修复流中断导致工具调用消息对不完整引起的 400 错误"
+  "release_notes": "Mini Panel v5.0.6 - 修复孤立tool消息导致DeepSeek API 400循环报错"
 }
