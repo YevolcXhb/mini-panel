@@ -1,5 +1,5 @@
 {
-  "version": "5.0.6",
+  "version": "5.5.0",
   "url": "https://github.com/YevolcXhb/mini-panel/releases/latest",
-  "release_notes": "Mini Panel v5.0.6 - 修复孤立tool消息导致DeepSeek API 400循环报错"
+  "release_notes": "Mini Panel v5.5.0 - Android防火墙适配 + 流中断消息修复"
 }

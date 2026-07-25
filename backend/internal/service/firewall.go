@@ -22,6 +22,40 @@ func NewFirewallService() *FirewallService {
 	return &FirewallService{repo: repository.NewFirewallRepository(global.DB)}
 }
 
+// isAndroidEnv 检测是否在 Android chroot/容器环境中运行。
+// 通过检查 /proc/1/root/system/bin/iptables 是否存在来判断。
+// /proc/1/root/ 指向 Android init 进程的根目录，只有 root 权限可读。
+func isAndroidEnv() bool {
+	if _, err := os.Stat("/proc/1/root/system/bin/iptables"); err == nil {
+		return true
+	}
+	return false
+}
+
+// iptablesBase 返回调用 iptables 的命令前缀。
+// Android chroot 环境：通过 /proc/1/root/ 逃逸调用 Android 原生 iptables（legacy 后端）
+// 普通 Linux 环境：直接调用系统 iptables
+func iptablesBase() []string {
+	if isAndroidEnv() {
+		return []string{"chroot", "/proc/1/root/", "/system/bin/iptables"}
+	}
+	return []string{"iptables"}
+}
+
+// ip6tablesBase 返回调用 ip6tables 的命令前缀（IPv6）。
+func ip6tablesBase() []string {
+	if isAndroidEnv() {
+		return []string{"chroot", "/proc/1/root/", "/system/bin/ip6tables"}
+	}
+	return []string{"ip6tables"}
+}
+
+// iptablesCmd 创建一个 iptables 命令，自动选择 Android 原生或系统 iptables。
+func iptablesCmd(args ...string) *exec.Cmd {
+	base := iptablesBase()
+	return exec.Command(base[0], append(base[1:], args...)...)
+}
+
 func (s *FirewallService) Create(item *model.FirewallRule) error {
 	if item.Protocol == "" {
 		item.Protocol = "tcp"
@@ -49,6 +83,14 @@ func (s *FirewallService) Delete(id uint) error {
 
 func (s *FirewallService) getAvailableBackends() []string {
 	var backends []string
+
+	// 最高优先级：Android chroot 环境下的原生 iptables（legacy 后端）
+	// Ubuntu 的 iptables（nft 后端）与 Android 内核 netfilter ABI 不兼容，
+	// 必须通过 /proc/1/root/ 逃逸调用 Android 原生 iptables
+	if isAndroidEnv() {
+		backends = append(backends, "android-iptables")
+		global.LOG.Infof("[Firewall] 检测到 Android chroot 环境，使用 Android 原生 iptables")
+	}
 
 	// 优先级: nftables > iptables > firewalld > ufw
 	// 只要二进制存在就加入列表，实际启动时再逐个尝试是否可用
@@ -152,8 +194,8 @@ func (s *FirewallService) GetStatus() (map[string]interface{}, error) {
 			// nft 命令存在但执行失败，可能是内核 netfilter 子系统不可用
 			result["kernel_warning"] = fmt.Sprintf("nft 命令执行失败: %s（可能内核 netfilter 模块不可用）", strings.TrimSpace(string(out)))
 		}
-	case "iptables":
-		out, err := exec.Command("iptables", "-L", "-n").CombinedOutput()
+	case "android-iptables", "iptables":
+		out, err := iptablesCmd("-L", "-n").CombinedOutput()
 		result["running"] = err == nil && len(out) > 0
 		if err != nil {
 			errStr := strings.TrimSpace(string(out))
@@ -164,6 +206,10 @@ func (s *FirewallService) GetStatus() (map[string]interface{}, error) {
 			} else {
 				result["kernel_warning"] = fmt.Sprintf("iptables 执行失败: %s（可能内核 netfilter 不可用）", errStr)
 			}
+		}
+		if backend == "android-iptables" {
+			result["version"] = "Android iptables (legacy)"
+			result["android_env"] = true
 		}
 	}
 	return result, nil
@@ -206,7 +252,7 @@ func (s *FirewallService) diagnoseNoBackend() string {
 
 	// 检查内核模块
 	if syscmd.Which("iptables") {
-		if _, err := exec.Command("iptables", "-L", "-n").CombinedOutput(); err != nil {
+		if _, err := iptablesCmd("-L", "-n").CombinedOutput(); err != nil {
 			reasons = append(reasons, "iptables 命令存在但执行失败，可能内核 netfilter 模块未加载")
 			reasons = append(reasons, "  请尝试: modprobe ip_tables && modprobe iptable_filter")
 		}
@@ -253,7 +299,11 @@ func (s *FirewallService) checkKernelModule(backend string) string {
 		if err != nil {
 			return fmt.Sprintf("ip_tables 内核模块不可用: %s", strings.TrimSpace(string(out)))
 		}
-	case "iptables":
+	case "android-iptables", "iptables":
+		// Android 环境下内核模块已内置，无需 modprobe
+		if isAndroidEnv() {
+			return ""
+		}
 		out, err := exec.Command("modprobe", "-n", "ip_tables").CombinedOutput()
 		if err != nil {
 			return fmt.Sprintf("ip_tables 内核模块不可用: %s", strings.TrimSpace(string(out)))
@@ -303,20 +353,29 @@ func (s *FirewallService) Diagnose() map[string]interface{} {
 	}
 	report["in_container"] = isContainer
 
+	// Android 环境检测
+	androidEnv := isAndroidEnv()
+	report["android_env"] = androidEnv
+	if androidEnv {
+		report["container_type"] = "android-chroot"
+		report["in_container"] = true
+	}
+
 	// 后端工具检测
 	backends := s.getAvailableBackends()
 	report["available_backends"] = backends
 	report["tools_installed"] = map[string]bool{
-		"nft":          syscmd.Which("nft"),
-		"iptables":     syscmd.Which("iptables"),
-		"firewall-cmd": syscmd.Which("firewall-cmd"),
-		"ufw":          syscmd.Which("ufw"),
+		"nft":              syscmd.Which("nft"),
+		"iptables":         syscmd.Which("iptables"),
+		"firewall-cmd":     syscmd.Which("firewall-cmd"),
+		"ufw":              syscmd.Which("ufw"),
+		"android-iptables": androidEnv,
 	}
 
 	// 内核模块检测
 	kernelModules := map[string]string{}
 	if syscmd.Which("iptables") {
-		if out, err := exec.Command("iptables", "-L", "-n").CombinedOutput(); err != nil {
+		if out, err := iptablesCmd("-L", "-n").CombinedOutput(); err != nil {
 			kernelModules["ip_tables"] = fmt.Sprintf("unavailable: %s", strings.TrimSpace(string(out)))
 		} else {
 			kernelModules["ip_tables"] = "ok"
@@ -338,6 +397,9 @@ func (s *FirewallService) Diagnose() map[string]interface{} {
 	} else if isRoot, ok := report["is_root"].(bool); !ok || !isRoot {
 		report["summary"] = "防火墙工具已安装，但 MiniPanel 未以 root 运行，操作将被拒绝"
 		report["recommendation"] = "请以 root 用户或 sudo 启动 MiniPanel"
+	} else if androidEnv {
+		report["summary"] = "Android chroot 环境检测到，使用 Android 原生 iptables (legacy)"
+		report["recommendation"] = "通过 /proc/1/root/ 逃逸调用 Android 原生 iptables，与 Android 内核 netfilter 完全兼容。注意：规则重启后丢失，建议使用 Magisk service.d 持久化。"
 	} else if isContainer {
 		report["summary"] = "在容器环境中运行，netfilter 操作可能受限"
 		report["recommendation"] = "建议在宿主机上使用防火墙功能，或在容器启动时加 --privileged 参数"
@@ -399,7 +461,7 @@ func (s *FirewallService) Start() error {
 			} else {
 				_, err = s.ApplyRulesForBackend(backend)
 			}
-		case "iptables":
+		case "android-iptables", "iptables":
 			_, err = s.ApplyRulesForBackend(backend)
 		}
 
@@ -436,8 +498,8 @@ func (s *FirewallService) checkBackendRunning(backend string) bool {
 	case "nftables":
 		out, err := exec.Command("nft", "list", "ruleset").CombinedOutput()
 		return err == nil && strings.Contains(string(out), "table inet filter")
-	case "iptables":
-		out, err := exec.Command("iptables", "-L", "-n").CombinedOutput()
+	case "android-iptables", "iptables":
+		out, err := iptablesCmd("-L", "-n").CombinedOutput()
 		return err == nil && len(out) > 0
 	}
 	return false
@@ -455,14 +517,14 @@ func (s *FirewallService) Stop() error {
 			cmd.Run()
 		case "nftables":
 			exec.Command("nft", "flush", "ruleset").Run()
-		case "iptables":
+		case "android-iptables", "iptables":
 			chains := []string{"INPUT", "OUTPUT", "FORWARD"}
 			for _, chain := range chains {
-				exec.Command("iptables", "-F", chain).Run()
+				iptablesCmd("-F", chain).Run()
 			}
-			exec.Command("iptables", "-P", "INPUT", "ACCEPT").Run()
-			exec.Command("iptables", "-P", "OUTPUT", "ACCEPT").Run()
-			exec.Command("iptables", "-P", "FORWARD", "ACCEPT").Run()
+			iptablesCmd("-P", "INPUT", "ACCEPT").Run()
+			iptablesCmd("-P", "OUTPUT", "ACCEPT").Run()
+			iptablesCmd("-P", "FORWARD", "ACCEPT").Run()
 		}
 	}
 	return nil
@@ -479,14 +541,14 @@ func (s *FirewallService) flushRulesForBackend(backend string) error {
 	case "nftables":
 		exec.Command("nft", "flush", "ruleset").Run()
 		s.ensureNftablesBase()
-	case "iptables":
+	case "android-iptables", "iptables":
 		chains := []string{"INPUT", "OUTPUT", "FORWARD"}
 		for _, chain := range chains {
-			exec.Command("iptables", "-F", chain).Run()
+			iptablesCmd("-F", chain).Run()
 		}
-		exec.Command("iptables", "-P", "INPUT", "ACCEPT").Run()
-		exec.Command("iptables", "-P", "OUTPUT", "ACCEPT").Run()
-		exec.Command("iptables", "-P", "FORWARD", "ACCEPT").Run()
+		iptablesCmd("-P", "INPUT", "ACCEPT").Run()
+		iptablesCmd("-P", "OUTPUT", "ACCEPT").Run()
+		iptablesCmd("-P", "FORWARD", "ACCEPT").Run()
 	}
 	return nil
 }
@@ -586,7 +648,7 @@ func (s *FirewallService) ApplyRulesForBackend(backend string) (string, error) {
 			err = s.applyUfwRule(&rule)
 		case "nftables":
 			err = s.applyNftablesRule(&rule)
-		case "iptables":
+		case "android-iptables", "iptables":
 			err = s.applyIptablesRule(&rule)
 		default:
 			err = fmt.Errorf("不支持的防火墙后端: %s", backend)
@@ -624,9 +686,9 @@ func (s *FirewallService) allowLoopbackForBackend(backend string) {
 		exec.Command("nft", "add", "rule", "inet", "filter", "output", "oif", "lo", "accept").Run()
 		// nftables ct state需要内核支持ct模块，精简内核可能没有，默认不添加
 		// 只开放用户指定端口即可满足基本需求
-	case "iptables":
-		exec.Command("iptables", "-A", "INPUT", "-i", "lo", "-j", "ACCEPT").Run()
-		exec.Command("iptables", "-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT").Run()
+	case "android-iptables", "iptables":
+		iptablesCmd("-A", "INPUT", "-i", "lo", "-j", "ACCEPT").Run()
+		iptablesCmd("-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT").Run()
 		// 不使用-m state，避免依赖conntrack模块，精简内核环境下不需要状态检测
 	}
 }
@@ -786,18 +848,18 @@ func (s *FirewallService) applyIptablesRule(rule *model.FirewallRule) error {
 				continue
 			}
 			// 检查是否是已存在规则（简单判断，忽略错误继续添加）
-			checkCmd := exec.Command("iptables", "-C", chain, "-p", proto, "--dport", port, "-j", action)
+			checkCmd := iptablesCmd("-C", chain, "-p", proto, "--dport", port, "-j", action)
 			if err := checkCmd.Run(); err != nil {
-				addCmd := exec.Command("iptables", "-A", chain, "-p", proto, "--dport", port, "-j", action)
+				addCmd := iptablesCmd("-A", chain, "-p", proto, "--dport", port, "-j", action)
 				if out, err := addCmd.CombinedOutput(); err != nil {
 					return fmt.Errorf("端口 %s 添加失败: %s", port, strings.TrimSpace(string(out)))
 				}
 			}
 		}
 	} else if rule.Type == "ip" && rule.IP != "" {
-		checkCmd := exec.Command("iptables", "-C", chain, "-s", rule.IP, "-j", action)
+		checkCmd := iptablesCmd("-C", chain, "-s", rule.IP, "-j", action)
 		if err := checkCmd.Run(); err != nil {
-			addCmd := exec.Command("iptables", "-A", chain, "-s", rule.IP, "-j", action)
+			addCmd := iptablesCmd("-A", chain, "-s", rule.IP, "-j", action)
 			if out, err := addCmd.CombinedOutput(); err != nil {
 				return fmt.Errorf("%s", strings.TrimSpace(string(out)))
 			}

@@ -188,6 +188,7 @@ const firewallType = computed(() => {
   const name = serviceStatus.value.backend || serviceStatus.value.name || 'firewalld'
   if (name === 'ufw') return 'UFW'
   if (name === 'nftables') return 'nftables'
+  if (name === 'android-iptables') return 'Android iptables'
   if (name === 'iptables') return 'iptables'
   return 'firewalld'
 })
