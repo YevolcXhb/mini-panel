@@ -110,3 +110,58 @@ func (h *FirewallAPI) Diagnose(c *gin.Context) {
 	report := h.service.Diagnose()
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": report})
 }
+
+// LiveRules 实时查看系统 iptables 规则
+func (h *FirewallAPI) LiveRules(c *gin.Context) {
+	chain := c.Query("chain")
+	output, err := h.service.LiveRules(chain)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": output})
+}
+
+// InsertRule 插入规则到指定位置
+func (h *FirewallAPI) InsertRule(c *gin.Context) {
+	var req struct {
+		Chain    string   `json:"chain"`
+		Position int      `json:"position"`
+		Spec     []string `json:"spec"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 400, "message": err.Error()})
+		return
+	}
+	if err := h.service.InsertRule(req.Chain, req.Position, req.Spec); err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "规则已插入"})
+}
+
+// DeleteLiveRule 按行号删除系统规则
+func (h *FirewallAPI) DeleteLiveRule(c *gin.Context) {
+	chain := c.Query("chain")
+	numStr := c.Query("num")
+	num, err := strconv.Atoi(numStr)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 400, "message": "无效的行号"})
+		return
+	}
+	if err := h.service.DeleteLiveRule(chain, num); err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "规则已删除"})
+}
+
+// Lockdown 一键内网-only 模式
+func (h *FirewallAPI) Lockdown(c *gin.Context) {
+	msg, err := h.service.Lockdown()
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": msg})
+}

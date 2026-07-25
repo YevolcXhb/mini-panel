@@ -188,6 +188,10 @@ func NewRouter() *gin.Engine {
 		apiV1.POST("/firewall/start", fw.Start)
 		apiV1.POST("/firewall/stop", fw.Stop)
 		apiV1.GET("/firewall/diagnose", fw.Diagnose)
+		apiV1.GET("/firewall/live-rules", fw.LiveRules)
+		apiV1.POST("/firewall/insert", fw.InsertRule)
+		apiV1.DELETE("/firewall/live-rule", fw.DeleteLiveRule)
+		apiV1.POST("/firewall/lockdown", fw.Lockdown)
 
 		backup := api.NewBackupAPI()
 		apiV1.GET("/backups/tasks", backup.ListTasks)

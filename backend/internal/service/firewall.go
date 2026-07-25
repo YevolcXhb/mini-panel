@@ -871,3 +871,105 @@ func (s *FirewallService) applyIptablesRule(rule *model.FirewallRule) error {
 func init() {
 	os.MkdirAll("/etc/nftables", 0755)
 }
+
+// LiveRules 实时查看系统 iptables 规则（-L --line-numbers -n）
+// chain: INPUT / OUTPUT / FORWARD / 空(=all)
+func (s *FirewallService) LiveRules(chain string) (string, error) {
+	backend := s.getFirewallBackend()
+	if backend != "android-iptables" && backend != "iptables" {
+		return "", fmt.Errorf("当前后端 %s 不支持实时规则查看，仅 iptables 后端支持", backend)
+	}
+
+	args := []string{"-L", "--line-numbers", "-n", "-v"}
+	if chain != "" {
+		args = []string{"-L", chain, "--line-numbers", "-n", "-v"}
+	}
+	out, err := iptablesCmd(args...).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("iptables -L 失败: %s", strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
+}
+
+// InsertRule 插入规则到指定位置（-I）
+// chain: INPUT / OUTPUT / FORWARD
+// position: 插入位置（1=最前面）
+// spec: 完整的 iptables 规则参数，如 ["-p","tcp","--dport","80","-j","ACCEPT"]
+func (s *FirewallService) InsertRule(chain string, position int, spec []string) error {
+	backend := s.getFirewallBackend()
+	if backend != "android-iptables" && backend != "iptables" {
+		return fmt.Errorf("当前后端 %s 不支持插入规则", backend)
+	}
+	if chain == "" {
+		chain = "INPUT"
+	}
+	if position < 1 {
+		position = 1
+	}
+	args := append([]string{"-I", chain, fmt.Sprintf("%d", position)}, spec...)
+	out, err := iptablesCmd(args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("iptables -I 失败: %s", strings.TrimSpace(string(out)))
+	}
+	global.LOG.Infof("[Firewall] 插入规则: %s %d %v", chain, position, spec)
+	return nil
+}
+
+// DeleteLiveRule 按行号删除系统 iptables 规则（-D）
+// chain: INPUT / OUTPUT / FORWARD
+// num: 行号（从 LiveRules 的 --line-numbers 获取）
+func (s *FirewallService) DeleteLiveRule(chain string, num int) error {
+	backend := s.getFirewallBackend()
+	if backend != "android-iptables" && backend != "iptables" {
+		return fmt.Errorf("当前后端 %s 不支持删除规则", backend)
+	}
+	if chain == "" {
+		chain = "INPUT"
+	}
+	if num < 1 {
+		return fmt.Errorf("行号必须大于 0")
+	}
+	out, err := iptablesCmd("-D", chain, fmt.Sprintf("%d", num)).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("iptables -D 失败: %s", strings.TrimSpace(string(out)))
+	}
+	global.LOG.Infof("[Firewall] 删除系统规则: %s 行号 %d", chain, num)
+	return nil
+}
+
+// Lockdown 一键内网-only 模式：只允许内网+已建立连接+回环，拒绝外网
+func (s *FirewallService) Lockdown() (string, error) {
+	backend := s.getFirewallBackend()
+	if backend != "android-iptables" && backend != "iptables" {
+		return "", fmt.Errorf("当前后端 %s 不支持 Lockdown", backend)
+	}
+
+	var output []string
+
+	// 1. 清空 INPUT 链
+	iptablesCmd("-F", "INPUT").Run()
+	output = append(output, "✅ 已清空 INPUT 链")
+
+	// 2. 放行已建立连接（防止自己被踢掉）
+	if err := iptablesCmd("-A", "INPUT", "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT").Run(); err == nil {
+		output = append(output, "✅ 放行 ESTABLISHED,RELATED")
+	}
+
+	// 3. 放行回环
+	iptablesCmd("-A", "INPUT", "-i", "lo", "-j", "ACCEPT").Run()
+	output = append(output, "✅ 放行 lo 回环")
+
+	// 4. 放行内网段
+	innerNets := []string{"192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12"}
+	for _, net := range innerNets {
+		iptablesCmd("-A", "INPUT", "-s", net, "-j", "ACCEPT").Run()
+	}
+	output = append(output, fmt.Sprintf("✅ 放行内网段: %s", strings.Join(innerNets, ", ")))
+
+	// 5. DROP 其余全部
+	iptablesCmd("-A", "INPUT", "-j", "DROP").Run()
+	output = append(output, "✅ 已设置默认 DROP")
+
+	global.LOG.Infof("[Firewall] Lockdown 模式已启用")
+	return strings.Join(output, "\n"), nil
+}

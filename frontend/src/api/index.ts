@@ -236,7 +236,11 @@ export const firewallApi = {
   status: () => api.get('/firewall/status'),
   start: () => api.post('/firewall/start'),
   stop: () => api.post('/firewall/stop'),
-  diagnose: () => api.get('/firewall/diagnose')
+  diagnose: () => api.get('/firewall/diagnose'),
+  liveRules: (chain?: string) => api.get('/firewall/live-rules', { params: chain ? { chain } : {} }),
+  insertRule: (data: { chain: string; position: number; spec: string[] }) => api.post('/firewall/insert', data),
+  deleteLiveRule: (chain: string, num: number) => api.delete('/firewall/live-rule', { params: { chain, num } }),
+  lockdown: () => api.post('/firewall/lockdown')
 }
 
 export const systemApi = {
