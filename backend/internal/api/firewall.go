@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -61,6 +62,16 @@ func (h *FirewallAPI) RestoreRule(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "Firewall rule restored"})
+}
+
+// ClearDeletedRules 一键清空已删除规则（回收站）
+func (h *FirewallAPI) ClearDeletedRules(c *gin.Context) {
+	n, err := h.service.ClearDeletedRules()
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": fmt.Sprintf("已清空 %d 条已删除规则", n), "data": n})
 }
 
 func (h *FirewallAPI) Update(c *gin.Context) {

@@ -252,6 +252,11 @@ func (s *FirewallService) RestoreRule(id uint) error {
 	return s.repo.Restore(id)
 }
 
+// ClearDeletedRules 一键清空已删除规则（永久删除，不可恢复）
+func (s *FirewallService) ClearDeletedRules() (int64, error) {
+	return s.repo.ClearDeleted()
+}
+
 func (s *FirewallService) getAvailableBackends() []string {
 	var backends []string
 

@@ -50,3 +50,9 @@ func (r *FirewallRepository) Restore(id uint) error {
 		Where("id = ?", id).
 		Update("deleted_at", nil).Error
 }
+
+// ClearDeleted 永久清空所有已软删除的规则，返回删除条数
+func (r *FirewallRepository) ClearDeleted() (int64, error) {
+	res := r.db.Unscoped().Where("deleted_at IS NOT NULL").Delete(&model.FirewallRule{})
+	return res.RowsAffected, res.Error
+}

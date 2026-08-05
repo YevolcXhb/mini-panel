@@ -120,6 +120,7 @@
           <div style="display: flex; gap: 8px">
             <el-button size="small" @click="loadDeletedRules" :loading="deletedLoading">刷新</el-button>
             <el-button size="small" type="primary" @click="restoreAllDeleted" :disabled="!deletedRules.length">全部恢复</el-button>
+            <el-button size="small" type="danger" plain @click="clearDeletedRules" :disabled="!deletedRules.length">一键清空</el-button>
           </div>
         </div>
         <el-table :data="deletedRules" size="small" v-loading="deletedLoading" empty-text="没有已删除的规则">
@@ -491,6 +492,17 @@ async function restoreAllDeleted() {
     loadDeletedRules()
     loadRules()
   } catch (e: any) { if (e !== 'cancel') ElMessage.error(e?.message || '恢复失败') }
+}
+
+async function clearDeletedRules() {
+  if (!deletedRules.value.length) return
+  try {
+    await ElMessageBox.confirm(`确定永久清空 ${deletedRules.value.length} 条已删除规则吗？清空后无法恢复！`, '清空回收站', { type: 'error', confirmButtonText: '清空', cancelButtonText: '取消' })
+    const res: any = await firewallApi.clearDeletedRules()
+    ElMessage.success(res.message || '已清空')
+    loadDeletedRules()
+    loadRules()
+  } catch (e: any) { if (e !== 'cancel') ElMessage.error(e?.message || '清空失败') }
 }
 
 async function saveRule() {

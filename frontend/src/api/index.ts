@@ -231,6 +231,7 @@ export const firewallApi = {
   list: () => api.get('/firewall/rules'),
   listDeleted: () => api.get('/firewall/rules/deleted'),
   restoreRule: (id: number) => api.post(`/firewall/rules/${id}/restore`),
+  clearDeletedRules: () => api.post('/firewall/rules/clear-deleted'),
   create: (data: any) => api.post('/firewall/rules', data),
   update: (id: number, data: any) => api.put(`/firewall/rules/${id}`, data),
   delete: (id: number) => api.delete(`/firewall/rules/${id}`),
