@@ -48,7 +48,9 @@ func TestBuildAndroidPersistScript(t *testing.T) {
 		{Name: "deny-ssh", Type: "port", Action: "deny", Protocol: "tcp", Port: "22", Direction: "in", Enabled: true},
 		{Name: "allow-http", Type: "port", Action: "allow", Protocol: "tcp", Port: "80,443", Direction: "in", Enabled: true},
 		{Name: "block-ip", Type: "ip", Action: "deny", IP: "10.0.0.8", Direction: "in", Enabled: true},
+		{Name: "block-ip6", Type: "ip", Action: "deny", IP: "2409:8a55::1", Direction: "in", Enabled: true},
 		{Name: "out-rule", Type: "port", Action: "deny", Protocol: "all", Port: "8080", Direction: "out", Enabled: true},
+		{Name: "dnat-mc", Type: "dnat", Action: "allow", Protocol: "tcp", Port: "25565", IP: "192.168.3.50", TargetPort: "25565", Chain: "PREROUTING", Masq: true, Enabled: true},
 		{Name: "disabled", Type: "port", Action: "deny", Protocol: "tcp", Port: "23", Enabled: false},
 	}
 	script := buildAndroidPersistScript(rules)
@@ -56,11 +58,18 @@ func TestBuildAndroidPersistScript(t *testing.T) {
 		"#!/system/bin/sh",
 		"sleep 30",
 		"AIPT=/system/bin/iptables",
+		"AIPT6=/system/bin/ip6tables",
 		"$AIPT -C INPUT -p tcp --dport 22 -j DROP 2>/dev/null || $AIPT -A INPUT -p tcp --dport 22 -j DROP",
+		"$AIPT6 -C INPUT -p tcp --dport 22 -j DROP 2>/dev/null || $AIPT6 -A INPUT -p tcp --dport 22 -j DROP",
 		"$AIPT -C INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || $AIPT -A INPUT -p tcp --dport 80 -j ACCEPT",
+		"$AIPT6 -C INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || $AIPT6 -A INPUT -p tcp --dport 80 -j ACCEPT",
 		"$AIPT -C INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || $AIPT -A INPUT -p tcp --dport 443 -j ACCEPT",
+		"$AIPT6 -C INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || $AIPT6 -A INPUT -p tcp --dport 443 -j ACCEPT",
 		"$AIPT -C INPUT -s 10.0.0.8 -j DROP 2>/dev/null || $AIPT -A INPUT -s 10.0.0.8 -j DROP",
+		"$AIPT6 -C INPUT -s 2409:8a55::1 -j DROP 2>/dev/null || $AIPT6 -A INPUT -s 2409:8a55::1 -j DROP",
 		"$AIPT -C OUTPUT -p tcp --dport 8080 -j DROP 2>/dev/null || $AIPT -A OUTPUT -p tcp --dport 8080 -j DROP",
+		"$AIPT -t nat -C PREROUTING -p tcp --dport 25565 -j DNAT --to-destination 192.168.3.50:25565 2>/dev/null || $AIPT -t nat -A PREROUTING -p tcp --dport 25565 -j DNAT --to-destination 192.168.3.50:25565",
+		"$AIPT -t nat -C POSTROUTING -d 192.168.3.50 -j MASQUERADE 2>/dev/null || $AIPT -t nat -A POSTROUTING -d 192.168.3.50 -j MASQUERADE",
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("persist script missing %q:\n%s", want, script)

@@ -138,7 +138,9 @@ func (h *FirewallAPI) Diagnose(c *gin.Context) {
 // LiveRules 实时查看系统 iptables 规则
 func (h *FirewallAPI) LiveRules(c *gin.Context) {
 	chain := c.Query("chain")
-	output, err := h.service.LiveRules(chain)
+	family := c.Query("family")
+	table := c.Query("table")
+	output, err := h.service.LiveRules(chain, family, table)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
 		return
@@ -152,12 +154,13 @@ func (h *FirewallAPI) InsertRule(c *gin.Context) {
 		Chain    string   `json:"chain"`
 		Position int      `json:"position"`
 		Spec     []string `json:"spec"`
+		Family   string   `json:"family"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": 400, "message": err.Error()})
 		return
 	}
-	if err := h.service.InsertRule(req.Chain, req.Position, req.Spec); err != nil {
+	if err := h.service.InsertRule(req.Chain, req.Position, req.Spec, req.Family); err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
 		return
 	}
@@ -167,13 +170,14 @@ func (h *FirewallAPI) InsertRule(c *gin.Context) {
 // DeleteLiveRule 按行号删除系统规则
 func (h *FirewallAPI) DeleteLiveRule(c *gin.Context) {
 	chain := c.Query("chain")
+	family := c.Query("family")
 	numStr := c.Query("num")
 	num, err := strconv.Atoi(numStr)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": 400, "message": "无效的行号"})
 		return
 	}
-	if err := h.service.DeleteLiveRule(chain, num); err != nil {
+	if err := h.service.DeleteLiveRule(chain, num, family); err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
 		return
 	}

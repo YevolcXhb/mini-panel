@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -71,6 +72,12 @@ func iptablesCmd(args ...string) *exec.Cmd {
 	return exec.Command(base[0], append(base[1:], args...)...)
 }
 
+// ip6tablesCmd 创建 ip6tables 命令（IPv6），自动选择 Android 原生或系统命令
+func ip6tablesCmd(args ...string) *exec.Cmd {
+	base := ip6tablesBase()
+	return exec.Command(base[0], append(base[1:], args...)...)
+}
+
 const androidPrefixCacheTTL = 30 * time.Second
 
 type androidPrefixCacheEntry struct {
@@ -131,8 +138,8 @@ func androidRootCandidates() []string {
 // androidIptablesCandidates 构造按优先级排列的 Android iptables 调用前缀：
 // 1. /opt/minipanel/bin/iptables 包装脚本（文档 B2）
 // 2. /opt/minipanel/bin/iptables-android 复制二进制（文档 B1）
-// 3. 逃逸路径直接调用（文档 B3）
-// 4. chroot 到逃逸根目录后调用（原实现）
+// 3. chroot 到逃逸根目录后调用（文档实测有效，/proc 挂载为 noexec 时直接执行会失败）
+// 4. 逃逸路径直接调用（部分环境可用）
 // 5. chroot 内系统命令兜底
 func androidIptablesCandidates(bin string, roots []string) [][]string {
 	var candidates [][]string
@@ -145,8 +152,8 @@ func androidIptablesCandidates(bin string, roots []string) [][]string {
 	}
 	for _, root := range roots {
 		androidBin := root + "/system/bin/" + bin
-		candidates = append(candidates, []string{androidBin})
 		candidates = append(candidates, []string{"chroot", root + "/", "/system/bin/" + bin})
+		candidates = append(candidates, []string{androidBin})
 	}
 	candidates = append(candidates, []string{bin})
 	return candidates
@@ -212,6 +219,10 @@ func (s *FirewallService) List() ([]model.FirewallRule, error) {
 }
 
 func (s *FirewallService) Update(item *model.FirewallRule) error {
+	old, err := s.repo.GetByID(item.ID)
+	if err == nil && old.Type == "dnat" && (item.Type != "dnat" || !item.Enabled) {
+		s.deleteDnatRule(old)
+	}
 	if err := s.repo.Update(item); err != nil {
 		return err
 	}
@@ -220,6 +231,10 @@ func (s *FirewallService) Update(item *model.FirewallRule) error {
 }
 
 func (s *FirewallService) Delete(id uint) error {
+	rule, err := s.repo.GetByID(id)
+	if err == nil && rule.Type == "dnat" {
+		s.deleteDnatRule(rule)
+	}
 	if err := s.repo.Delete(id); err != nil {
 		return err
 	}
@@ -370,6 +385,9 @@ func (s *FirewallService) GetStatus() (map[string]interface{}, error) {
 				result["resolved_path"] = resolvedAndroidIptablesPath
 			}
 		}
+		v6out, v6err := ip6tablesCmd("-L", "-n").CombinedOutput()
+		result["ipv6_supported"] = v6err == nil
+		result["ipv6_running"] = v6err == nil && len(v6out) > 0
 	}
 	return result, nil
 }
@@ -553,6 +571,15 @@ func (s *FirewallService) Diagnose() map[string]interface{} {
 	}
 	report["kernel_modules"] = kernelModules
 
+	// IPv6 支持检测（ip6tables 是否可用/是否有规则）
+	v6out, v6err := ip6tablesCmd("-L", "-n").CombinedOutput()
+	report["ipv6_supported"] = v6err == nil
+	if v6err != nil {
+		report["ipv6_error"] = strings.TrimSpace(string(v6out))
+	} else {
+		report["ipv6_rules"] = len(v6out) > 0
+	}
+
 	// 总结
 	if backends[0] == "none" {
 		report["summary"] = "无法使用防火墙功能"
@@ -684,10 +711,14 @@ func (s *FirewallService) Stop() error {
 			chains := []string{"INPUT", "OUTPUT", "FORWARD"}
 			for _, chain := range chains {
 				iptablesCmd("-F", chain).Run()
+				ip6tablesCmd("-F", chain).Run()
 			}
 			iptablesCmd("-P", "INPUT", "ACCEPT").Run()
+			ip6tablesCmd("-P", "INPUT", "ACCEPT").Run()
 			iptablesCmd("-P", "OUTPUT", "ACCEPT").Run()
+			ip6tablesCmd("-P", "OUTPUT", "ACCEPT").Run()
 			iptablesCmd("-P", "FORWARD", "ACCEPT").Run()
+			ip6tablesCmd("-P", "FORWARD", "ACCEPT").Run()
 		}
 	}
 	return nil
@@ -708,10 +739,14 @@ func (s *FirewallService) flushRulesForBackend(backend string) error {
 		chains := []string{"INPUT", "OUTPUT", "FORWARD"}
 		for _, chain := range chains {
 			iptablesCmd("-F", chain).Run()
+			ip6tablesCmd("-F", chain).Run()
 		}
 		iptablesCmd("-P", "INPUT", "ACCEPT").Run()
+		ip6tablesCmd("-P", "INPUT", "ACCEPT").Run()
 		iptablesCmd("-P", "OUTPUT", "ACCEPT").Run()
+		ip6tablesCmd("-P", "OUTPUT", "ACCEPT").Run()
 		iptablesCmd("-P", "FORWARD", "ACCEPT").Run()
+		ip6tablesCmd("-P", "FORWARD", "ACCEPT").Run()
 	}
 	return nil
 }
@@ -812,7 +847,24 @@ func (s *FirewallService) ApplyRulesForBackend(backend string) (string, error) {
 		case "nftables":
 			err = s.applyNftablesRule(&rule)
 		case "android-iptables", "iptables":
-			err = s.applyIptablesRule(&rule)
+			if rule.Type == "dnat" {
+				err = s.applyDnatRule(&rule)
+				if err == nil {
+					if v6err := s.applyIp6DnatRule(&rule); v6err != nil {
+						global.LOG.Warnf("[Firewall] rule %d (%s) IPv6 DNAT apply failed: %v", rule.ID, rule.Name, v6err)
+						output = append(output, fmt.Sprintf("rule %d (%s) IPv6 DNAT 部分失败: %v", rule.ID, rule.Name, v6err))
+					}
+				}
+			} else {
+				err = s.applyIptablesRule(&rule)
+				if err == nil {
+					// IPv6 同步应用：ip6tables 不可用时仅告警，不影响 IPv4 规则生效
+					if v6err := s.applyIp6tablesRule(&rule); v6err != nil {
+						global.LOG.Warnf("[Firewall] rule %d (%s) IPv6 apply failed: %v", rule.ID, rule.Name, v6err)
+						output = append(output, fmt.Sprintf("rule %d (%s) IPv6 部分失败: %v", rule.ID, rule.Name, v6err))
+					}
+				}
+			}
 		default:
 			err = fmt.Errorf("不支持的防火墙后端: %s", backend)
 		}
@@ -848,9 +900,10 @@ func (s *FirewallService) ApplyRulesForBackend(backend string) (string, error) {
 func buildAndroidPersistScript(rules []model.FirewallRule) string {
 	var sb strings.Builder
 	sb.WriteString("#!/system/bin/sh\n")
-	sb.WriteString("# Generated by MiniPanel - firewall persistence\n")
+	sb.WriteString("# Generated by MiniPanel - firewall persistence (IPv4 + IPv6)\n")
 	sb.WriteString("sleep 30\n")
 	sb.WriteString("AIPT=/system/bin/iptables\n")
+	sb.WriteString("AIPT6=/system/bin/ip6tables\n")
 	for _, rule := range rules {
 		if !rule.Enabled {
 			continue
@@ -877,15 +930,65 @@ func buildAndroidPersistScript(rules []model.FirewallRule) string {
 				sb.WriteString(fmt.Sprintf(
 					"$AIPT -C %s -p %s --dport %s -j %s 2>/dev/null || $AIPT -A %s -p %s --dport %s -j %s\n",
 					chain, proto, port, action, chain, proto, port, action))
+				sb.WriteString(fmt.Sprintf(
+					"$AIPT6 -C %s -p %s --dport %s -j %s 2>/dev/null || $AIPT6 -A %s -p %s --dport %s -j %s\n",
+					chain, proto, port, action, chain, proto, port, action))
 			}
 		} else if rule.Type == "ip" && rule.IP != "" {
 			ip := strings.TrimSpace(rule.IP)
 			if ip == "" || strings.ContainsAny(ip, "' \t") {
 				continue
 			}
-			sb.WriteString(fmt.Sprintf(
-				"$AIPT -C %s -s %s -j %s 2>/dev/null || $AIPT -A %s -s %s -j %s\n",
-				chain, ip, action, chain, ip, action))
+			isV4, isV6 := ipFamily(ip)
+			if isV4 {
+				sb.WriteString(fmt.Sprintf(
+					"$AIPT -C %s -s %s -j %s 2>/dev/null || $AIPT -A %s -s %s -j %s\n",
+					chain, ip, action, chain, ip, action))
+			}
+			if isV6 {
+				sb.WriteString(fmt.Sprintf(
+					"$AIPT6 -C %s -s %s -j %s 2>/dev/null || $AIPT6 -A %s -s %s -j %s\n",
+					chain, ip, action, chain, ip, action))
+			}
+		} else if rule.Type == "dnat" {
+			proto := rule.Protocol
+			if proto == "" || proto == "all" {
+				proto = "tcp"
+			}
+			publicPort := strings.TrimSpace(rule.Port)
+			targetIP := strings.TrimSpace(rule.IP)
+			targetPort := strings.TrimSpace(rule.TargetPort)
+			if publicPort == "" || targetIP == "" || targetPort == "" || strings.ContainsAny(targetIP, "' \t") {
+				continue
+			}
+			natChain := dnatChain(&rule)
+			isV4, isV6 := ipFamily(targetIP)
+			if isV4 {
+				sb.WriteString(fmt.Sprintf(
+					"$AIPT -t nat -N %s 2>/dev/null; $AIPT -t nat -C PREROUTING -j %s 2>/dev/null || $AIPT -t nat -A PREROUTING -j %s 2>/dev/null\n",
+					natChain, natChain, natChain))
+				sb.WriteString(fmt.Sprintf(
+					"$AIPT -t nat -C %s -p %s --dport %s -j DNAT --to-destination %s:%s 2>/dev/null || $AIPT -t nat -A %s -p %s --dport %s -j DNAT --to-destination %s:%s\n",
+					natChain, proto, publicPort, targetIP, targetPort, natChain, proto, publicPort, targetIP, targetPort))
+				if rule.Masq {
+					sb.WriteString(fmt.Sprintf(
+						"$AIPT -t nat -C POSTROUTING -d %s -j MASQUERADE 2>/dev/null || $AIPT -t nat -A POSTROUTING -d %s -j MASQUERADE\n",
+						targetIP, targetIP))
+				}
+			}
+			if isV6 {
+				sb.WriteString(fmt.Sprintf(
+					"$AIPT6 -t nat -N %s 2>/dev/null; $AIPT6 -t nat -C PREROUTING -j %s 2>/dev/null || $AIPT6 -t nat -A PREROUTING -j %s 2>/dev/null\n",
+					natChain, natChain, natChain))
+				sb.WriteString(fmt.Sprintf(
+					"$AIPT6 -t nat -C %s -p %s --dport %s -j DNAT --to-destination [%s]:%s 2>/dev/null || $AIPT6 -t nat -A %s -p %s --dport %s -j DNAT --to-destination [%s]:%s\n",
+					natChain, proto, publicPort, targetIP, targetPort, natChain, proto, publicPort, targetIP, targetPort))
+				if rule.Masq {
+					sb.WriteString(fmt.Sprintf(
+						"$AIPT6 -t nat -C POSTROUTING -d %s -j MASQUERADE 2>/dev/null || $AIPT6 -t nat -A POSTROUTING -d %s -j MASQUERADE\n",
+						targetIP, targetIP))
+				}
+			}
 		}
 	}
 	return sb.String()
@@ -953,6 +1056,8 @@ func (s *FirewallService) allowLoopbackForBackend(backend string) {
 	case "android-iptables", "iptables":
 		iptablesCmd("-A", "INPUT", "-i", "lo", "-j", "ACCEPT").Run()
 		iptablesCmd("-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT").Run()
+		ip6tablesCmd("-A", "INPUT", "-i", "lo", "-j", "ACCEPT").Run()
+		ip6tablesCmd("-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT").Run()
 		// 不使用-m state，避免依赖conntrack模块，精简内核环境下不需要状态检测
 	}
 }
@@ -1088,6 +1193,26 @@ func (s *FirewallService) applyNftablesRule(rule *model.FirewallRule) error {
 	return nil
 }
 
+// ipFamily 判断 IP/IP 段属于 IPv4 还是 IPv6；CIDR 与单地址均支持
+func ipFamily(s string) (isV4, isV6 bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false, false
+	}
+	if strings.Contains(s, "/") {
+		_, ipNet, err := net.ParseCIDR(s)
+		if err != nil {
+			return false, false
+		}
+		return ipNet.IP.To4() != nil, ipNet.IP.To4() == nil
+	}
+	ip := net.ParseIP(s)
+	if ip == nil {
+		return false, false
+	}
+	return ip.To4() != nil, ip.To4() == nil
+}
+
 func (s *FirewallService) applyIptablesRule(rule *model.FirewallRule) error {
 	action := "ACCEPT"
 	if rule.Action == "deny" {
@@ -1111,7 +1236,7 @@ func (s *FirewallService) applyIptablesRule(rule *model.FirewallRule) error {
 			if port == "" {
 				continue
 			}
-			// 检查是否是已存在规则（简单判断，忽略错误继续添加）
+			// 检查是否已存在规则（简单判断，忽略错误继续添加）
 			checkCmd := iptablesCmd("-C", chain, "-p", proto, "--dport", port, "-j", action)
 			if err := checkCmd.Run(); err != nil {
 				addCmd := iptablesCmd("-A", chain, "-p", proto, "--dport", port, "-j", action)
@@ -1121,6 +1246,10 @@ func (s *FirewallService) applyIptablesRule(rule *model.FirewallRule) error {
 			}
 		}
 	} else if rule.Type == "ip" && rule.IP != "" {
+		isV4, _ := ipFamily(rule.IP)
+		if !isV4 {
+			return nil // IPv6 地址由 applyIp6tablesRule 处理
+		}
 		checkCmd := iptablesCmd("-C", chain, "-s", rule.IP, "-j", action)
 		if err := checkCmd.Run(); err != nil {
 			addCmd := iptablesCmd("-A", chain, "-s", rule.IP, "-j", action)
@@ -1132,34 +1261,206 @@ func (s *FirewallService) applyIptablesRule(rule *model.FirewallRule) error {
 	return nil
 }
 
+func (s *FirewallService) applyIp6tablesRule(rule *model.FirewallRule) error {
+	action := "ACCEPT"
+	if rule.Action == "deny" {
+		action = "DROP"
+	}
+	chain := "INPUT"
+	if rule.Direction == "out" {
+		chain = "OUTPUT"
+	}
+
+	if rule.Type == "port" && rule.Port != "" {
+		proto := rule.Protocol
+		if proto == "" || proto == "all" {
+			proto = "tcp"
+		}
+		portStr := normalizePort(rule.Port, false)
+		ports := strings.Split(portStr, ",")
+		for _, port := range ports {
+			port = strings.TrimSpace(port)
+			if port == "" {
+				continue
+			}
+			checkCmd := ip6tablesCmd("-C", chain, "-p", proto, "--dport", port, "-j", action)
+			if err := checkCmd.Run(); err != nil {
+				addCmd := ip6tablesCmd("-A", chain, "-p", proto, "--dport", port, "-j", action)
+				if out, err := addCmd.CombinedOutput(); err != nil {
+					return fmt.Errorf("IPv6 端口 %s 添加失败: %s", port, strings.TrimSpace(string(out)))
+				}
+			}
+		}
+	} else if rule.Type == "ip" && rule.IP != "" {
+		_, isV6 := ipFamily(rule.IP)
+		if !isV6 {
+			return nil // IPv4 地址由 applyIptablesRule 处理
+		}
+		checkCmd := ip6tablesCmd("-C", chain, "-s", rule.IP, "-j", action)
+		if err := checkCmd.Run(); err != nil {
+			addCmd := ip6tablesCmd("-A", chain, "-s", rule.IP, "-j", action)
+			if out, err := addCmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+			}
+		}
+	}
+	return nil
+}
+
+// dnatChain 返回 DNAT 使用的 nat 链，默认 PREROUTING
+func dnatChain(rule *model.FirewallRule) string {
+	chain := strings.TrimSpace(rule.Chain)
+	if chain == "" {
+		return "PREROUTING"
+	}
+	return chain
+}
+
+// ensureDnatChain 确保自定义 nat 链存在并从 PREROUTING 跳转（Android oem_nat_pre 场景）
+func ensureDnatChain(cmd func(args ...string) *exec.Cmd, chain string) {
+	if chain == "PREROUTING" {
+		return
+	}
+	cmd("-t", "nat", "-N", chain).Run()
+	cmd("-t", "nat", "-C", "PREROUTING", "-j", chain).Run()
+	cmd("-t", "nat", "-A", "PREROUTING", "-j", chain).Run()
+}
+
+// applyDnatRule 应用 IPv4 DNAT 端口转发规则
+func (s *FirewallService) applyDnatRule(rule *model.FirewallRule) error {
+	isV4, _ := ipFamily(rule.IP)
+	if !isV4 {
+		return nil
+	}
+	return s.applyDnatWithCmd(rule, iptablesCmd)
+}
+
+// applyIp6DnatRule 应用 IPv6 DNAT 端口转发规则
+func (s *FirewallService) applyIp6DnatRule(rule *model.FirewallRule) error {
+	_, isV6 := ipFamily(rule.IP)
+	if !isV6 {
+		return nil
+	}
+	return s.applyDnatWithCmd(rule, ip6tablesCmd)
+}
+
+func (s *FirewallService) applyDnatWithCmd(rule *model.FirewallRule, cmd func(args ...string) *exec.Cmd) error {
+	chain := dnatChain(rule)
+	publicPort := strings.TrimSpace(rule.Port)
+	targetIP := strings.TrimSpace(rule.IP)
+	targetPort := strings.TrimSpace(rule.TargetPort)
+	if chain == "" || publicPort == "" || targetIP == "" || targetPort == "" {
+		return fmt.Errorf("DNAT 规则缺少参数")
+	}
+	proto := rule.Protocol
+	if proto == "" || proto == "all" {
+		proto = "tcp"
+	}
+	target := fmt.Sprintf("%s:%s", targetIP, targetPort)
+	ensureDnatChain(cmd, chain)
+
+	checkCmd := cmd("-t", "nat", "-C", chain, "-p", proto, "--dport", publicPort, "-j", "DNAT", "--to-destination", target)
+	if err := checkCmd.Run(); err != nil {
+		addCmd := cmd("-t", "nat", "-A", chain, "-p", proto, "--dport", publicPort, "-j", "DNAT", "--to-destination", target)
+		if out, err := addCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("DNAT 规则添加失败: %s", strings.TrimSpace(string(out)))
+		}
+	}
+
+	if rule.Masq {
+		masqCheck := cmd("-t", "nat", "-C", "POSTROUTING", "-d", targetIP, "-j", "MASQUERADE")
+		if err := masqCheck.Run(); err != nil {
+			masqAdd := cmd("-t", "nat", "-A", "POSTROUTING", "-d", targetIP, "-j", "MASQUERADE")
+			if out, err := masqAdd.CombinedOutput(); err != nil {
+				global.LOG.Warnf("[Firewall] DNAT 回程 MASQUERADE 添加失败: %s", strings.TrimSpace(string(out)))
+			}
+		}
+	}
+	return nil
+}
+
+// deleteDnatRule 从 nat 表删除对应的 DNAT / MASQUERADE 规则
+func (s *FirewallService) deleteDnatRule(rule *model.FirewallRule) error {
+	isV4, isV6 := ipFamily(rule.IP)
+	chain := dnatChain(rule)
+	proto := rule.Protocol
+	if proto == "" || proto == "all" {
+		proto = "tcp"
+	}
+	targetIP := strings.TrimSpace(rule.IP)
+	targetPort := strings.TrimSpace(rule.TargetPort)
+	publicPort := strings.TrimSpace(rule.Port)
+	if targetIP == "" || targetPort == "" || publicPort == "" {
+		return nil
+	}
+	target := fmt.Sprintf("%s:%s", targetIP, targetPort)
+	if isV4 {
+		iptablesCmd("-t", "nat", "-D", chain, "-p", proto, "--dport", publicPort, "-j", "DNAT", "--to-destination", target).Run()
+		iptablesCmd("-t", "nat", "-D", "POSTROUTING", "-d", targetIP, "-j", "MASQUERADE").Run()
+	}
+	if isV6 {
+		ip6tablesCmd("-t", "nat", "-D", chain, "-p", proto, "--dport", publicPort, "-j", "DNAT", "--to-destination", target).Run()
+		ip6tablesCmd("-t", "nat", "-D", "POSTROUTING", "-d", targetIP, "-j", "MASQUERADE").Run()
+	}
+	return nil
+}
+
 func init() {
 	os.MkdirAll("/etc/nftables", 0755)
 }
 
-// LiveRules 实时查看系统 iptables 规则（-L --line-numbers -n）
-// chain: INPUT / OUTPUT / FORWARD / 空(=all)
-func (s *FirewallService) LiveRules(chain string) (string, error) {
+// LiveRules 实时查看系统 iptables/ip6tables 规则（-L --line-numbers -n）
+// chain: INPUT / OUTPUT / FORWARD / 空=all
+// family: 空=全部(先 IPv4 后 IPv6), "4"/"ipv4"=仅 IPv4, "6"/"ipv6"=仅 IPv6
+// table: 空=filter, "nat"=nat 表（用于查看 DNAT 端口转发规则）
+func (s *FirewallService) LiveRules(chain, family, table string) (string, error) {
 	backend := s.getFirewallBackend()
 	if backend != "android-iptables" && backend != "iptables" {
 		return "", fmt.Errorf("当前后端 %s 不支持实时规则查看，仅 iptables 后端支持", backend)
 	}
 
-	args := []string{"-L", "--line-numbers", "-n", "-v"}
+	var args []string
+	if table == "nat" {
+		args = append(args, "-t", "nat")
+	}
+	args = append(args, "-L", "--line-numbers", "-n", "-v")
 	if chain != "" {
-		args = []string{"-L", chain, "--line-numbers", "-n", "-v"}
+		args = append(args, "-L", chain, "--line-numbers", "-n", "-v")
 	}
-	out, err := iptablesCmd(args...).CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("iptables -L 失败: %s", strings.TrimSpace(string(out)))
+
+	useV4 := family == "" || family == "4" || family == "ipv4"
+	useV6 := family == "" || family == "6" || family == "ipv6"
+	var sb strings.Builder
+
+	if useV4 {
+		sb.WriteString("===== IPv4 (iptables) =====\n")
+		out, err := iptablesCmd(args...).CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("iptables -L 失败: %s", strings.TrimSpace(string(out)))
+		}
+		sb.Write(out)
 	}
-	return string(out), nil
+	if useV6 {
+		sb.WriteString("===== IPv6 (ip6tables) =====\n")
+		out, err := ip6tablesCmd(args...).CombinedOutput()
+		if err != nil {
+			if family == "6" || family == "ipv6" {
+				return "", fmt.Errorf("ip6tables -L 失败: %s", strings.TrimSpace(string(out)))
+			}
+			sb.WriteString(fmt.Sprintf("(ip6tables 不可用: %s)\n", strings.TrimSpace(string(out))))
+		} else {
+			sb.Write(out)
+		}
+	}
+	return sb.String(), nil
 }
 
 // InsertRule 插入规则到指定位置（-I）
 // chain: INPUT / OUTPUT / FORWARD
-// position: 插入位置（1=最前面）
+// position: 插入位置，1=最前面
 // spec: 完整的 iptables 规则参数，如 ["-p","tcp","--dport","80","-j","ACCEPT"]
-func (s *FirewallService) InsertRule(chain string, position int, spec []string) error {
+// family: "6"/"ipv6" 使用 ip6tables，其余默认 iptables
+func (s *FirewallService) InsertRule(chain string, position int, spec []string, family string) error {
 	backend := s.getFirewallBackend()
 	if backend != "android-iptables" && backend != "iptables" {
 		return fmt.Errorf("当前后端 %s 不支持插入规则", backend)
@@ -1171,18 +1472,28 @@ func (s *FirewallService) InsertRule(chain string, position int, spec []string) 
 		position = 1
 	}
 	args := append([]string{"-I", chain, fmt.Sprintf("%d", position)}, spec...)
-	out, err := iptablesCmd(args...).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("iptables -I 失败: %s", strings.TrimSpace(string(out)))
+	useV6 := family == "6" || family == "ipv6"
+	name := "iptables"
+	var out []byte
+	var err error
+	if useV6 {
+		name = "ip6tables"
+		out, err = ip6tablesCmd(args...).CombinedOutput()
+	} else {
+		out, err = iptablesCmd(args...).CombinedOutput()
 	}
-	global.LOG.Infof("[Firewall] 插入规则: %s %d %v", chain, position, spec)
+	if err != nil {
+		return fmt.Errorf("%s -I 失败: %s", name, strings.TrimSpace(string(out)))
+	}
+	global.LOG.Infof("[Firewall] 插入规则: %s %d %v (family=%s)", chain, position, spec, family)
 	return nil
 }
 
-// DeleteLiveRule 按行号删除系统 iptables 规则（-D）
+// DeleteLiveRule 按行号删除系统 iptables/ip6tables 规则（-D）
 // chain: INPUT / OUTPUT / FORWARD
 // num: 行号（从 LiveRules 的 --line-numbers 获取）
-func (s *FirewallService) DeleteLiveRule(chain string, num int) error {
+// family: "6"/"ipv6" 操作 ip6tables，其余默认 iptables
+func (s *FirewallService) DeleteLiveRule(chain string, num int, family string) error {
 	backend := s.getFirewallBackend()
 	if backend != "android-iptables" && backend != "iptables" {
 		return fmt.Errorf("当前后端 %s 不支持删除规则", backend)
@@ -1193,15 +1504,24 @@ func (s *FirewallService) DeleteLiveRule(chain string, num int) error {
 	if num < 1 {
 		return fmt.Errorf("行号必须大于 0")
 	}
-	out, err := iptablesCmd("-D", chain, fmt.Sprintf("%d", num)).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("iptables -D 失败: %s", strings.TrimSpace(string(out)))
+	useV6 := family == "6" || family == "ipv6"
+	name := "iptables"
+	var out []byte
+	var err error
+	if useV6 {
+		name = "ip6tables"
+		out, err = ip6tablesCmd("-D", chain, fmt.Sprintf("%d", num)).CombinedOutput()
+	} else {
+		out, err = iptablesCmd("-D", chain, fmt.Sprintf("%d", num)).CombinedOutput()
 	}
-	global.LOG.Infof("[Firewall] 删除系统规则: %s 行号 %d", chain, num)
+	if err != nil {
+		return fmt.Errorf("%s -D 失败: %s", name, strings.TrimSpace(string(out)))
+	}
+	global.LOG.Infof("[Firewall] 删除系统规则: %s 行号 %d (family=%s)", chain, num, family)
 	return nil
 }
 
-// Lockdown 一键内网-only 模式：只允许内网+已建立连接+回环，拒绝外网
+// Lockdown 一键内网-only 模式：只允许内网+已建立连接+回环，拒绝外网（IPv4 + IPv6）
 func (s *FirewallService) Lockdown() (string, error) {
 	backend := s.getFirewallBackend()
 	if backend != "android-iptables" && backend != "iptables" {
@@ -1210,30 +1530,35 @@ func (s *FirewallService) Lockdown() (string, error) {
 
 	var output []string
 
-	// 1. 清空 INPUT 链
+	// 1. 清空 INPUT 链（IPv4 + IPv6）
 	iptablesCmd("-F", "INPUT").Run()
-	output = append(output, "✅ 已清空 INPUT 链")
+	ip6tablesCmd("-F", "INPUT").Run()
+	output = append(output, "✅ 已清空 INPUT 链 (IPv4+IPv6)")
 
 	// 2. 放行已建立连接（防止自己被踢掉）
 	if err := iptablesCmd("-A", "INPUT", "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT").Run(); err == nil {
 		output = append(output, "✅ 放行 ESTABLISHED,RELATED")
 	}
+	ip6tablesCmd("-A", "INPUT", "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT").Run()
 
 	// 3. 放行回环
 	iptablesCmd("-A", "INPUT", "-i", "lo", "-j", "ACCEPT").Run()
-	output = append(output, "✅ 放行 lo 回环")
+	ip6tablesCmd("-A", "INPUT", "-i", "lo", "-j", "ACCEPT").Run()
+	output = append(output, "✅ 放行 lo 回环 (IPv4+IPv6)")
 
-	// 4. 放行内网段
+	// 4. 放行内网段（IPv4 RFC1918 + IPv6 链路本地）
 	innerNets := []string{"192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12"}
 	for _, net := range innerNets {
 		iptablesCmd("-A", "INPUT", "-s", net, "-j", "ACCEPT").Run()
 	}
-	output = append(output, fmt.Sprintf("✅ 放行内网段: %s", strings.Join(innerNets, ", ")))
+	ip6tablesCmd("-A", "INPUT", "-s", "fe80::/10", "-j", "ACCEPT").Run()
+	output = append(output, fmt.Sprintf("✅ 放行内网段: %s + fe80::/10", strings.Join(innerNets, ", ")))
 
-	// 5. DROP 其余全部
+	// 5. DROP 其余全部（IPv4 + IPv6）
 	iptablesCmd("-A", "INPUT", "-j", "DROP").Run()
-	output = append(output, "✅ 已设置默认 DROP")
+	ip6tablesCmd("-A", "INPUT", "-j", "DROP").Run()
+	output = append(output, "✅ 已设置默认 DROP (IPv4+IPv6)")
 
-	global.LOG.Infof("[Firewall] Lockdown 模式已启用")
+	global.LOG.Infof("[Firewall] Lockdown 模式已启用 (IPv4+IPv6)")
 	return strings.Join(output, "\n"), nil
 }

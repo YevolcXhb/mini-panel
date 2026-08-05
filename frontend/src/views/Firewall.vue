@@ -37,6 +37,8 @@
               {{ serviceStatus.running ? '运行中' : '已停止' }}
             </el-tag>
             <span>{{ firewallType }} {{ serviceStatus.version ? 'v' + serviceStatus.version : '' }}</span>
+            <el-tag v-if="serviceStatus.ipv6_supported" type="success" size="small">IPv6 已支持</el-tag>
+            <el-tag v-else type="info" size="small">IPv6 不可用</el-tag>
           </div>
           <div style="display: flex; gap: 8px; flex-wrap: wrap">
             <el-button size="small" type="primary" @click="startFirewall" v-if="!serviceStatus.running" :loading="actionLoading">启动</el-button>
@@ -60,12 +62,22 @@
         </div>
       </el-card>
 
+      <el-alert
+        v-if="serviceStatus.ipv6_supported"
+        type="success"
+        show-icon
+        :closable="false"
+        style="margin-bottom: 12px"
+      >
+        <template #title>端口规则会同时应用到 IPv4 (iptables) 和 IPv6 (ip6tables)；IP 规则按地址类型自动匹配对应协议族</template>
+      </el-alert>
+
       <!-- 面板规则表格 -->
       <el-table :data="rules" style="width: 100%" v-loading="loading">
         <el-table-column prop="name" label="名称" min-width="120" />
         <el-table-column prop="type" label="类型" width="80">
           <template #default="{ row }">
-            <el-tag :type="row.type === 'port' ? 'primary' : 'warning'">{{ row.type === 'port' ? '端口' : 'IP' }}</el-tag>
+            <el-tag :type="row.type === 'port' ? 'primary' : row.type === 'dnat' ? 'success' : 'warning'">{{ row.type === 'port' ? '端口' : row.type === 'dnat' ? '转发' : 'IP' }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="action" label="动作" width="80">
@@ -76,6 +88,12 @@
         <el-table-column prop="protocol" label="协议" width="80" />
         <el-table-column prop="port" label="端口" width="100" />
         <el-table-column prop="ip" label="IP" width="120" />
+        <el-table-column prop="target_port" label="目标端口" width="100">
+          <template #default="{ row }">
+            <span v-if="row.type === 'dnat'">{{ row.target_port }}</span>
+            <span v-else style="color: #c0c4cc">-</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="direction" label="方向" width="80">
           <template #default="{ row }">
             {{ row.direction === 'in' ? '入站' : '出站' }}
@@ -108,7 +126,7 @@
           <el-table-column prop="name" label="名称" min-width="120" />
           <el-table-column prop="type" label="类型" width="80">
             <template #default="{ row }">
-              <el-tag :type="row.type === 'port' ? 'primary' : 'warning'" size="small">{{ row.type === 'port' ? '端口' : 'IP' }}</el-tag>
+              <el-tag :type="row.type === 'port' ? 'primary' : row.type === 'dnat' ? 'success' : 'warning'" size="small">{{ row.type === 'port' ? '端口' : row.type === 'dnat' ? '转发' : 'IP' }}</el-tag>
             </template>
           </el-table-column>
           <el-table-column prop="action" label="动作" width="80">
@@ -144,6 +162,10 @@
             <el-tag :type="diagnoseReport.in_container ? 'warning' : 'success'">{{ diagnoseReport.in_container ? `在容器中 (${diagnoseReport.container_type || 'unknown'})` : '物理机/虚拟机' }}</el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="可用后端">{{ (diagnoseReport.available_backends || []).join(', ') || 'none' }}</el-descriptions-item>
+          <el-descriptions-item label="IPv6 支持">
+            <el-tag :type="diagnoseReport.ipv6_supported ? 'success' : 'danger'">{{ diagnoseReport.ipv6_supported ? '可用' : '不可用' }}</el-tag>
+            <span v-if="diagnoseReport.ipv6_error" style="margin-left: 8px; color: #f56c6c; font-size: 12px">{{ diagnoseReport.ipv6_error }}</span>
+          </el-descriptions-item>
           <el-descriptions-item label="工具安装情况">
             <div style="display: flex; gap: 8px; flex-wrap: wrap">
               <el-tag v-for="(installed, tool) in (diagnoseReport.tools_installed || {})" :key="tool" :type="installed ? 'success' : 'info'">{{ tool }}: {{ installed ? '已装' : '未装' }}</el-tag>
@@ -176,6 +198,7 @@
           <el-select v-model="form.type" placeholder="选择类型" style="width: 100%">
             <el-option label="端口规则" value="port" />
             <el-option label="IP 规则" value="ip" />
+            <el-option label="DNAT 端口转发" value="dnat" />
           </el-select>
         </el-form-item>
         <el-form-item label="动作" prop="action">
@@ -184,18 +207,31 @@
             <el-option label="拒绝" value="deny" />
           </el-select>
         </el-form-item>
-        <el-form-item label="协议" v-if="form.type === 'port'">
+        <el-form-item label="协议" v-if="form.type === 'port' || form.type === 'dnat'">
           <el-select v-model="form.protocol" placeholder="选择协议" style="width: 100%">
             <el-option label="TCP" value="tcp" />
             <el-option label="UDP" value="udp" />
             <el-option label="全部" value="all" />
           </el-select>
         </el-form-item>
-        <el-form-item label="端口" v-if="form.type === 'port'">
-          <el-input v-model="form.port" placeholder="如: 22, 80, 3306-3308" />
+        <el-form-item label="端口" v-if="form.type === 'port' || form.type === 'dnat'">
+          <el-input v-model="form.port" :placeholder="form.type === 'dnat' ? '公网端口，如: 25565' : '如: 22, 80, 3306-3308'" />
         </el-form-item>
-        <el-form-item label="IP 地址" v-if="form.type === 'ip'">
-          <el-input v-model="form.ip" placeholder="如: 192.168.1.100 或 10.0.0.0/24" />
+        <el-form-item label="IP 地址" v-if="form.type === 'ip' || form.type === 'dnat'">
+          <el-input v-model="form.ip" :placeholder="form.type === 'dnat' ? '目标 IP，如: 192.168.3.50' : '如: 192.168.1.100 或 10.0.0.0/24'" />
+        </el-form-item>
+        <el-form-item label="目标端口" v-if="form.type === 'dnat'">
+          <el-input v-model="form.target_port" placeholder="如: 25565" />
+        </el-form-item>
+        <el-form-item label="转发链" v-if="form.type === 'dnat'">
+          <el-select v-model="form.chain" style="width: 100%">
+            <el-option label="PREROUTING (标准)" value="PREROUTING" />
+            <el-option label="oem_nat_pre (Android)" value="oem_nat_pre" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="回程NAT" v-if="form.type === 'dnat'">
+          <el-switch v-model="form.masq" />
+          <span style="margin-left: 8px; color: #909399; font-size: 12px">自动添加 MASQUERADE，外网访问通常需要开启</span>
         </el-form-item>
         <el-form-item label="方向">
           <el-select v-model="form.direction" placeholder="选择方向" style="width: 100%">
@@ -225,6 +261,15 @@
           <el-option label="OUTPUT (出站)" value="OUTPUT" />
           <el-option label="FORWARD (转发)" value="FORWARD" />
         </el-select>
+        <el-radio-group v-model="liveFamily" size="small" @change="showLiveRules">
+          <el-radio-button label="">全部</el-radio-button>
+          <el-radio-button label="4">IPv4</el-radio-button>
+          <el-radio-button label="6">IPv6</el-radio-button>
+        </el-radio-group>
+        <el-select v-model="liveTable" placeholder="选择表" style="width: 130px" @change="showLiveRules">
+          <el-option label="filter 表" value="" />
+          <el-option label="nat 表" value="nat" />
+        </el-select>
         <el-button size="small" @click="showLiveRules" :loading="liveLoading">刷新</el-button>
         <span style="color: #999; font-size: 12px; margin-left: auto">删除规则后行号会变化，建议从大到小删</span>
       </div>
@@ -242,6 +287,12 @@
             <el-option label="INPUT (入站)" value="INPUT" />
             <el-option label="OUTPUT (出站)" value="OUTPUT" />
             <el-option label="FORWARD (转发)" value="FORWARD" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="协议族">
+          <el-select v-model="insertForm.family" style="width: 100%">
+            <el-option label="IPv4 (iptables)" value="4" />
+            <el-option label="IPv6 (ip6tables)" value="6" />
           </el-select>
         </el-form-item>
         <el-form-item label="插入位置">
@@ -326,10 +377,12 @@ const liveDialogVisible = ref(false)
 const liveLoading = ref(false)
 const liveRulesText = ref('')
 const liveChain = ref('INPUT')
+const liveFamily = ref('')
+const liveTable = ref('')
 
 // 插入规则
 const insertDialogVisible = ref(false)
-const insertForm = reactive({ chain: 'INPUT', position: 1, spec: '' })
+const insertForm = reactive({ chain: 'INPUT', position: 1, spec: '', family: '4' })
 
 // 快捷操作
 const quickPortDialogVisible = ref(false)
@@ -353,7 +406,8 @@ const firewallType = computed(() => {
 
 const form = reactive({
   id: 0, name: '', type: 'port', action: 'allow', protocol: 'tcp',
-  port: '', ip: '', direction: 'in', enabled: true, note: ''
+  port: '', ip: '', target_port: '', chain: 'PREROUTING', masq: true,
+  direction: 'in', enabled: true, note: ''
 })
 
 const formRules = {
@@ -363,7 +417,7 @@ const formRules = {
 }
 
 function resetForm() {
-  Object.assign(form, { id: 0, name: '', type: 'port', action: 'allow', protocol: 'tcp', port: '', ip: '', direction: 'in', enabled: true, note: '' })
+  Object.assign(form, { id: 0, name: '', type: 'port', action: 'allow', protocol: 'tcp', port: '', ip: '', target_port: '', chain: 'PREROUTING', masq: true, direction: 'in', enabled: true, note: '' })
 }
 
 function openDialog(row?: any) {
@@ -467,7 +521,7 @@ async function showLiveRules() {
   liveLoading.value = true
   liveDialogVisible.value = true
   try {
-    const res: any = await firewallApi.liveRules(liveChain.value)
+    const res: any = await firewallApi.liveRules(liveChain.value, liveFamily.value, liveTable.value)
     liveRulesText.value = res.data || '(空)'
   } catch (e: any) {
     liveRulesText.value = '加载失败: ' + (e?.message || '未知错误')
@@ -479,7 +533,7 @@ async function doInsert() {
   if (!insertForm.spec.trim()) { ElMessage.warning('请输入规则参数'); return }
   const spec = insertForm.spec.trim().split(/\s+/)
   try {
-    await firewallApi.insertRule({ chain: insertForm.chain, position: insertForm.position, spec })
+    await firewallApi.insertRule({ chain: insertForm.chain, position: insertForm.position, spec, family: insertForm.family })
     ElMessage.success('规则已插入')
     insertDialogVisible.value = false
     showLiveRules()
