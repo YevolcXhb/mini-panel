@@ -54,6 +54,8 @@ let term: Terminal
 let ws: WebSocket
 let fitAddon: FitAddon
 let themeObserver: MutationObserver | null = null
+let resizeObserver: ResizeObserver | null = null
+let writeQueue: Promise<void> = Promise.resolve()
 
 const SSH_CONFIG_KEY = 'minipanel_ssh_config'
 
@@ -112,6 +114,17 @@ function getTerminalTheme() {
   }
 }
 
+function sendResize() {
+  if (!term || !ws || ws.readyState !== WebSocket.OPEN) return
+  ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+}
+
+function doFit() {
+  if (!term || !fitAddon) return
+  fitAddon.fit()
+  sendResize()
+}
+
 function initTerminal() {
   if (term) {
     term.dispose()
@@ -130,7 +143,7 @@ function initTerminal() {
   fitAddon = new FitAddon()
   term.loadAddon(fitAddon)
   term.open(terminalRef.value)
-  fitAddon.fit()
+  doFit()
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const token = localStorage.getItem('token') || ''
@@ -139,14 +152,22 @@ function initTerminal() {
 
   ws.onopen = () => {
     term.writeln('\x1b[32m[mini-panel terminal connected]\x1b[0m')
+    sendResize()
   }
 
   ws.onmessage = (e) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      term.write(new Uint8Array(reader.result as ArrayBuffer))
+    if (typeof e.data === 'string') {
+      // 后端拦截提示等文本消息直接显示
+      term.write(e.data)
+      return
     }
-    reader.readAsArrayBuffer(e.data)
+    // 串行写入，避免多个二进制帧乱序导致渲染错乱
+    writeQueue = writeQueue
+      .then(() => e.data.arrayBuffer())
+      .then((buf) => {
+        term.write(new Uint8Array(buf))
+      })
+      .catch(() => {})
   }
 
   ws.onclose = () => {
@@ -159,7 +180,8 @@ function initTerminal() {
 
   term.onData((data) => {
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(data)
+      // 终端输入统一按二进制帧发送，文本帧保留给 resize 控制消息
+      ws.send(new TextEncoder().encode(data))
     }
   })
 }
@@ -173,7 +195,10 @@ watch(activeTab, (v) => {
   if (v === 'terminal') {
     setTimeout(() => {
       initTerminal()
-      fitAddon?.fit()
+      requestAnimationFrame(() => {
+        fitAddon?.fit()
+        sendResize()
+      })
     }, 100)
   }
 })
@@ -183,7 +208,14 @@ onMounted(() => {
   if (activeTab.value === 'terminal') {
     initTerminal()
   }
-  window.addEventListener('resize', () => fitAddon?.fit())
+  window.addEventListener('resize', doFit)
+
+  resizeObserver = new ResizeObserver(() => {
+    requestAnimationFrame(doFit)
+  })
+  if (terminalRef.value) {
+    resizeObserver.observe(terminalRef.value)
+  }
 
   themeObserver = new MutationObserver(() => {
     const newTheme = getTerminalTheme()
@@ -196,6 +228,7 @@ onUnmounted(() => {
   if (ws) ws.close()
   if (term) term.dispose()
   themeObserver?.disconnect()
+  resizeObserver?.disconnect()
 })
 </script>
 
@@ -210,10 +243,13 @@ onUnmounted(() => {
 }
 .term-output {
   width: 100%;
+  min-width: 0;
   height: 100%;
   padding: 0;
 }
 .term-output :deep(.xterm) {
+  width: 100%;
+  min-width: 0;
   height: 100%;
 }
 </style>

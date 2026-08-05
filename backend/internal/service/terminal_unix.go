@@ -10,6 +10,7 @@ import (
 	"unsafe"
 
 	"github.com/gorilla/websocket"
+	"github.com/minipanel/minipanel/internal/global"
 )
 
 func NewTerminalSession(id string, conn *websocket.Conn, shell string, role string) (*TerminalSession, error) {
@@ -87,10 +88,34 @@ func newPTYSession(id string, conn *websocket.Conn, shell string, ptmx *os.File)
 	sessions[id] = sess
 	sessionsMu.Unlock()
 
+	// 设置默认窗口尺寸，避免 shell 在收到前端 resize 前用 0/默认宽度处理长行
+	sess.Resize(80, 24)
+
 	go sess.readLoop()
 	go sess.writeLoop()
 
 	return sess, nil
+}
+
+type winsize struct {
+	rows   uint16
+	cols   uint16
+	xpixel uint16
+	ypixel uint16
+}
+
+// Resize 调整 PTY 窗口大小（TIOCSWINSZ），让 shell/readline 使用正确的列宽处理长行和粘贴内容
+func (s *TerminalSession) Resize(cols, rows int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.usePTY || s.pty == nil || cols <= 0 || rows <= 0 {
+		return
+	}
+	ws := &winsize{rows: uint16(rows), cols: uint16(cols)}
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, s.pty.Fd(), syscall.TIOCSWINSZ, uintptr(unsafe.Pointer(ws)))
+	if errno != 0 {
+		global.LOG.Warnf("[Terminal] resize PTY failed: %v", errno)
+	}
 }
 
 func unlockpt(f *os.File) error {

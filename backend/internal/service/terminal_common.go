@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -218,9 +219,12 @@ func (s *TerminalSession) writeLoop() {
 	// 管理员：直接透传
 	if s.role == "admin" {
 		for {
-			_, data, err := s.conn.ReadMessage()
+			msgType, data, err := s.conn.ReadMessage()
 			if err != nil {
 				break
+			}
+			if msgType == websocket.TextMessage && s.handleControlMessage(data) {
+				continue
 			}
 			writer.Write(data)
 		}
@@ -230,7 +234,7 @@ func (s *TerminalSession) writeLoop() {
 
 	// 普通用户：行缓冲命令过滤
 	var lineBuf []byte
-	dirty := false     // 当前行包含不可追踪输入（方向键/Tab/历史），不再信任 lineBuf
+	dirty := false      // 当前行包含不可追踪输入（方向键/Tab/历史），不再信任 lineBuf
 	escapeMode := false // 处理 ESC 转义序列
 
 	resetLine := func() {
@@ -246,9 +250,12 @@ func (s *TerminalSession) writeLoop() {
 	}
 
 	for {
-		_, data, err := s.conn.ReadMessage()
+		msgType, data, err := s.conn.ReadMessage()
 		if err != nil {
 			break
+		}
+		if msgType == websocket.TextMessage && s.handleControlMessage(data) {
+			continue
 		}
 		for i := 0; i < len(data); i++ {
 			b := data[i]
@@ -303,6 +310,20 @@ func (s *TerminalSession) writeLoop() {
 		}
 	}
 	s.Close()
+}
+
+// handleControlMessage 处理前端发来的控制消息（目前只有终端尺寸调整 resize）
+func (s *TerminalSession) handleControlMessage(data []byte) bool {
+	var msg struct {
+		Type string `json:"type"`
+		Cols int    `json:"cols"`
+		Rows int    `json:"rows"`
+	}
+	if err := json.Unmarshal(data, &msg); err != nil || msg.Type != "resize" {
+		return false
+	}
+	s.Resize(msg.Cols, msg.Rows)
+	return true
 }
 
 func (s *TerminalSession) Close() {

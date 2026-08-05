@@ -22,3 +22,6 @@ func NewTerminalSession(id string, conn *websocket.Conn, shell string, role stri
 	sess.role = role
 	return sess, nil
 }
+
+// Resize Windows 管道终端无需调整窗口大小
+func (s *TerminalSession) Resize(cols, rows int) {}
