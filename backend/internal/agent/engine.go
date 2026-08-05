@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -61,15 +60,15 @@ func (e *Engine) Run(ctx context.Context, sessionID uint, userInput string, stre
 		if r := recover(); r != nil {
 			global.LOG.Errorf("[Engine] panic recovered: %v", r)
 			err = fmt.Errorf("engine panic: %v", r)
-			stream <- StreamChunk{Type: "error", Error: fmt.Sprintf("引擎内部错误: %v", r)}
-			stream <- StreamChunk{Type: "done", Success: false}
+			sendChunk(ctx, stream, StreamChunk{Type: "error", Error: fmt.Sprintf("引擎内部错误: %v", r)})
+			sendChunk(ctx, stream, StreamChunk{Type: "done", Success: false})
 		}
 	}()
 
 	messages, err := e.sessionMgr.LoadMessages(sessionID)
 	if err != nil {
 		global.LOG.Errorf("[Engine] 会话%d: 加载会话失败: %v", sessionID, err)
-		stream <- StreamChunk{Type: "error", Error: "加载会话失败: " + err.Error()}
+		sendChunk(ctx, stream, StreamChunk{Type: "error", Error: "加载会话失败: " + err.Error()})
 		return err
 	}
 	global.LOG.Infof("[Engine] 会话%d: 加载历史消息成功，共%d条", sessionID, len(messages))
@@ -78,7 +77,7 @@ func (e *Engine) Run(ctx context.Context, sessionID uint, userInput string, stre
 	messages = append(messages, provider.LLMMessage{Role: "user", Content: userInput})
 	if err := e.sessionMgr.SaveUserMessage(sessionID, userInput); err != nil {
 		global.LOG.Errorf("[Engine] 会话%d: 保存用户消息失败: %v", sessionID, err)
-		stream <- StreamChunk{Type: "error", Error: "保存消息失败: " + err.Error()}
+		sendChunk(ctx, stream, StreamChunk{Type: "error", Error: "保存消息失败: " + err.Error()})
 		return err
 	}
 
@@ -91,15 +90,15 @@ func (e *Engine) RunWithConfirm(ctx context.Context, sessionID uint, toolCallID 
 		if r := recover(); r != nil {
 			global.LOG.Errorf("[Engine] panic recovered in RunWithConfirm: %v", r)
 			err = fmt.Errorf("engine panic: %v", r)
-			stream <- StreamChunk{Type: "error", Error: fmt.Sprintf("引擎内部错误: %v", r)}
-			stream <- StreamChunk{Type: "done", Success: false}
+			sendChunk(ctx, stream, StreamChunk{Type: "error", Error: fmt.Sprintf("引擎内部错误: %v", r)})
+			sendChunk(ctx, stream, StreamChunk{Type: "done", Success: false})
 		}
 	}()
 
 	messages, err := e.sessionMgr.LoadMessages(sessionID)
 	if err != nil {
 		global.LOG.Errorf("[Engine] 会话%d: 加载会话失败: %v", sessionID, err)
-		stream <- StreamChunk{Type: "error", Error: "加载会话失败: " + err.Error()}
+		sendChunk(ctx, stream, StreamChunk{Type: "error", Error: "加载会话失败: " + err.Error()})
 		return err
 	}
 	global.LOG.Infof("[Engine] 会话%d: 加载历史消息成功，共%d条", sessionID, len(messages))
@@ -123,7 +122,7 @@ func (e *Engine) RunWithConfirm(ctx context.Context, sessionID uint, toolCallID 
 
 	if targetTC == nil {
 		global.LOG.Errorf("[Engine] 会话%d: 找不到toolCallID=%s对应的工具调用", sessionID, toolCallID)
-		stream <- StreamChunk{Type: "error", Error: "找不到工具调用信息"}
+		sendChunk(ctx, stream, StreamChunk{Type: "error", Error: "找不到工具调用信息"})
 		return fmt.Errorf("tool call not found: %s", toolCallID)
 	}
 	global.LOG.Infof("[Engine] 会话%d: 找到待确认工具调用: %s", sessionID, targetTC.Function.Name)
@@ -134,44 +133,105 @@ func (e *Engine) RunWithConfirm(ctx context.Context, sessionID uint, toolCallID 
 		resultContent = "用户取消了此操作"
 	} else {
 		global.LOG.Infof("[Engine] 会话%d: 用户确认执行，开始执行工具: %s", sessionID, targetTC.Function.Name)
-		stream <- StreamChunk{
+		sendChunk(ctx, stream, StreamChunk{
 			Type:       "tool_call",
 			ToolCallID: targetTC.ID,
 			ToolName:   targetTC.Function.Name,
 			Content:    targetTC.Function.Arguments,
-		}
-
-		// 用户已确认：临时允许危险命令执行（仅本次调用）
-		prevOpts := tools.GetExecOptionsForTest()
-		tools.SetExecOptions(tools.ExecOptions{
-			AllowDangerous: true,
-			Timeout:        prevOpts.Timeout,
 		})
-		toolResult := e.executor.Execute(ctx, *targetTC)
-		// 恢复原配置，避免影响后续同连接内的其他请求
-		tools.SetExecOptions(prevOpts)
+
+		// 用户已确认：仅本次调用放开危险命令拦截
+		execCtx := tools.WithExecOptions(ctx, tools.ExecOptions{
+			AllowDangerous: true,
+			Timeout:        tools.ExecOptionsFromContext(ctx).Timeout,
+		})
+		toolResult := e.executor.Execute(execCtx, *targetTC)
 		resultContent = e.formatToolResult(toolResult)
 		global.LOG.Infof("[Engine] 会话%d: 确认执行的工具%s完成，成功=%v，结果长度=%d",
 			sessionID, targetTC.Function.Name, toolResult.Success, len(resultContent))
 
-		stream <- StreamChunk{
+		sendChunk(ctx, stream, StreamChunk{
 			Type:       "tool_result",
 			ToolCallID: targetTC.ID,
 			ToolName:   targetTC.Function.Name,
 			Content:    resultContent,
 			Success:    toolResult.Success,
-		}
+			Cached:     toolResult.Cached,
+		})
 	}
 
 	_ = e.sessionMgr.SaveToolResult(sessionID, targetTC.ID, targetTC.Function.Name, resultContent)
 	global.LOG.Infof("[Engine] 会话%d: 工具结果已保存，继续ReAct循环", sessionID)
 
+	// 只允许确认“最近一条待确认的工具调用”，防止旧确认把后续对话截断/打乱
+	lastToolMsgIdx := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "assistant" && len(messages[i].ToolCalls) > 0 {
+			lastToolMsgIdx = i
+			break
+		}
+	}
+	if targetTCMsgIdx != lastToolMsgIdx {
+		global.LOG.Warnf("[Engine] 会话%d: 工具调用 %s 已过期，拒绝确认", sessionID, toolCallID)
+		sendChunk(ctx, stream, StreamChunk{Type: "error", Error: "该工具调用已过期，请重新发起操作"})
+		sendChunk(ctx, stream, StreamChunk{Type: "done", Success: false})
+		return fmt.Errorf("tool call %s is stale", toolCallID)
+	}
+
+	// 重建该 assistant 消息后的完整 tool 响应序列（保留同批其它工具结果），
+	// 只把本次确认的工具结果替换为真实执行结果
 	if targetTCMsgIdx >= 0 && targetTCMsgIdx < len(messages) {
-		messages = append(messages[:targetTCMsgIdx+1], provider.LLMMessage{
-			Role:       "tool",
-			ToolCallID: targetTC.ID,
-			Content:    resultContent,
-		})
+		prefix := messages[:targetTCMsgIdx+1]
+		rest := messages[targetTCMsgIdx+1:]
+		rebuilt := make([]provider.LLMMessage, 0, len(rest))
+		for _, m := range rest {
+			if m.Role == "tool" && m.ToolCallID == targetTC.ID {
+				m.Content = resultContent
+			}
+			rebuilt = append(rebuilt, m)
+		}
+		messages = append(prefix, rebuilt...)
+	}
+
+	messages = e.ensureSystemPrompt(messages)
+	return e.runReActLoop(ctx, sessionID, messages, stream)
+}
+
+// RunRegenerate 重新生成上一条回复：
+// 删除最后一条 assistant 消息后，以历史中最后一条 user 消息为上下文重新运行 ReAct 循环，
+// 不再向数据库重复写入用户消息。
+func (e *Engine) RunRegenerate(ctx context.Context, sessionID uint, stream chan<- StreamChunk) (err error) {
+	global.LOG.Infof("[Engine] 会话%d: 收到重新生成请求", sessionID)
+	defer func() {
+		if r := recover(); r != nil {
+			global.LOG.Errorf("[Engine] panic recovered in RunRegenerate: %v", r)
+			err = fmt.Errorf("engine panic: %v", r)
+			sendChunk(ctx, stream, StreamChunk{Type: "error", Error: fmt.Sprintf("引擎内部错误: %v", r)})
+			sendChunk(ctx, stream, StreamChunk{Type: "done", Success: false})
+		}
+	}()
+
+	messages, err := e.sessionMgr.LoadMessages(sessionID)
+	if err != nil {
+		global.LOG.Errorf("[Engine] 会话%d: 加载会话失败: %v", sessionID, err)
+		sendChunk(ctx, stream, StreamChunk{Type: "error", Error: "加载会话失败: " + err.Error()})
+		return err
+	}
+
+	// 删除最后一条 assistant 回复（数据库 + 内存）
+	if len(messages) > 0 && messages[len(messages)-1].Role == "assistant" {
+		if err := e.sessionMgr.DeleteLastAssistantMessage(sessionID); err != nil {
+			global.LOG.Warnf("[Engine] 会话%d: 删除上一条回复失败: %v", sessionID, err)
+		}
+		messages = messages[:len(messages)-1]
+	}
+
+	// 需要以 user 消息作为重新生成的起点
+	if len(messages) == 0 || messages[len(messages)-1].Role != "user" {
+		global.LOG.Warnf("[Engine] 会话%d: 没有可重新生成的上一条回复", sessionID)
+		sendChunk(ctx, stream, StreamChunk{Type: "error", Error: "没有可重新生成的上一条回复"})
+		sendChunk(ctx, stream, StreamChunk{Type: "done", Success: false})
+		return fmt.Errorf("nothing to regenerate")
 	}
 
 	messages = e.ensureSystemPrompt(messages)
@@ -193,8 +253,8 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 		}
 		if !finalMessageSent {
 			global.LOG.Warnf("[Engine] 会话%d: ⚠️ 触发兜底逻辑，发送默认最终消息", sessionID)
-			stream <- StreamChunk{Type: "message", Content: "操作已执行完成，请查看上方结果。如果有其他问题，请随时告诉我。"}
-			stream <- StreamChunk{Type: "done", Success: true}
+			sendChunk(ctx, stream, StreamChunk{Type: "message", Content: "操作已执行完成，请查看上方结果。如果有其他问题，请随时告诉我。"})
+			sendChunk(ctx, stream, StreamChunk{Type: "done", Success: true})
 		} else {
 			global.LOG.Infof("[Engine] 会话%d: ✅ 循环正常结束，已发送最终消息", sessionID)
 		}
@@ -206,7 +266,6 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 			global.LOG.Infof("[Engine] 会话%d: 上下文取消，退出循环", sessionID)
 			// 保存中断标记：如果最后一条 assistant 消息含 tool_calls 但缺少 tool result，
 			// 补充虚拟 result 到数据库，避免下次对话时 LLM API 400 错误
-			e.saveInterruptedToolResults(sessionID, messages)
 			return ctx.Err()
 		default:
 		}
@@ -217,7 +276,7 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 		resp, err := e.chatStreamWithRetry(ctx, messages, toolDefs, 3, stream, "")
 		if err != nil {
 			global.LOG.Errorf("[Engine] 会话%d: ❌ LLM调用失败: %v", sessionID, err)
-			stream <- StreamChunk{Type: "error", Error: "LLM 调用失败: " + err.Error()}
+			sendChunk(ctx, stream, StreamChunk{Type: "error", Error: "LLM 调用失败: " + err.Error()})
 			return err
 		}
 
@@ -235,7 +294,7 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 			if strings.TrimSpace(content) == "" {
 				global.LOG.Warnf("[Engine] 会话%d: LLM无工具调用且内容为空，使用默认回复", sessionID)
 				content = "工具执行完成，结果已展示。如果需要进一步操作，请告诉我。"
-				stream <- StreamChunk{Type: "message", Content: content}
+				sendChunk(ctx, stream, StreamChunk{Type: "message", Content: content})
 			} else {
 				global.LOG.Infof("[Engine] 会话%d: ✅ LLM无工具调用，直接发送最终回复", sessionID)
 				// 流式路径已逐 token 推送，此处无需再推 message
@@ -243,7 +302,7 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 			messages = append(messages, provider.LLMMessage{Role: "assistant", Content: content})
 			_ = e.sessionMgr.SaveAssistantMessage(sessionID, content, nil)
 			finalMessageSent = true
-			stream <- StreamChunk{Type: "done", Success: true}
+			sendChunk(ctx, stream, StreamChunk{Type: "done", Success: true})
 			global.LOG.Infof("[Engine] 会话%d: ✅ 已发送done事件，流程结束", sessionID)
 			return nil
 		}
@@ -285,12 +344,12 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 				continue
 			}
 
-			stream <- StreamChunk{
+			sendChunk(ctx, stream, StreamChunk{
 				Type:       "tool_call",
 				ToolCallID: tc.ID,
 				ToolName:   tc.Function.Name,
 				Content:    argsStr,
-			}
+			})
 
 			toolResult := e.executor.Execute(ctx, tc)
 			resultContent := e.formatToolResult(toolResult)
@@ -298,32 +357,33 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 				sessionID, tc.Function.Name, toolResult.Success, len(resultContent))
 			global.LOG.Debugf("[Engine] 会话%d: 工具%s结果预览: %s", sessionID, tc.Function.Name, truncateStr(resultContent, 200))
 
-			if len(resultContent) > maxToolOutputLength {
+			if len(resultContent) > maxToolOutputLength && !strings.Contains(resultContent, "[lazy-ref:") {
 				resultContent = resultContent[:maxToolOutputLength] + fmt.Sprintf("\n... [输出过长，已截断。总长度 %d 字符]", len(resultContent))
 				global.LOG.Warnf("[Engine] 会话%d: 工具输出过长，已截断到%d字符", sessionID, maxToolOutputLength)
 			}
 
 			if !toolResult.Success && strings.Contains(toolResult.Error, "confirm required") {
 				global.LOG.Infof("[Engine] 会话%d: ⚠️ 工具%s需要用户确认，暂停等待", sessionID, tc.Function.Name)
-				stream <- StreamChunk{
+				sendChunk(ctx, stream, StreamChunk{
 					Type:       "confirm_required",
 					ToolCallID: tc.ID,
 					ToolName:   tc.Function.Name,
 					Message:    toolResult.Error,
-				}
+				})
 				finalMessageSent = true
-				stream <- StreamChunk{Type: "done", Success: false, Error: "等待用户确认"}
+				sendChunk(ctx, stream, StreamChunk{Type: "done", Success: false, Error: "等待用户确认"})
 				global.LOG.Infof("[Engine] 会话%d: ✅ 已发送等待确认done事件", sessionID)
 				return nil
 			}
 
-			stream <- StreamChunk{
+			sendChunk(ctx, stream, StreamChunk{
 				Type:       "tool_result",
 				ToolCallID: tc.ID,
 				ToolName:   tc.Function.Name,
 				Content:    resultContent,
 				Success:    toolResult.Success,
-			}
+				Cached:     toolResult.Cached,
+			})
 
 			toolResults = append(toolResults, provider.LLMMessage{
 				Role:       "tool",
@@ -383,11 +443,11 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 			lastCompressionStep = step + 1
 			global.LOG.Infof("[Engine] 会话%d: 压缩触发 trigger=%s, tokens_saved=%d, messages=%d→%d",
 				sessionID, report.Trigger, report.TokensSaved, report.MessagesCompressed, len(messages))
-			stream <- StreamChunk{
+			sendChunk(ctx, stream, StreamChunk{
 				Type:        "compression_triggered",
 				TokensSaved: report.TokensSaved,
 				Content:     string(report.Trigger),
-			}
+			})
 		}
 		global.LOG.Infof("[Engine] 会话%d: 消息数量=%d，进入下一轮循环", sessionID, len(messages))
 	}
@@ -397,7 +457,7 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 	finalResp, err := e.chatStreamWithRetry(ctx, messages, toolDefsEmpty, 2, stream, "")
 	if err != nil {
 		global.LOG.Errorf("[Engine] 会话%d: ❌ 最终总结LLM调用失败: %v，发送兜底消息", sessionID, err)
-		stream <- StreamChunk{Type: "message", Content: "操作已执行，但生成总结时遇到问题。请查看上方工具执行结果。如果需要进一步分析，请告诉我。"}
+		sendChunk(ctx, stream, StreamChunk{Type: "message", Content: "操作已执行，但生成总结时遇到问题。请查看上方工具执行结果。如果需要进一步分析，请告诉我。"})
 	} else {
 		content := finalResp.Content
 		contentLen := len(strings.TrimSpace(content))
@@ -405,7 +465,7 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 		if contentLen == 0 {
 			global.LOG.Warnf("[Engine] 会话%d: 最终总结内容为空，使用默认回复", sessionID)
 			content = "工具执行完成，结果已展示。如果需要进一步操作，请告诉我。"
-			stream <- StreamChunk{Type: "message", Content: content}
+			sendChunk(ctx, stream, StreamChunk{Type: "message", Content: content})
 		} else {
 			global.LOG.Debugf("[Engine] 会话%d: 最终总结预览: %s", sessionID, truncateStr(content, 200))
 			// 流式路径已逐 token 推送，此处无需再推 message
@@ -413,7 +473,7 @@ func (e *Engine) runReActLoop(ctx context.Context, sessionID uint, messages []pr
 		_ = e.sessionMgr.SaveAssistantMessage(sessionID, content, nil)
 	}
 	finalMessageSent = true
-	stream <- StreamChunk{Type: "done", Success: true}
+	sendChunk(ctx, stream, StreamChunk{Type: "done", Success: true})
 	global.LOG.Infof("[Engine] 会话%d: ✅ 最终总结和done事件已发送，流程全部结束", sessionID)
 	return nil
 }
@@ -423,6 +483,15 @@ func truncateStr(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// sendChunk 安全地向 SSE 流发送数据：客户端断开（ctx 取消）时直接放弃本次发送，
+// 避免 goroutine 阻塞在写通道上无法退出
+func sendChunk(ctx context.Context, stream chan<- StreamChunk, chunk StreamChunk) {
+	select {
+	case <-ctx.Done():
+	case stream <- chunk:
+	}
 }
 
 func (e *Engine) ensureSystemPrompt(messages []provider.LLMMessage) []provider.LLMMessage {
@@ -458,37 +527,6 @@ func (e *Engine) formatToolResult(result tools.ToolResult) string {
 		return fmt.Sprintf("执行失败: %s\n输出:\n%s", result.Error, result.Result)
 	}
 	return fmt.Sprintf("执行失败: %s", result.Error)
-}
-
-// saveInterruptedToolResults 检查内存中的消息列表，如果最后一条 assistant 消息
-// 含有 tool_calls 但缺少对应的 tool result（说明用户中断了回复），
-// 则将虚拟中断 result 保存到数据库，避免下次对话时 LLM API 报 400 错误。
-func (e *Engine) saveInterruptedToolResults(sessionID uint, messages []provider.LLMMessage) {
-	if len(messages) == 0 {
-		return
-	}
-
-	// 收集已有的 tool_call_id
-	toolResults := make(map[string]bool)
-	for _, m := range messages {
-		if m.Role == "tool" && m.ToolCallID != "" {
-			toolResults[m.ToolCallID] = true
-		}
-	}
-
-	// 检查所有 assistant 消息的 tool_calls
-	for _, m := range messages {
-		if m.Role != "assistant" || len(m.ToolCalls) == 0 {
-			continue
-		}
-		for _, tc := range m.ToolCalls {
-			if !toolResults[tc.ID] {
-				global.LOG.Warnf("[Engine] 会话%d: 检测到中断的 tool_call(id=%s, name=%s)，保存中断标记",
-					sessionID, tc.ID, tc.Function.Name)
-				_ = e.sessionMgr.SaveToolResult(sessionID, tc.ID, tc.Function.Name, "[操作已中断：用户停止了回复]")
-			}
-		}
-	}
 }
 
 func (e *Engine) chatWithRetry(ctx context.Context, messages []provider.LLMMessage, tools []provider.ToolDefinition, maxRetries int) (*provider.LLMResponse, error) {
@@ -535,7 +573,7 @@ func (e *Engine) chatStreamWithRetry(ctx context.Context, messages []provider.LL
 			return nil, err
 		}
 		if strings.TrimSpace(resp.Content) != "" {
-			stream <- StreamChunk{Type: "message", Content: resp.Content, Phase: phaseLabel}
+			sendChunk(ctx, stream, StreamChunk{Type: "message", Content: resp.Content, Phase: phaseLabel})
 		}
 		return resp, nil
 	}
@@ -576,7 +614,7 @@ func (e *Engine) chatStreamWithRetry(ctx context.Context, messages []provider.LL
 				resp.Content += delta.Content
 				tokenCount++
 				// 真正的逐 token 推送到前端
-				stream <- StreamChunk{Type: "token", Content: delta.Content, Phase: phaseLabel}
+				sendChunk(ctx, stream, StreamChunk{Type: "token", Content: delta.Content, Phase: phaseLabel})
 			case "tool_call":
 				tc := provider.ToolCall{
 					ID:   delta.ToolCallID,
@@ -627,24 +665,6 @@ func logPhase(phaseLabel string) string {
 		return ""
 	}
 	return " [phase=" + phaseLabel + "]"
-}
-
-func argsStrToMap(args string) map[string]interface{} {
-	var m map[string]interface{}
-	_ = json.Unmarshal([]byte(args), &m)
-	return m
-}
-
-func IsDestructiveCommand(command string) bool {
-	destructive := []string{"rm ", "kill ", "shutdown", "reboot", "poweroff", "systemctl stop", "systemctl restart",
-		"docker rm", "docker stop", "docker restart", "pkill", "killall", "iptables -F", "ufw disable"}
-	lower := strings.ToLower(command)
-	for _, d := range destructive {
-		if strings.Contains(lower, d) {
-			return true
-		}
-	}
-	return false
 }
 
 func BuildTitleFromContent(content string) string {

@@ -126,6 +126,9 @@
             <el-switch v-model="form.proxy_ws" />
             <span style="margin-left: 8px; color: #909399; font-size: 12px">启用后支持 WebSocket 连接升级</span>
           </el-form-item>
+          <el-form-item label="上传大小限制" v-if="form.type === 'proxy'">
+            <el-input v-model="form.client_max_body_size" placeholder="如：10240M（留空为 Nginx 默认限制）" />
+          </el-form-item>
           <el-form-item label="SSL">
             <el-switch v-model="form.ssl" />
           </el-form-item>
@@ -474,7 +477,7 @@ const installing = ref(false)
 const actionLoading = ref(false)
 const serviceStatus = ref<any>({ installed: false, running: false, version: '' })
 
-const form = ref<any>({ name: '', domain: '', port: 80, root: '', type: 'static', php_version: '', proxy_target: '', proxy_ws: false, ssl: false, ssl_cert: '', ssl_key: '', ssl_cert_pem: '', ssl_key_pem: '', index_page: '', redirects: [], auth_enabled: false, auth_user: '', auth_password: '',
+const form = ref<any>({ name: '', domain: '', port: 80, root: '', type: 'static', php_version: '', proxy_target: '', proxy_ws: false, client_max_body_size: '', ssl: false, ssl_cert: '', ssl_key: '', ssl_cert_pem: '', ssl_key_pem: '', index_page: '', redirects: [], auth_enabled: false, auth_user: '', auth_password: '',
   error_page_404: '', error_page_502: '', error_page_503: '',
   rate_limit_enabled: false, rate_limit_rate: '', rate_limit_burst: 10,
   hotlink_protection: false, hotlink_domains: '', hotlink_exts: 'jpg,jpeg,png,gif,svg,webp,js,css,woff,woff2',
@@ -586,7 +589,7 @@ async function loadWebsites() {
 
 function showAdd() {
   editing.value = false
-  form.value = { name: '', domain: '', port: 80, root: '', type: 'static', php_version: '', proxy_target: '', proxy_ws: false, ssl: false, ssl_cert: '', ssl_key: '', ssl_cert_pem: '', ssl_key_pem: '', index_page: '', redirects: [],
+  form.value = { name: '', domain: '', port: 80, root: '', type: 'static', php_version: '', proxy_target: '', proxy_ws: false, client_max_body_size: '', ssl: false, ssl_cert: '', ssl_key: '', ssl_cert_pem: '', ssl_key_pem: '', index_page: '', redirects: [],
     error_page_404: '', error_page_502: '', error_page_503: '',
     rate_limit_enabled: false, rate_limit_rate: '', rate_limit_burst: 10,
     hotlink_protection: false, hotlink_domains: '', hotlink_exts: 'jpg,jpeg,png,gif,svg,webp,js,css,woff,woff2',

@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/minipanel/minipanel/internal/global"
@@ -26,7 +29,19 @@ func NewFirewallService() *FirewallService {
 // 通过检查 /proc/1/root/system/bin/iptables 是否存在来判断。
 // /proc/1/root/ 指向 Android init 进程的根目录，只有 root 权限可读。
 func isAndroidEnv() bool {
+	if global.IsAndroidChroot {
+		return true
+	}
 	if _, err := os.Stat("/proc/1/root/system/bin/iptables"); err == nil {
+		return true
+	}
+	if findAndroidProcessPID("magiskd") > 0 {
+		return true
+	}
+	if _, err := os.Stat("/opt/minipanel/bin/iptables"); err == nil {
+		return true
+	}
+	if _, err := os.Stat("/opt/minipanel/bin/iptables-android"); err == nil {
 		return true
 	}
 	return false
@@ -36,24 +51,143 @@ func isAndroidEnv() bool {
 // Android chroot 环境：通过 /proc/1/root/ 逃逸调用 Android 原生 iptables（legacy 后端）
 // 普通 Linux 环境：直接调用系统 iptables
 func iptablesBase() []string {
-	if isAndroidEnv() {
-		return []string{"chroot", "/proc/1/root/", "/system/bin/iptables"}
+	if !isAndroidEnv() {
+		return []string{"iptables"}
 	}
-	return []string{"iptables"}
+	return resolveAndroidIptablesPrefix("iptables")
 }
 
 // ip6tablesBase 返回调用 ip6tables 的命令前缀（IPv6）。
 func ip6tablesBase() []string {
-	if isAndroidEnv() {
-		return []string{"chroot", "/proc/1/root/", "/system/bin/ip6tables"}
+	if !isAndroidEnv() {
+		return []string{"ip6tables"}
 	}
-	return []string{"ip6tables"}
+	return resolveAndroidIptablesPrefix("ip6tables")
 }
 
 // iptablesCmd 创建一个 iptables 命令，自动选择 Android 原生或系统 iptables。
 func iptablesCmd(args ...string) *exec.Cmd {
 	base := iptablesBase()
 	return exec.Command(base[0], append(base[1:], args...)...)
+}
+
+const androidPrefixCacheTTL = 30 * time.Second
+
+type androidPrefixCacheEntry struct {
+	prefix []string
+	at     time.Time
+}
+
+var (
+	androidPrefixCacheMu        sync.Mutex
+	androidPrefixCache          = make(map[string]androidPrefixCacheEntry)
+	resolvedAndroidIptablesPath string
+)
+
+// findAndroidProcessPID 在共享的 /proc 中查找 Android 原生进程（如 magiskd）的 PID，
+// 用于构造 /proc/<pid>/root 逃逸路径
+func findAndroidProcessPID(name string) int {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return 0
+	}
+	for _, e := range entries {
+		pidStr := e.Name()
+		if pidStr == "" || pidStr[0] < '0' || pidStr[0] > '9' {
+			continue
+		}
+		if data, err := os.ReadFile("/proc/" + pidStr + "/comm"); err == nil {
+			if strings.TrimSpace(string(data)) == name {
+				pid, _ := strconv.Atoi(pidStr)
+				if pid > 0 {
+					return pid
+				}
+			}
+		}
+		if data, err := os.ReadFile("/proc/" + pidStr + "/cmdline"); err == nil {
+			cmdline := strings.ReplaceAll(string(data), "\x00", " ")
+			if strings.Contains(cmdline, name) {
+				pid, _ := strconv.Atoi(pidStr)
+				if pid > 0 {
+					return pid
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// androidRootCandidates 返回可访问 Android 根目录的候选路径：
+// magiskd 进程优先（文档推荐的逃逸入口），其次为 init（/proc/1/root）
+func androidRootCandidates() []string {
+	var roots []string
+	if pid := findAndroidProcessPID("magiskd"); pid > 0 {
+		roots = append(roots, fmt.Sprintf("/proc/%d/root", pid))
+	}
+	roots = append(roots, "/proc/1/root")
+	return roots
+}
+
+// androidIptablesCandidates 构造按优先级排列的 Android iptables 调用前缀：
+// 1. /opt/minipanel/bin/iptables 包装脚本（文档 B2）
+// 2. /opt/minipanel/bin/iptables-android 复制二进制（文档 B1）
+// 3. 逃逸路径直接调用（文档 B3）
+// 4. chroot 到逃逸根目录后调用（原实现）
+// 5. chroot 内系统命令兜底
+func androidIptablesCandidates(bin string, roots []string) [][]string {
+	var candidates [][]string
+	if bin == "iptables" {
+		for _, p := range []string{"/opt/minipanel/bin/iptables", "/opt/minipanel/bin/iptables-android"} {
+			if _, err := os.Stat(p); err == nil {
+				candidates = append(candidates, []string{p})
+			}
+		}
+	}
+	for _, root := range roots {
+		androidBin := root + "/system/bin/" + bin
+		candidates = append(candidates, []string{androidBin})
+		candidates = append(candidates, []string{"chroot", root + "/", "/system/bin/" + bin})
+	}
+	candidates = append(candidates, []string{bin})
+	return candidates
+}
+
+// probeIptablesPrefix 通过 -L -n 探测候选命令前缀是否真正可用
+func probeIptablesPrefix(prefix []string) bool {
+	if len(prefix) == 0 {
+		return false
+	}
+	cmd := exec.Command(prefix[0], append(prefix[1:], "-L", "-n")...)
+	if err := cmd.Run(); err != nil {
+		global.LOG.Debugf("[Firewall] probe iptables prefix %v failed: %v", prefix, err)
+		return false
+	}
+	return true
+}
+
+// resolveAndroidIptablesPrefix 解析可用的 Android iptables/ip6tables 调用前缀并做短时缓存，
+// 避免每条规则都重复探测；全部失败时回退到 chroot 内系统命令
+func resolveAndroidIptablesPrefix(bin string) []string {
+	androidPrefixCacheMu.Lock()
+	defer androidPrefixCacheMu.Unlock()
+
+	if entry, ok := androidPrefixCache[bin]; ok && time.Since(entry.at) < androidPrefixCacheTTL {
+		return entry.prefix
+	}
+
+	candidates := androidIptablesCandidates(bin, androidRootCandidates())
+	resolved := []string{bin}
+	for _, prefix := range candidates {
+		if probeIptablesPrefix(prefix) {
+			resolved = prefix
+			break
+		}
+	}
+	if len(resolved) > 1 || resolved[0] != bin {
+		resolvedAndroidIptablesPath = strings.Join(resolved, " ")
+	}
+	androidPrefixCache[bin] = androidPrefixCacheEntry{prefix: resolved, at: time.Now()}
+	return resolved
 }
 
 func (s *FirewallService) Create(item *model.FirewallRule) error {
@@ -66,7 +200,11 @@ func (s *FirewallService) Create(item *model.FirewallRule) error {
 	if item.Action == "" {
 		item.Action = "allow"
 	}
-	return s.repo.Create(item)
+	if err := s.repo.Create(item); err != nil {
+		return err
+	}
+	s.syncAndroidPersistence()
+	return nil
 }
 
 func (s *FirewallService) List() ([]model.FirewallRule, error) {
@@ -74,11 +212,29 @@ func (s *FirewallService) List() ([]model.FirewallRule, error) {
 }
 
 func (s *FirewallService) Update(item *model.FirewallRule) error {
-	return s.repo.Update(item)
+	if err := s.repo.Update(item); err != nil {
+		return err
+	}
+	s.syncAndroidPersistence()
+	return nil
 }
 
 func (s *FirewallService) Delete(id uint) error {
-	return s.repo.Delete(id)
+	if err := s.repo.Delete(id); err != nil {
+		return err
+	}
+	s.syncAndroidPersistence()
+	return nil
+}
+
+// ListDeletedRules 列出已软删除的规则（回收站）
+func (s *FirewallService) ListDeletedRules() ([]model.FirewallRule, error) {
+	return s.repo.ListDeleted()
+}
+
+// RestoreRule 恢复被软删除的规则
+func (s *FirewallService) RestoreRule(id uint) error {
+	return s.repo.Restore(id)
 }
 
 func (s *FirewallService) getAvailableBackends() []string {
@@ -210,6 +366,9 @@ func (s *FirewallService) GetStatus() (map[string]interface{}, error) {
 		if backend == "android-iptables" {
 			result["version"] = "Android iptables (legacy)"
 			result["android_env"] = true
+			if resolvedAndroidIptablesPath != "" {
+				result["resolved_path"] = resolvedAndroidIptablesPath
+			}
 		}
 	}
 	return result, nil
@@ -356,9 +515,13 @@ func (s *FirewallService) Diagnose() map[string]interface{} {
 	// Android 环境检测
 	androidEnv := isAndroidEnv()
 	report["android_env"] = androidEnv
+	report["android_magiskd_pid"] = findAndroidProcessPID("magiskd")
 	if androidEnv {
 		report["container_type"] = "android-chroot"
 		report["in_container"] = true
+		if resolvedAndroidIptablesPath != "" {
+			report["android_iptables_resolved"] = resolvedAndroidIptablesPath
+		}
 	}
 
 	// 后端工具检测
@@ -668,10 +831,111 @@ func (s *FirewallService) ApplyRulesForBackend(backend string) (string, error) {
 		}
 	}
 
+	if backend == "android-iptables" {
+		if path := s.syncAndroidPersistence(); path != "" {
+			output = append(output, "已写入开机持久化脚本: "+path)
+		}
+	}
+
 	if len(output) == 0 {
 		return "No rules to apply", nil
 	}
 	return strings.Join(output, "\n"), nil
+}
+
+// buildAndroidPersistScript 生成 Magisk service.d 开机脚本内容（文档方案 C）
+// 脚本不冲刷 Android 原有规则，仅追加面板启用的规则，并用 -C 检查避免重复
+func buildAndroidPersistScript(rules []model.FirewallRule) string {
+	var sb strings.Builder
+	sb.WriteString("#!/system/bin/sh\n")
+	sb.WriteString("# Generated by MiniPanel - firewall persistence\n")
+	sb.WriteString("sleep 30\n")
+	sb.WriteString("AIPT=/system/bin/iptables\n")
+	for _, rule := range rules {
+		if !rule.Enabled {
+			continue
+		}
+		chain := "INPUT"
+		if rule.Direction == "out" {
+			chain = "OUTPUT"
+		}
+		action := "ACCEPT"
+		if rule.Action == "deny" {
+			action = "DROP"
+		}
+		if rule.Type == "port" && rule.Port != "" {
+			proto := rule.Protocol
+			if proto == "" || proto == "all" {
+				proto = "tcp"
+			}
+			ports := strings.Split(normalizePort(rule.Port, false), ",")
+			for _, port := range ports {
+				port = strings.TrimSpace(port)
+				if port == "" {
+					continue
+				}
+				sb.WriteString(fmt.Sprintf(
+					"$AIPT -C %s -p %s --dport %s -j %s 2>/dev/null || $AIPT -A %s -p %s --dport %s -j %s\n",
+					chain, proto, port, action, chain, proto, port, action))
+			}
+		} else if rule.Type == "ip" && rule.IP != "" {
+			ip := strings.TrimSpace(rule.IP)
+			if ip == "" || strings.ContainsAny(ip, "' \t") {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf(
+				"$AIPT -C %s -s %s -j %s 2>/dev/null || $AIPT -A %s -s %s -j %s\n",
+				chain, ip, action, chain, ip, action))
+		}
+	}
+	return sb.String()
+}
+
+// findAndroidServiceDir 通过逃逸路径定位并准备 Magisk service.d 目录
+func (s *FirewallService) findAndroidServiceDir() string {
+	for _, root := range androidRootCandidates() {
+		dir := root + "/data/adb/service.d"
+		if err := os.MkdirAll(dir, 0755); err == nil && testWritable(dir) {
+			return dir
+		}
+	}
+	return ""
+}
+
+// persistAndroidRules 把当前面板规则写入 Magisk 开机脚本，实现 Android 防火墙持久化
+func (s *FirewallService) persistAndroidRules(rules []model.FirewallRule) (string, error) {
+	if !isAndroidEnv() {
+		return "", nil
+	}
+	serviceDir := s.findAndroidServiceDir()
+	if serviceDir == "" {
+		return "", fmt.Errorf("未找到可写的 Magisk service.d 目录")
+	}
+	path := filepath.Join(serviceDir, "98-minipanel-firewall.sh")
+	content := buildAndroidPersistScript(rules)
+	if err := os.WriteFile(path, []byte(content), 0755); err != nil {
+		return "", err
+	}
+	global.LOG.Infof("[Firewall] Android 规则已持久化: %s", path)
+	return path, nil
+}
+
+// syncAndroidPersistence 在增删改规则后同步 Magisk 开机脚本；非 Android 环境直接跳过
+func (s *FirewallService) syncAndroidPersistence() string {
+	if !isAndroidEnv() {
+		return ""
+	}
+	rules, err := s.repo.List()
+	if err != nil {
+		global.LOG.Warnf("[Firewall] sync persistence: list rules failed: %v", err)
+		return ""
+	}
+	path, err := s.persistAndroidRules(rules)
+	if err != nil {
+		global.LOG.Warnf("[Firewall] sync persistence failed: %v", err)
+		return ""
+	}
+	return path
 }
 
 func (s *FirewallService) allowLoopbackForBackend(backend string) {

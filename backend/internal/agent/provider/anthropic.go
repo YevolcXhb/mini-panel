@@ -43,26 +43,7 @@ func (p *AnthropicProvider) SupportsToolCalling() bool { return true }
 // ChatStream 流式调用 Anthropic Messages API（SSE）。
 // Anthropic SSE 事件类型：message_start / content_block_start / content_block_delta / content_block_stop / message_delta / message_stop
 func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []LLMMessage, tools []ToolDefinition) (<-chan StreamDelta, error) {
-	var systemPrompt string
-	var claudeMessages []map[string]interface{}
-	for _, m := range messages {
-		if m.Role == "system" {
-			if systemPrompt != "" {
-				systemPrompt += "\n"
-			}
-			systemPrompt += m.Content
-			continue
-		}
-		msg := map[string]interface{}{
-			"role":    m.Role,
-			"content": m.Content,
-		}
-		if m.Role == "tool" {
-			msg["role"] = "user"
-			msg["content"] = fmt.Sprintf("<tool_result>\nTool: %s\nResult: %s\n</tool_result>", m.ToolCallID, m.Content)
-		}
-		claudeMessages = append(claudeMessages, msg)
-	}
+	systemPrompt, claudeMessages := claudeMessagesFromLLM(messages)
 
 	reqBody := map[string]interface{}{
 		"model":       p.model,
@@ -256,26 +237,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []LLMMessag
 
 func (p *AnthropicProvider) Chat(ctx context.Context, messages []LLMMessage, tools []ToolDefinition) (*LLMResponse, error) {
 	// Claude 格式转换: system 消息需要单独提取
-	var systemPrompt string
-	var claudeMessages []map[string]interface{}
-	for _, m := range messages {
-		if m.Role == "system" {
-			if systemPrompt != "" {
-				systemPrompt += "\n"
-			}
-			systemPrompt += m.Content
-			continue
-		}
-		msg := map[string]interface{}{
-			"role":    m.Role,
-			"content": m.Content,
-		}
-		if m.Role == "tool" {
-			msg["role"] = "user"
-			msg["content"] = fmt.Sprintf("<tool_result>\nTool: %s\nResult: %s\n</tool_result>", m.ToolCallID, m.Content)
-		}
-		claudeMessages = append(claudeMessages, msg)
-	}
+	systemPrompt, claudeMessages := claudeMessagesFromLLM(messages)
 
 	reqBody := map[string]interface{}{
 		"model":       p.model,
@@ -363,4 +325,58 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []LLMMessage, too
 	llmResp.Usage.CompletionTokens = result.Usage.OutputTokens
 	llmResp.Usage.TotalTokens = result.Usage.InputTokens + result.Usage.OutputTokens
 	return llmResp, nil
+}
+
+// claudeMessagesFromLLM 把统一的 LLMMessage 列表转换为 Anthropic Messages API 格式。
+// assistant 消息会携带 text + tool_use 内容块，tool 消息转换为带 tool_use_id 的
+// tool_result 用户消息，保证多轮工具调用能被 Claude 正确关联。
+func claudeMessagesFromLLM(messages []LLMMessage) (string, []map[string]interface{}) {
+	var systemPrompt string
+	var claudeMessages []map[string]interface{}
+	for _, m := range messages {
+		if m.Role == "system" {
+			if systemPrompt != "" {
+				systemPrompt += "\n"
+			}
+			systemPrompt += m.Content
+			continue
+		}
+		if m.Role == "tool" {
+			claudeMessages = append(claudeMessages, map[string]interface{}{
+				"role": "user",
+				"content": []map[string]interface{}{
+					{
+						"type":        "tool_result",
+						"tool_use_id": m.ToolCallID,
+						"content":     m.Content,
+					},
+				},
+			})
+			continue
+		}
+		msg := map[string]interface{}{"role": m.Role}
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+			var blocks []map[string]interface{}
+			if strings.TrimSpace(m.Content) != "" {
+				blocks = append(blocks, map[string]interface{}{"type": "text", "text": m.Content})
+			}
+			for _, tc := range m.ToolCalls {
+				var args interface{} = map[string]interface{}{}
+				if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+					args = map[string]interface{}{"raw": tc.Function.Arguments}
+				}
+				blocks = append(blocks, map[string]interface{}{
+					"type":  "tool_use",
+					"id":    tc.ID,
+					"name":  tc.Function.Name,
+					"input": args,
+				})
+			}
+			msg["content"] = blocks
+		} else {
+			msg["content"] = m.Content
+		}
+		claudeMessages = append(claudeMessages, msg)
+	}
+	return systemPrompt, claudeMessages
 }

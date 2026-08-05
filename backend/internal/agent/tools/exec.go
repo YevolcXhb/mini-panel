@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/minipanel/minipanel/internal/agent/provider"
@@ -26,29 +25,20 @@ type ExecOptions struct {
 
 const defaultExecTimeout = 120 * time.Second
 
-// globalExecOptions 全局 ExecTool 配置，由 API 层在请求时设置
-var (
-	execOptionsMu sync.RWMutex
-	execOptions   ExecOptions
-)
+type execOptionsCtxKey struct{}
 
-// SetExecOptions 设置全局 ExecTool 配置（在每次请求开始时调用）
-func SetExecOptions(opts ExecOptions) {
-	execOptionsMu.Lock()
-	defer execOptionsMu.Unlock()
-	execOptions = opts
+// WithExecOptions 返回携带本次请求执行配置的 context。
+// 配置随请求传递，避免并发会话之间互相覆盖。
+func WithExecOptions(ctx context.Context, opts ExecOptions) context.Context {
+	return context.WithValue(ctx, execOptionsCtxKey{}, opts)
 }
 
-// GetExecOptionsForTest 获取当前 ExecTool 配置（供 engine 等模块临时保存/恢复配置用）
-func GetExecOptionsForTest() ExecOptions {
-	return getExecOptions()
-}
-
-// getExecOptions 获取当前 ExecTool 配置
-func getExecOptions() ExecOptions {
-	execOptionsMu.RLock()
-	defer execOptionsMu.RUnlock()
-	return execOptions
+// ExecOptionsFromContext 从 context 读取执行配置；未设置时返回默认值。
+func ExecOptionsFromContext(ctx context.Context) ExecOptions {
+	if opts, ok := ctx.Value(execOptionsCtxKey{}).(ExecOptions); ok {
+		return opts
+	}
+	return ExecOptions{Timeout: defaultExecTimeout}
 }
 
 // ExecTool 命令执行（带安全检查）
@@ -70,7 +60,7 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) Too
 	command := GetString(args, "command")
 	requestedTimeout := GetInt(args, "timeout")
 
-	opts := getExecOptions()
+	opts := ExecOptionsFromContext(ctx)
 	// 优先级：参数指定 timeout > 全局 ExecTimeoutSeconds > 默认 120s
 	timeout := opts.Timeout
 	if requestedTimeout > 0 {

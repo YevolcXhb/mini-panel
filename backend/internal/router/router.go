@@ -180,9 +180,11 @@ func NewRouter() *gin.Engine {
 
 		fw := api.NewFirewallAPI()
 		apiV1.GET("/firewall/rules", fw.List)
+		apiV1.GET("/firewall/rules/deleted", fw.ListDeletedRules)
 		apiV1.POST("/firewall/rules", fw.Create)
 		apiV1.PUT("/firewall/rules/:id", fw.Update)
 		apiV1.DELETE("/firewall/rules/:id", fw.Delete)
+		apiV1.POST("/firewall/rules/:id/restore", fw.RestoreRule)
 		apiV1.POST("/firewall/apply", fw.Apply)
 		apiV1.GET("/firewall/status", fw.Status)
 		apiV1.POST("/firewall/start", fw.Start)

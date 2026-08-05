@@ -39,6 +39,30 @@ func (h *FirewallAPI) List(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": items})
 }
 
+// ListDeletedRules 列出已软删除的规则（回收站）
+func (h *FirewallAPI) ListDeletedRules(c *gin.Context) {
+	items, err := h.service.ListDeletedRules()
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": items})
+}
+
+// RestoreRule 恢复被软删除的规则
+func (h *FirewallAPI) RestoreRule(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 400, "message": "invalid id"})
+		return
+	}
+	if err := h.service.RestoreRule(uint(id)); err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "Firewall rule restored"})
+}
+
 func (h *FirewallAPI) Update(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {

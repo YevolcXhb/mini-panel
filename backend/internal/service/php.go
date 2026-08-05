@@ -72,7 +72,7 @@ func (s *PhpService) GetInstalledVersions() []model.PhpVersion {
 				fmt.Sprintf("/etc/php/%s/fpm/php.ini", v),
 				fmt.Sprintf("/etc/php%s/fpm/php.ini", v),
 				fmt.Sprintf("/etc/php/%s/cli/php.ini", v),
-				fmt.Sprintf("/etc/php.ini", v),
+				"/etc/php.ini",
 			}
 			for _, ip := range iniPaths {
 				if _, err := os.Stat(ip); err == nil {
@@ -799,7 +799,7 @@ func (s *PhpService) SetFpmPool(version, domain, root string, port int) error {
 	poolDirs := []string{
 		fmt.Sprintf("/etc/php/%s/fpm/pool.d", version),
 		fmt.Sprintf("/etc/php%s/fpm/pool.d", version),
-		fmt.Sprintf("/etc/php-fpm.d", version),
+		"/etc/php-fpm.d",
 	}
 	var poolDir string
 	for _, d := range poolDirs {

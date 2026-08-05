@@ -15,13 +15,14 @@ type StreamChunk struct {
 	//   plan_ready      - 计划已生成，等待用户确认
 	//   compression_triggered - 上下文压缩已触发
 	Type       string `json:"type"`
-	Content    string `json:"content"`     // 内容/结果（token 增量也用此字段）
-	ToolCallID string `json:"tool_call_id"` // 工具调用 ID
-	ToolName   string `json:"tool_name"`    // 工具名称
-	Command    string `json:"command"`      // 需要确认的命令
-	Message    string `json:"message"`      // 确认提示消息
-	Error      string `json:"error"`        // 错误信息
-	Success    bool   `json:"success"`      // 是否成功
+	Content    string `json:"content"`          // 内容/结果（token 增量也用此字段）
+	ToolCallID string `json:"tool_call_id"`     // 工具调用 ID
+	ToolName   string `json:"tool_name"`        // 工具名称
+	Command    string `json:"command"`          // 需要确认的命令
+	Message    string `json:"message"`          // 确认提示消息
+	Error      string `json:"error"`            // 错误信息
+	Success    bool   `json:"success"`          // 是否成功
+	Cached     bool   `json:"cached,omitempty"` // 工具结果是否来自缓存
 	// 三阶段编排扩展字段
 	Phase       string `json:"phase,omitempty"`        // 当前阶段名（planning/coding/reviewing）
 	Plan        string `json:"plan,omitempty"`         // 计划内容（plan_ready 事件）

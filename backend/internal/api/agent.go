@@ -28,6 +28,10 @@ type AgentAPI struct {
 	// 30分钟未确认的计划由 cleanupOrchestrators 自动清理。
 	orchMu        sync.Mutex
 	orchestrators map[uint]*orchEntry
+
+	// 同一会话同一时间只允许一个运行中的 Chat/Confirm/Orchestrate/ConfirmPlan
+	runMu   sync.Mutex
+	running map[uint]bool
 }
 
 // orchEntry 编排器条目，记录创建时间用于超时清理
@@ -42,10 +46,19 @@ const orchCleanupInterval = 10 * time.Minute
 // orchTimeout 编排器等待确认的超时时间
 const orchTimeout = 30 * time.Minute
 
+// sendChunk 安全地向 SSE 流发送数据：客户端断开（ctx 取消）时直接放弃本次发送
+func sendChunk(ctx context.Context, stream chan<- agent.StreamChunk, chunk agent.StreamChunk) {
+	select {
+	case <-ctx.Done():
+	case stream <- chunk:
+	}
+}
+
 func NewAgentAPI() *AgentAPI {
 	a := &AgentAPI{
 		service:       service.NewAgentService(),
 		orchestrators: make(map[uint]*orchEntry),
+		running:       make(map[uint]bool),
 	}
 	go a.cleanupOrchestrators()
 	return a
@@ -98,16 +111,61 @@ func (a *AgentAPI) getUserID(c *gin.Context) uint {
 
 // applyExecOptionsFromConfig 根据用户配置设置 ExecTool 的全局运行时配置。
 // 必须在 Chat/Confirm/Orchestrate/ConfirmPlan 入口处、GetConfig 之后调用。
-func (a *AgentAPI) applyExecOptionsFromConfig(cfg *model.AgentConfig) {
+func (a *AgentAPI) execOptionsFromConfig(cfg *model.AgentConfig) tools.ExecOptions {
 	timeout := time.Duration(cfg.ExecTimeoutSeconds) * time.Second
 	if cfg.ExecTimeoutSeconds <= 0 {
 		timeout = 120 * time.Second
 	}
-	tools.SetExecOptions(tools.ExecOptions{
+	opts := tools.ExecOptions{
 		AllowDangerous: cfg.AllowDangerousCommands,
 		Timeout:        timeout,
-	})
-	global.LOG.Infof("[AgentAPI] 已应用 ExecOptions: AllowDangerous=%v, Timeout=%v", cfg.AllowDangerousCommands, timeout)
+	}
+	global.LOG.Infof("[AgentAPI] ExecOptions: AllowDangerous=%v, Timeout=%v", cfg.AllowDangerousCommands, timeout)
+	return opts
+}
+
+// withExecOptions 把本次请求的执行配置注入 context，避免全局状态在并发会话间串扰
+func (a *AgentAPI) withExecOptions(ctx context.Context, cfg *model.AgentConfig) context.Context {
+	return tools.WithExecOptions(ctx, a.execOptionsFromConfig(cfg))
+}
+
+// beginRun 标记会话进入运行状态；已在运行时返回 false
+func (a *AgentAPI) beginRun(sessionID uint) bool {
+	a.runMu.Lock()
+	defer a.runMu.Unlock()
+	if a.running[sessionID] {
+		return false
+	}
+	a.running[sessionID] = true
+	return true
+}
+
+// endRun 释放会话运行锁
+func (a *AgentAPI) endRun(sessionID uint) {
+	a.runMu.Lock()
+	defer a.runMu.Unlock()
+	delete(a.running, sessionID)
+}
+
+// validateSession 校验会话存在且属于当前用户；失败时直接响应并返回 false
+func (a *AgentAPI) validateSession(c *gin.Context, userID uint, sessionID uint) bool {
+	sm := repository.NewSessionManager()
+	session, err := sm.GetSession(sessionID, userID)
+	if err != nil || session == nil {
+		c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "会话不存在或无权访问"})
+		return false
+	}
+	return true
+}
+
+// getOrchestrator 取当前会话对应的编排器（确认工具调用时判断是否处于编排模式）
+func (a *AgentAPI) getOrchestrator(sessionID uint) *agent.Orchestrator {
+	a.orchMu.Lock()
+	defer a.orchMu.Unlock()
+	if entry := a.orchestrators[sessionID]; entry != nil {
+		return entry.orch
+	}
+	return nil
 }
 
 // GetConfig 获取配置
@@ -207,8 +265,9 @@ func (a *AgentAPI) GetSessionMessages(c *gin.Context) {
 func (a *AgentAPI) Chat(c *gin.Context) {
 	userID := a.getUserID(c)
 	var req struct {
-		SessionID uint   `json:"session_id"`
-		Message   string `json:"message"`
+		SessionID  uint   `json:"session_id"`
+		Message    string `json:"message"`
+		Regenerate bool   `json:"regenerate"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": 400, "message": err.Error()})
@@ -229,7 +288,13 @@ func (a *AgentAPI) Chat(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"code": 403, "message": "Agent 未启用"})
 		return
 	}
-	a.applyExecOptionsFromConfig(cfg)
+	if !a.validateSession(c, userID, req.SessionID) {
+		return
+	}
+	if !a.beginRun(req.SessionID) {
+		c.JSON(http.StatusConflict, gin.H{"code": 409, "message": "该会话正在处理中，请稍后再试"})
+		return
+	}
 
 	// 更新会话标题
 	sm := repository.NewSessionManager()
@@ -245,8 +310,10 @@ func (a *AgentAPI) Chat(c *gin.Context) {
 	stream := make(chan agent.StreamChunk, 10)
 	ctx, cancel := context.WithCancel(c.Request.Context())
 	defer cancel()
+	ctx = a.withExecOptions(ctx, cfg)
 
 	go func() {
+		defer a.endRun(req.SessionID)
 		defer func() {
 			if r := recover(); r != nil {
 				// 防止 goroutine panic 导致整个进程崩溃
@@ -255,13 +322,17 @@ func (a *AgentAPI) Chat(c *gin.Context) {
 		}()
 		p, err := provider.NewProvider(cfg.Provider, cfg.BaseURL, cfg.APIKey, cfg.Model, float32(cfg.Temperature), cfg.MaxTokens)
 		if err != nil {
-			stream <- agent.StreamChunk{Type: "error", Error: "创建 Provider 失败: " + err.Error()}
+			sendChunk(ctx, stream, agent.StreamChunk{Type: "error", Error: "创建 Provider 失败: " + err.Error()})
 			return
 		}
 		var skillIDs []string
 		_ = json.Unmarshal([]byte(cfg.Skills), &skillIDs)
 		engine := agent.NewEngineWithProvider(p, skillIDs, cfg.SystemPrompt)
-		_ = engine.Run(ctx, req.SessionID, req.Message, stream)
+		if req.Regenerate {
+			_ = engine.RunRegenerate(ctx, req.SessionID, stream)
+		} else {
+			_ = engine.Run(ctx, req.SessionID, req.Message, stream)
+		}
 	}()
 
 	c.Stream(func(w io.Writer) bool {
@@ -300,7 +371,13 @@ func (a *AgentAPI) Confirm(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"code": 403, "message": "Agent 未启用"})
 		return
 	}
-	a.applyExecOptionsFromConfig(cfg)
+	if !a.validateSession(c, userID, req.SessionID) {
+		return
+	}
+	if !a.beginRun(req.SessionID) {
+		c.JSON(http.StatusConflict, gin.H{"code": 409, "message": "该会话正在处理中，请稍后再试"})
+		return
+	}
 
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
@@ -309,17 +386,32 @@ func (a *AgentAPI) Confirm(c *gin.Context) {
 	stream := make(chan agent.StreamChunk, 10)
 	ctx, cancel := context.WithCancel(c.Request.Context())
 	defer cancel()
+	ctx = a.withExecOptions(ctx, cfg)
 
 	go func() {
+		defer a.endRun(req.SessionID)
 		defer func() {
 			if r := recover(); r != nil {
 				// 防止 goroutine panic 导致整个进程崩溃
 			}
+			// 编排模式确认完成后，若整个编排已结束则清理编排器
+			a.orchMu.Lock()
+			if orch := a.orchestrators[req.SessionID]; orch != nil &&
+				!orch.orch.HasPendingToolConfirm(req.SessionID) &&
+				!orch.orch.HasPendingContinuation(req.SessionID) {
+				delete(a.orchestrators, req.SessionID)
+			}
+			a.orchMu.Unlock()
 			close(stream)
 		}()
+		// 编排模式下工具确认必须回到编排器继续对应 phase，否则会降级成普通对话
+		if orch := a.getOrchestrator(req.SessionID); orch != nil && orch.HasPendingToolConfirm(req.SessionID) {
+			_ = orch.ConfirmTool(ctx, req.SessionID, req.ToolCallID, req.Confirmed, stream)
+			return
+		}
 		p, err := provider.NewProvider(cfg.Provider, cfg.BaseURL, cfg.APIKey, cfg.Model, float32(cfg.Temperature), cfg.MaxTokens)
 		if err != nil {
-			stream <- agent.StreamChunk{Type: "error", Error: "创建 Provider 失败: " + err.Error()}
+			sendChunk(ctx, stream, agent.StreamChunk{Type: "error", Error: "创建 Provider 失败: " + err.Error()})
 			return
 		}
 		var skillIDs []string
@@ -368,7 +460,13 @@ func (a *AgentAPI) Orchestrate(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"code": 403, "message": "Agent 未启用"})
 		return
 	}
-	a.applyExecOptionsFromConfig(cfg)
+	if !a.validateSession(c, userID, req.SessionID) {
+		return
+	}
+	if !a.beginRun(req.SessionID) {
+		c.JSON(http.StatusConflict, gin.H{"code": 409, "message": "该会话正在处理中，请稍后再试"})
+		return
+	}
 
 	// 更新会话标题
 	sm := repository.NewSessionManager()
@@ -384,8 +482,10 @@ func (a *AgentAPI) Orchestrate(c *gin.Context) {
 	stream := make(chan agent.StreamChunk, 10)
 	ctx, cancel := context.WithCancel(c.Request.Context())
 	defer cancel()
+	ctx = a.withExecOptions(ctx, cfg)
 
 	go func() {
+		defer a.endRun(req.SessionID)
 		defer func() {
 			if r := recover(); r != nil {
 				global.LOG.Errorf("[AgentAPI] Orchestrate panic: %v", r)
@@ -394,7 +494,7 @@ func (a *AgentAPI) Orchestrate(c *gin.Context) {
 		}()
 		p, err := provider.NewProvider(cfg.Provider, cfg.BaseURL, cfg.APIKey, cfg.Model, float32(cfg.Temperature), cfg.MaxTokens)
 		if err != nil {
-			stream <- agent.StreamChunk{Type: "error", Error: "创建 Provider 失败: " + err.Error()}
+			sendChunk(ctx, stream, agent.StreamChunk{Type: "error", Error: "创建 Provider 失败: " + err.Error()})
 			return
 		}
 		var skillIDs []string
@@ -449,12 +549,18 @@ func (a *AgentAPI) ConfirmPlan(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"code": 403, "message": "Agent 未启用"})
 		return
 	}
-	a.applyExecOptionsFromConfig(cfg)
+	if !a.validateSession(c, userID, req.SessionID) {
+		return
+	}
+	if !a.beginRun(req.SessionID) {
+		c.JSON(http.StatusConflict, gin.H{"code": 409, "message": "该会话正在处理中，请稍后再试"})
+		return
+	}
 
-	// 从 map 中取出编排器（取出后删除，ConfirmPlan 只能调用一次）
+	// 取出编排器但保留在 map 中：CODING/REVIEWING 阶段的工具确认还需要它，
+	// 编排全部结束后才由 goroutine 清理
 	a.orchMu.Lock()
 	entry := a.orchestrators[req.SessionID]
-	delete(a.orchestrators, req.SessionID)
 	a.orchMu.Unlock()
 
 	if entry == nil {
@@ -469,12 +575,19 @@ func (a *AgentAPI) ConfirmPlan(c *gin.Context) {
 	stream := make(chan agent.StreamChunk, 10)
 	ctx, cancel := context.WithCancel(c.Request.Context())
 	defer cancel()
+	ctx = a.withExecOptions(ctx, cfg)
 
 	go func() {
+		defer a.endRun(req.SessionID)
 		defer func() {
 			if r := recover(); r != nil {
 				global.LOG.Errorf("[AgentAPI] ConfirmPlan panic: %v", r)
 			}
+			a.orchMu.Lock()
+			if !entry.orch.HasPendingToolConfirm(req.SessionID) && !entry.orch.HasPendingContinuation(req.SessionID) {
+				delete(a.orchestrators, req.SessionID)
+			}
+			a.orchMu.Unlock()
 			close(stream)
 		}()
 		_ = entry.orch.ConfirmPlan(ctx, req.SessionID, req.Confirmed, stream)

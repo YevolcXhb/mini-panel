@@ -25,6 +25,7 @@ type WebsiteService struct {
 	wdRepo    *repository.WebsiteDatabaseRepository
 	dbService *DatabaseService
 	deleteMu  sync.Map // 按 website id 加锁，防止并发删/改
+	configMu  sync.Mutex
 }
 
 func NewWebsiteService() *WebsiteService {
@@ -37,6 +38,7 @@ func NewWebsiteService() *WebsiteService {
 
 func (s *WebsiteService) Create(w *model.Website) error {
 	w.Managed = true
+	normalizeWebsitePort(w)
 	// 检查 Domain:Port 是否已存在，存在则改为更新
 	existing, _ := s.repo.GetByDomainPort(w.Domain, w.Port)
 	if existing != nil {
@@ -59,6 +61,7 @@ func (s *WebsiteService) CreateWithDB(req *dto.WebsiteCreateRequest) error {
 	sessionID := time.Now().UnixNano()
 	w := &req.Website
 	w.Managed = true
+	normalizeWebsitePort(w)
 
 	global.LOG.Infof("[Engine] 会话ID: %d | CreateWithDB 入口 | name=%s domain=%s port=%d type=%s php_version=%s db_create=%v",
 		sessionID, w.Name, w.Domain, w.Port, w.Type, w.PhpVersion, req.DBCreate)
@@ -209,6 +212,7 @@ func (s *WebsiteService) Update(w *model.Website) error {
 		w.ConfigFile = ""
 	}
 	w.Managed = true
+	normalizeWebsitePort(w)
 	if err := s.repo.Update(w); err != nil {
 		return err
 	}
@@ -295,7 +299,10 @@ func (s *WebsiteService) DeleteWithCascade(id uint, cascadeDB bool) error {
 		global.LOG.Warnf("[Website] DeleteByWebsiteID failed: %v (continue)", err)
 	}
 
-	// 删除 Nginx 配置
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+
+	// 删除 Nginx 配置（仅删除面板生成的单站点文件，手动/共享文件保留）
 	_ = s.removeConfig(w)
 
 	// 删除 Website 记录
@@ -303,6 +310,8 @@ func (s *WebsiteService) DeleteWithCascade(id uint, cascadeDB bool) error {
 		return err
 	}
 
+	// 同步默认 catch-all：最后一个 SSL 站点被删除时移除 443 兜底块
+	_ = s.syncIsolationConfig("", "")
 	_ = s.ReloadNginx()
 	global.LOG.Infof("[Website] DeleteWithCascade OK: id=%d", id)
 	return nil
@@ -310,6 +319,9 @@ func (s *WebsiteService) DeleteWithCascade(id uint, cascadeDB bool) error {
 
 // DeleteExternal 删除外部站点（仅删除配置文件，不入库）
 func (s *WebsiteService) DeleteExternal(domain string, port int) error {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+
 	_ = s.repo.DeleteByDomainPort(domain, port)
 	confDirs := []string{
 		"/etc/nginx/conf.d",
@@ -328,9 +340,12 @@ func (s *WebsiteService) DeleteExternal(domain string, port int) error {
 		}
 		for _, name := range candidates {
 			path := filepath.Join(dir, name)
-			_ = os.Remove(path)
+			if s.safeToOverwriteConfig(path) {
+				_ = os.Remove(path)
+			}
 		}
 	}
+	_ = s.syncIsolationConfig("", "")
 	_ = s.ReloadNginx()
 	return nil
 }
@@ -366,11 +381,14 @@ func (s *WebsiteService) ToggleExternal(domain string, port int, enabled bool) e
 		}
 		return s.applyConfig(info)
 	}
-	// 停用：扫描找到配置文件，删除
+	// 停用：扫描找到配置文件，仅删除面板生成的单站点文件
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
 	confPath := s.findExternalConfigFile(domain, port)
-	if confPath != "" {
+	if confPath != "" && s.safeToOverwriteConfig(confPath) {
 		_ = os.Remove(confPath)
 	}
+	_ = s.syncIsolationConfig("", "")
 	_ = s.ReloadNginx()
 	return nil
 }
@@ -396,6 +414,14 @@ func (s *WebsiteService) List() ([]model.Website, error) {
 	dbSites, err := s.repo.List()
 	if err != nil {
 		return nil, err
+	}
+
+	// 兼容历史数据：SSL 站点端口 0/80 统一规范为 443，避免与扫描结果重复展示
+	for i := range dbSites {
+		if dbSites[i].SSL && (dbSites[i].Port == 0 || dbSites[i].Port == 80) {
+			dbSites[i].Port = 443
+			_ = s.repo.Update(&dbSites[i])
+		}
 	}
 
 	// 2. 扫描nginx配置中的网站
@@ -952,6 +978,11 @@ func (s *WebsiteService) parseNginxConfig(configPath string) []model.Website {
 
 // parseNginxConfigContent 解析nginx配置内容，使用栈跟踪 server 块和 include 上下文
 func (s *WebsiteService) parseNginxConfigContent(content string, defaultName string) []model.Website {
+	// 面板生成的默认 catch-all 配置不当作站点展示
+	if strings.Contains(filepath.Base(defaultName), "minipanel-default") {
+		return nil
+	}
+
 	var sites []model.Website
 
 	// 先去掉注释
@@ -1115,6 +1146,21 @@ func extractSiteFromServerBlock(block, fileName, defaultName string) *model.Webs
 		}
 	}
 
+	// 纯 catch-all 块（server_name _）不作为站点展示
+	if m := serverNameRe.FindStringSubmatch(block); len(m) >= 2 {
+		allCatchAll := true
+		for _, n := range strings.Fields(m[1]) {
+			n = strings.TrimSpace(n)
+			if n != "" && n != "_" {
+				allCatchAll = false
+				break
+			}
+		}
+		if allCatchAll {
+			return nil
+		}
+	}
+
 	// 收集 listen 端口
 	var listenPorts []int
 	hasSSL := false
@@ -1177,12 +1223,20 @@ func extractSiteFromServerBlock(block, fileName, defaultName string) *model.Webs
 	}
 
 	port := listenPorts[0]
-	// 如果同时有 80 和 443，优先 80
+	// SSL 站点优先展示 443；无 443 时优先使用第一个非 80/8080 端口（兼容自定义 HTTPS 端口）
 	if hasSSL {
 		for _, p := range listenPorts {
-			if p == 80 || p == 8080 {
+			if p == 443 {
 				port = p
 				break
+			}
+		}
+		if port == 80 || port == 8080 {
+			for _, p := range listenPorts {
+				if p != 80 && p != 8080 {
+					port = p
+					break
+				}
 			}
 		}
 	}
@@ -1223,7 +1277,7 @@ func testWritable(dir string) bool {
 
 func (s *WebsiteService) nginxConfPath(w *model.Website) string {
 	confDir := s.GetNginxConfigDir()
-	return filepath.Join(confDir, fmt.Sprintf("%s.conf", w.Domain))
+	return filepath.Join(confDir, sanitizeNginxFileName(w.Domain)+".conf")
 }
 
 func (s *WebsiteService) removeConfig(w *model.Website) error {
@@ -1232,31 +1286,16 @@ func (s *WebsiteService) removeConfig(w *model.Website) error {
 	if path == "" {
 		path = s.nginxConfPath(w)
 	}
-	_ = os.Remove(path)
+	// 仅删除面板生成的单站点文件，手动维护或共享配置文件一律保留
+	if s.safeToOverwriteConfig(path) {
+		_ = os.Remove(path)
+	}
 	return nil
 }
 
-func (s *WebsiteService) applyConfig(w *model.Website) error {
-	if !syscmd.Which("nginx") {
-		global.LOG.Warn("nginx not installed, config saved but not applied")
-		return nil
-	}
-
-	if !w.Enabled {
-		if err := s.removeConfig(w); err != nil {
-			return err
-		}
-		return s.ReloadNginx()
-	}
-
-	confDir := s.GetNginxConfigDir()
-	_ = os.MkdirAll(confDir, 0755)
-
+func (s *WebsiteService) buildWebsiteNginxConfig(w *model.Website) (content string, certPath, keyPath string) {
 	var sb strings.Builder
-	port := w.Port
-	if port == 0 {
-		port = 80
-	}
+	httpPort, httpsPort := nginxListenPorts(w)
 
 	sb.WriteString("# Managed by MiniPanel\n")
 
@@ -1272,7 +1311,6 @@ func (s *WebsiteService) applyConfig(w *model.Website) error {
 	}
 
 	// 处理 SSL 证书 PEM 内容：写入文件并取得路径
-	var certPath, keyPath string
 	if w.SSL {
 		certPath = w.SSLCert
 		keyPath = w.SSLKey
@@ -1292,15 +1330,19 @@ func (s *WebsiteService) applyConfig(w *model.Website) error {
 
 	sb.WriteString("server {\n")
 	if w.SSL {
-		sb.WriteString(fmt.Sprintf("    listen %d;\n", port))
-		sb.WriteString(fmt.Sprintf("    listen [::]:%d;\n", port))
+		sb.WriteString(fmt.Sprintf("    listen %d;\n", httpPort))
+		sb.WriteString(fmt.Sprintf("    listen [::]:%d;\n", httpPort))
 		sb.WriteString(fmt.Sprintf("    server_name %s;\n", w.Domain))
-		sb.WriteString("    return 301 https://$server_name$request_uri;\n")
+		redirectTarget := "https://$host$request_uri"
+		if httpsPort != 443 {
+			redirectTarget = fmt.Sprintf("https://$host:%d$request_uri", httpsPort)
+		}
+		sb.WriteString(fmt.Sprintf("    return 301 %s;\n", redirectTarget))
 		sb.WriteString("}\n\n")
 
 		sb.WriteString("server {\n")
-		sb.WriteString(fmt.Sprintf("    listen %d ssl http2;\n", port+443))
-		sb.WriteString(fmt.Sprintf("    listen [::]:%d ssl http2;\n", port+443))
+		sb.WriteString(fmt.Sprintf("    listen %d ssl http2;\n", httpsPort))
+		sb.WriteString(fmt.Sprintf("    listen [::]:%d ssl http2;\n", httpsPort))
 		sb.WriteString(fmt.Sprintf("    server_name %s;\n", w.Domain))
 		if certPath != "" {
 			sb.WriteString(fmt.Sprintf("    ssl_certificate %s;\n", certPath))
@@ -1312,9 +1354,14 @@ func (s *WebsiteService) applyConfig(w *model.Website) error {
 		sb.WriteString("    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256;\n")
 		sb.WriteString("    ssl_prefer_server_ciphers on;\n")
 	} else {
-		sb.WriteString(fmt.Sprintf("    listen %d;\n", port))
-		sb.WriteString(fmt.Sprintf("    listen [::]:%d;\n", port))
+		sb.WriteString(fmt.Sprintf("    listen %d;\n", httpPort))
+		sb.WriteString(fmt.Sprintf("    listen [::]:%d;\n", httpPort))
 		sb.WriteString(fmt.Sprintf("    server_name %s;\n", w.Domain))
+	}
+
+	// 代理站点大文件上传限制（如 10240M）
+	if w.Type == "proxy" && w.ClientMaxBodySize != "" {
+		sb.WriteString(fmt.Sprintf("    client_max_body_size %s;\n", w.ClientMaxBodySize))
 	}
 
 	if w.Type == "proxy" && w.ProxyTarget != "" {
@@ -1485,12 +1532,40 @@ func (s *WebsiteService) applyConfig(w *model.Website) error {
 
 	sb.WriteString("}\n")
 
+	return sb.String(), certPath, keyPath
+}
+
+func (s *WebsiteService) applyConfig(w *model.Website) error {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+
+	if !syscmd.Which("nginx") {
+		global.LOG.Warn("nginx not installed, config saved but not applied")
+		return nil
+	}
+
+	if !w.Enabled {
+		if err := s.removeConfig(w); err != nil {
+			return err
+		}
+		_ = s.syncIsolationConfig("", "")
+		return s.ReloadNginx()
+	}
+
+	if normalizeWebsitePort(w) {
+		_ = s.repo.Update(w)
+	}
+	confDir := s.GetNginxConfigDir()
+	_ = os.MkdirAll(confDir, 0755)
+
+	content, certPath, keyPath := s.buildWebsiteNginxConfig(w)
+
 	path := s.resolveConfigPath(w)
 	// 确保父目录存在
 	if dir := filepath.Dir(path); dir != "" {
 		_ = os.MkdirAll(dir, 0755)
 	}
-	if err := os.WriteFile(path, []byte(sb.String()), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		return fmt.Errorf("write nginx config failed: %w", err)
 	}
 
@@ -1500,19 +1575,234 @@ func (s *WebsiteService) applyConfig(w *model.Website) error {
 		_ = s.repo.Update(w)
 	}
 
+	// 同步默认 catch-all，保证未知域名/IP 被直接断开
+	_ = s.syncIsolationConfig(certPath, keyPath)
+
 	if err := s.ReloadNginx(); err != nil {
 		global.LOG.Warnf("nginx reload failed: %v", err)
 	}
 	return nil
 }
 
-// resolveConfigPath 确定配置文件最终写入路径
-// 优先级：已有的 ConfigFile > 扫描时记录的路径 > 面板默认配置目录
+// sanitizeNginxFileName 将域名转换为安全的配置文件文件名
+func sanitizeNginxFileName(s string) string {
+	s = strings.TrimSpace(s)
+	var sb strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '_' {
+			sb.WriteRune(r)
+		} else {
+			sb.WriteRune('_')
+		}
+	}
+	if sb.Len() == 0 {
+		return "default"
+	}
+	return sb.String()
+}
+
+// normalizeWebsitePort 统一网站端口语义：
+// SSL 站点默认/80 规范为 443；非 SSL 站点端口 0 规范为 80；返回端口是否发生变化
+func normalizeWebsitePort(w *model.Website) bool {
+	old := w.Port
+	if w.SSL {
+		if w.Port == 0 || w.Port == 80 {
+			w.Port = 443
+		}
+	} else if w.Port == 0 {
+		w.Port = 80
+	}
+	return w.Port != old
+}
+
+// nginxListenPorts 计算站点的 HTTP/HTTPS 监听端口：
+// SSL 站点固定使用 80 做 301 跳转、443 做 HTTPS；显式配置的非 80/443 端口作为自定义 HTTPS 端口
+func nginxListenPorts(w *model.Website) (httpPort, httpsPort int) {
+	p := w.Port
+	if p == 0 {
+		p = 80
+	}
+	if !w.SSL {
+		return p, 0
+	}
+	httpPort = 80
+	httpsPort = 443
+	if p != 80 && p != 443 {
+		httpsPort = p
+	}
+	return httpPort, httpsPort
+}
+
+const (
+	minipanelManagedMarker  = "# Managed by MiniPanel"
+	isolationConfigFileName = "00-minipanel-default.conf"
+)
+
+func (s *WebsiteService) isolationConfigPath() string {
+	return filepath.Join(s.GetNginxConfigDir(), isolationConfigFileName)
+}
+
+// isPanelManagedConfig 判断配置文件是否由 MiniPanel 生成
+func (s *WebsiteService) isPanelManagedConfig(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(data), minipanelManagedMarker)
+}
+
+// countDistinctServerNames 统计配置文件中非 _ 的 server_name 数量
+func (s *WebsiteService) countDistinctServerNames(path string) int {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	names := make(map[string]struct{})
+	re := regexp.MustCompile(`(?m)server_name\s+([^;]+);`)
+	for _, m := range re.FindAllStringSubmatch(string(data), -1) {
+		for _, n := range strings.Fields(m[1]) {
+			n = strings.TrimSpace(n)
+			if n != "" && n != "_" {
+				names[n] = struct{}{}
+			}
+		}
+	}
+	return len(names)
+}
+
+// safeToOverwriteConfig 判断现有配置文件是否可以被面板安全覆盖：
+// 仅允许覆盖 MiniPanel 生成的、且只包含本站点的单站点文件；
+// 手动维护或包含多个站点的共享文件一律保留，另行写入独立文件
+func (s *WebsiteService) safeToOverwriteConfig(path string) bool {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return true
+	}
+	if !s.isPanelManagedConfig(path) {
+		return false
+	}
+	return s.countDistinctServerNames(path) <= 1
+}
+
+// resolveConfigPath 确定配置文件最终写入路径：
+// 已有的面板单站点 ConfigFile 直接复用；手动维护/共享配置则写入面板默认目录的独立文件
 func (s *WebsiteService) resolveConfigPath(w *model.Website) string {
-	if w.ConfigFile != "" {
+	if w.ConfigFile != "" && s.safeToOverwriteConfig(w.ConfigFile) {
 		return w.ConfigFile
 	}
 	return s.nginxConfPath(w)
+}
+
+// hasExternalDefaultServer 检查其他配置文件是否已声明 default_server，避免重复声明导致 nginx 启动失败
+func (s *WebsiteService) hasExternalDefaultServer() bool {
+	dirs := []string{
+		"/etc/nginx/conf.d",
+		"/etc/nginx/sites-enabled",
+		"/usr/local/nginx/conf/conf.d",
+		"/usr/local/nginx/conf/vhost",
+	}
+	dirs = append(dirs, s.GetNginxConfigDir())
+	re := regexp.MustCompile(`(?m)listen\s+[^;]*default_server`)
+	seen := make(map[string]struct{})
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".conf") {
+				continue
+			}
+			if e.Name() == isolationConfigFileName {
+				continue
+			}
+			path := filepath.Join(dir, e.Name())
+			if _, ok := seen[path]; ok {
+				continue
+			}
+			seen[path] = struct{}{}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			if re.Match(data) {
+				return true
+			}
+		}
+	}
+	if data, err := os.ReadFile("/etc/nginx/nginx.conf"); err == nil {
+		if re.Match(data) {
+			return true
+		}
+	}
+	return false
+}
+
+// findAvailableSSLCert 从启用中的 SSL 站点里找一组可用的证书，用于默认 catch-all 的 443 监听
+func (s *WebsiteService) findAvailableSSLCert() (string, string) {
+	if s.repo == nil {
+		return "", ""
+	}
+	sites, err := s.repo.List()
+	if err != nil {
+		return "", ""
+	}
+	for i := range sites {
+		if !sites[i].Enabled || !sites[i].SSL {
+			continue
+		}
+		cert, key := sites[i].SSLCert, sites[i].SSLKey
+		if sites[i].SSLCertPEM != "" || sites[i].SSLKeyPEM != "" {
+			cert = filepath.Join(global.GetDataDir(), "ssl", sites[i].Domain, "fullchain.pem")
+			key = filepath.Join(global.GetDataDir(), "ssl", sites[i].Domain, "privkey.pem")
+		}
+		if cert == "" || key == "" {
+			continue
+		}
+		if _, err := os.Stat(cert); err == nil {
+			if _, err := os.Stat(key); err == nil {
+				return cert, key
+			}
+		}
+	}
+	return "", ""
+}
+
+// syncIsolationConfig 生成/更新默认 catch-all 配置，实现未知域名/IP 直接断开（站点隔离）
+// 调用方需持有 configMu；无可用 SSL 证书时仅保留 80 端口 catch-all
+func (s *WebsiteService) syncIsolationConfig(certPath, keyPath string) error {
+	confDir := s.GetNginxConfigDir()
+	_ = os.MkdirAll(confDir, 0755)
+	path := s.isolationConfigPath()
+
+	// 其他配置文件已声明 default_server 时不再写入，避免 nginx 报 duplicate default server
+	if s.hasExternalDefaultServer() {
+		_ = os.Remove(path)
+		return nil
+	}
+
+	if certPath == "" || keyPath == "" {
+		certPath, keyPath = s.findAvailableSSLCert()
+	}
+
+	var sb strings.Builder
+	sb.WriteString("# Managed by MiniPanel - default catch-all (site isolation)\n")
+	sb.WriteString("server {\n")
+	sb.WriteString("    listen 80 default_server;\n")
+	sb.WriteString("    listen [::]:80 default_server;\n")
+	sb.WriteString("    server_name _;\n")
+	sb.WriteString("    return 444;\n")
+	sb.WriteString("}\n\n")
+	if certPath != "" && keyPath != "" {
+		sb.WriteString("server {\n")
+		sb.WriteString("    listen 443 ssl http2 default_server;\n")
+		sb.WriteString("    listen [::]:443 ssl http2 default_server;\n")
+		sb.WriteString("    server_name _;\n")
+		sb.WriteString(fmt.Sprintf("    ssl_certificate %s;\n", certPath))
+		sb.WriteString(fmt.Sprintf("    ssl_certificate_key %s;\n", keyPath))
+		sb.WriteString("    return 444;\n")
+		sb.WriteString("}\n")
+	}
+	return os.WriteFile(path, []byte(sb.String()), 0644)
 }
 
 // generateHtpasswd 生成 htpasswd 文件（优先 htpasswd 命令，回退 openssl）

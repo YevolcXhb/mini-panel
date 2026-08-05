@@ -2,11 +2,12 @@ package repository
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 
 	"github.com/minipanel/minipanel/internal/agent/provider"
 	"github.com/minipanel/minipanel/internal/global"
 	"github.com/minipanel/minipanel/internal/model"
+	"gorm.io/gorm"
 )
 
 // SessionManager 会话管理器
@@ -68,99 +69,53 @@ func (sm *SessionManager) LoadMessages(sessionID uint) ([]provider.LLMMessage, e
 	// 修复中断导致的消息序列不完整：
 	// 1. 如果 assistant 消息含 tool_calls，但后续缺少对应的 tool result，补充中断标记
 	// 2. 如果存在孤立的 tool 消息（前面没有对应的 assistant(tool_calls)），删除并清理
-	llmMessages = sm.fixIncompleteToolCalls(sessionID, llmMessages)
+	llmMessages = sm.normalizeMessageSequence(sessionID, llmMessages)
 
 	return llmMessages, nil
 }
 
-// fixIncompleteToolCalls 修复消息序列完整性。
-// 处理两种问题：
-//  1. assistant(tool_calls) 缺少对应的 tool result → 补充虚拟中断消息
-//  2. 孤立的 tool 消息（前面没有 assistant(tool_calls)）→ 标记为内容（防止 LLM API 400）
+// normalizeMessageSequence 把历史消息重建为对 LLM 合法的顺序：
+//  1. 每条 assistant(tool_calls) 后立即补齐该消息内所有 tool_call_id 的响应
+//     （有真实结果用真实结果，缺失时用内存占位，不写数据库）；
+//  2. 数据库里位置错乱/重复的 tool 消息按“最后一个结果”收敛，不再原样透传。
 //
-// 两类问题都可能在多次中断/重试中积累，必须同时处理。
-func (sm *SessionManager) fixIncompleteToolCalls(sessionID uint, messages []provider.LLMMessage) []provider.LLMMessage {
-	if len(messages) == 0 {
-		return messages
-	}
-
-	// 步骤 1：先清理孤立的 tool 消息（前面没有 assistant(tool_calls)）
-	messages = sm.removeOrphanToolMessages(sessionID, messages)
-
-	// 步骤 2：收集已有 tool_call_id → tool result 映射
-	toolResults := make(map[string]bool)
+// 这样即使发生过强制停止/确认中断，发送给模型的序列也不会出现
+// “assistant(tool_calls) 后面没有紧跟 tool 响应”的 400 错误。
+func (sm *SessionManager) normalizeMessageSequence(sessionID uint, messages []provider.LLMMessage) []provider.LLMMessage {
+	toolByID := make(map[string]provider.LLMMessage)
 	for _, m := range messages {
 		if m.Role == "tool" && m.ToolCallID != "" {
-			toolResults[m.ToolCallID] = true
+			toolByID[m.ToolCallID] = m // 同一 ID 多条时取最后一条（真实结果通常在占位之后写入）
 		}
 	}
 
-	// 步骤 3：检查每条 assistant 消息的 tool_calls 是否都有对应 result
-	var result []provider.LLMMessage
+	consumed := make(map[string]bool)
+	result := make([]provider.LLMMessage, 0, len(messages))
 	for _, m := range messages {
+		if m.Role == "tool" {
+			// tool 消息统一由 assistant 分支按序输出，避免错位
+			continue
+		}
 		result = append(result, m)
-
 		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
 			for _, tc := range m.ToolCalls {
-				if !toolResults[tc.ID] {
-					global.LOG.Warnf("[Session] 检测到不完整的 tool_call(id=%s, name=%s)，补充中断标记",
-						tc.ID, tc.Function.Name)
+				if tc.ID == "" || consumed[tc.ID] {
+					continue
+				}
+				consumed[tc.ID] = true
+				if tm, ok := toolByID[tc.ID]; ok {
+					result = append(result, tm)
+				} else {
+					global.LOG.Warnf("[Session] 会话%d: tool_call(id=%s) 缺少结果，使用内存占位", sessionID, tc.ID)
 					result = append(result, provider.LLMMessage{
 						Role:       "tool",
 						ToolCallID: tc.ID,
 						Content:    "[操作已中断：用户停止了回复]",
 					})
-					_ = sm.SaveToolResult(sessionID, tc.ID, tc.Function.Name, "[操作已中断：用户停止了回复]")
 				}
 			}
 		}
 	}
-
-	return result
-}
-
-// removeOrphanToolMessages 清理孤立的 tool 消息。
-// 触发场景：用户连续中断时，saveInterruptedToolResults 可能将 tool result 写入数据库
-// 但 assistant(tool_calls) 消息保存失败（context canceled），导致数据库中只有 tool 没有 tool_calls。
-// 此外，多次中断/重试可能产生重复的 tool result。
-// 此函数将孤立的 tool 消息降级为 assistant 消息（用 `[上次结果已废弃]` 包装），
-// 避免 LLM API 返回 400 "Messages with role 'tool' must be a response to a preceding message with 'tool_calls'"。
-func (sm *SessionManager) removeOrphanToolMessages(sessionID uint, messages []provider.LLMMessage) []provider.LLMMessage {
-	// 收集所有 assistant 消息中的 tool_call_id
-	assistantToolCalls := make(map[string]bool)
-	for _, m := range messages {
-		if m.Role == "assistant" {
-			for _, tc := range m.ToolCalls {
-				assistantToolCalls[tc.ID] = true
-			}
-		}
-	}
-
-	// 检查每个 tool 消息是否有对应的 assistant(tool_calls)
-	// 如果没有，降级为 assistant 消息
-	modified := false
-	result := make([]provider.LLMMessage, 0, len(messages))
-	for _, m := range messages {
-		if m.Role == "tool" {
-			if m.ToolCallID == "" || !assistantToolCalls[m.ToolCallID] {
-				global.LOG.Warnf("[Session] 检测到孤立的 tool 消息(tool_call_id=%s)，降级为 assistant 消息",
-					m.ToolCallID)
-				// 降级为 assistant 消息，保留原内容供 LLM 参考
-				result = append(result, provider.LLMMessage{
-					Role:    "assistant",
-					Content: fmt.Sprintf("[前序操作结果已废弃] %s", m.Content),
-				})
-				// 同步修复数据库，将原 tool 消息标记为孤立（避免下次重复处理）
-				// 注意：保留数据库原记录（不动），仅在内存中转换
-				modified = true
-				continue
-			}
-		}
-		result = append(result, m)
-	}
-
-	_ = modified
-	_ = sessionID
 	return result
 }
 
@@ -187,6 +142,11 @@ func (sm *SessionManager) SaveAssistantMessage(sessionID uint, content string, t
 }
 
 func (sm *SessionManager) SaveToolResult(sessionID uint, toolCallID string, toolName string, result string) error {
+	// 同一个 tool_call_id 只保留一条结果，避免占位/真实结果重复导致 LLM 400
+	if err := global.DB.Where("session_id = ? AND tool_call_id = ? AND role = ?", sessionID, toolCallID, "tool").
+		Delete(&model.AgentMessage{}).Error; err != nil {
+		return err
+	}
 	return global.DB.Create(&model.AgentMessage{
 		SessionID:  sessionID,
 		Role:       "tool",
@@ -194,6 +154,20 @@ func (sm *SessionManager) SaveToolResult(sessionID uint, toolCallID string, tool
 		ToolCallID: toolCallID,
 		ToolName:   toolName,
 	}).Error
+}
+
+// DeleteLastAssistantMessage 删除会话中最后一条 assistant 消息（用于“重新生成”）
+func (sm *SessionManager) DeleteLastAssistantMessage(sessionID uint) error {
+	var last model.AgentMessage
+	err := global.DB.Where("session_id = ? AND role = ?", sessionID, "assistant").
+		Order("id DESC").First(&last).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	return global.DB.Delete(&last).Error
 }
 
 func (sm *SessionManager) UpdateSessionTitle(sessionID uint, title string) {

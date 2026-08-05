@@ -9,13 +9,15 @@ type Website struct {
 	Type        string `json:"type" gorm:"default:static"` // static / proxy / php
 	ProxyTarget string `json:"proxy_target"`               // e.g. http://localhost:8080
 	ProxyWS     bool   `json:"proxy_ws"`                   // WebSocket 支持
-	PhpVersion  string `json:"php_version"`                // PHP 版本，如 8.1
-	SSL         bool   `json:"ssl" gorm:"default:false"`
-	SSLCert     string `json:"ssl_cert"`                      // 证书文件路径（兼容旧版）
-	SSLKey      string `json:"ssl_key"`                       // 私钥文件路径（兼容旧版）
-	SSLCertPEM  string `json:"ssl_cert_pem" gorm:"type:text"` // 证书 PEM 内容
-	SSLKeyPEM   string `json:"ssl_key_pem" gorm:"type:text"`  // 私钥 PEM 内容
-	IndexPage   string `json:"index_page" gorm:"default:index.html index.htm index.php"`
+	// 代理站点最大请求体大小（如 10240M），用于大文件上传
+	ClientMaxBodySize string `json:"client_max_body_size"`
+	PhpVersion        string `json:"php_version"` // PHP 版本，如 8.1
+	SSL               bool   `json:"ssl" gorm:"default:false"`
+	SSLCert           string `json:"ssl_cert"`                      // 证书文件路径（兼容旧版）
+	SSLKey            string `json:"ssl_key"`                       // 私钥文件路径（兼容旧版）
+	SSLCertPEM        string `json:"ssl_cert_pem" gorm:"type:text"` // 证书 PEM 内容
+	SSLKeyPEM         string `json:"ssl_key_pem" gorm:"type:text"`  // 私钥 PEM 内容
+	IndexPage         string `json:"index_page" gorm:"default:index.html index.htm index.php"`
 	// 301/302 重定向 (JSON数组: [{"from":"example.com","to":"www.example.com","code":301}])
 	Redirects string `json:"redirects" gorm:"type:text"`
 	// 目录密码保护

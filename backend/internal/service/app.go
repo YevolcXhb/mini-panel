@@ -512,7 +512,6 @@ func (s *AppService) doInstall(inst *model.AppInstall, app *model.App, detail *m
 			global.LOG.Errorf("[Install] container exited immediately: %s", errMsg)
 			return fmt.Errorf("%s", errMsg)
 		}
-		inst.Port = inst.Port
 		global.LOG.Infof("[Install] container is running with pids: %v", pids)
 	} else {
 		global.LOG.Errorf("[Install] dockroot not available")

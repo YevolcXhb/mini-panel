@@ -424,10 +424,14 @@ func detectAndroidChroot() bool {
 	if _, err := os.Stat("/system/build.prop"); err == nil {
 		return true
 	}
-	if data, err := os.ReadFile("/proc/version"); err != nil {
+	if data, err := os.ReadFile("/proc/version"); err == nil {
 		if strings.Contains(string(data), "Android") {
 			return true
 		}
+	}
+	// 共享内核的 Android 环境中，/proc/1/root 指向 Android init 的根目录
+	if _, err := os.Stat("/proc/1/root/system"); err == nil {
+		return true
 	}
 	return false
 }

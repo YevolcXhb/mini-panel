@@ -690,6 +690,7 @@ function handleChunk(chunk: StreamChunk) {
             content: chunk.content || '',
             success: chunk.success ?? true
           }
+          if (chunk.cached) cacheHits.value++
           scrollToBottom()
         }
       }
@@ -812,6 +813,8 @@ function handlePlanConfirm(confirmed: boolean) {
   } else {
     messages.value.push({ role: 'assistant', content: '❌ 已取消执行计划' })
     resetOrchestrationState()
+    // 通知后端清理待确认计划
+    agentApi.confirmPlan(currentSessionId.value, false, () => {}, () => {}, () => {})
     return
   }
   scrollToBottom()
@@ -837,6 +840,8 @@ function handlePlanModify(modifiedPlan: string) {
   pendingPlan.value = null
   inputMessage.value = modifiedPlan
   ElMessage.info('计划已回填到输入框，编辑后重新发送')
+  // 通知后端清理旧计划，避免残留 pending 状态
+  agentApi.confirmPlan(currentSessionId.value, false, () => {}, () => {}, () => {})
   resetOrchestrationState()
 }
 
@@ -860,16 +865,33 @@ function handleStop() {
 // 重新生成
 function handleRegenerate() {
   if (!lastInput.value || streaming.value) return
-  const text = lastInput.value
-  // 移除最后的 assistant 消息
+  // 移除本地最后一条 assistant 回复，后端会同步删除数据库中的旧回复，避免重复写用户消息
   if (messages.value.length > 0) {
     const last = messages.value[messages.value.length - 1]
     if (last.role === 'assistant') {
       messages.value.pop()
     }
   }
-  inputMessage.value = text
-  handleSend()
+  messages.value.push({ role: 'assistant', content: '' })
+  streaming.value = true
+  currentStream.value = []
+  streamBuffer.value = ''
+  stopTypewriter()
+  resetOrchestrationState()
+  scrollToBottom()
+
+  currentController = agentApi.chat(
+    currentSessionId.value,
+    lastInput.value,
+    (chunk) => handleChunk(chunk),
+    () => finalizeStream(),
+    (err) => {
+      streaming.value = false
+      messages.value.push({ role: 'assistant', content: `❌ 错误: ${err}` })
+      scrollToBottom()
+    },
+    true
+  )
 }
 
 function clearCurrentChat() {

@@ -39,6 +39,7 @@ export interface StreamChunk {
   message?: string
   success?: boolean
   error?: string
+  cached?: boolean
   // 三阶段编排扩展字段
   phase?: string           // planning / coding / reviewing
   plan?: string            // plan_ready 事件的计划内容
@@ -117,8 +118,8 @@ export const agentApi = {
   getMessages: (id: number) => api.get(`/agent/sessions/${id}/messages`),
 
   // chat 单轮 ReAct 聊天（SSE）
-  chat: (sessionId: number, message: string, onChunk: (chunk: StreamChunk) => void, onDone: () => void, onError: (err: string) => void) => {
-    return parseSSEStream('/api/v1/agent/chat', { session_id: sessionId, message }, { onChunk, onDone, onError })
+  chat: (sessionId: number, message: string, onChunk: (chunk: StreamChunk) => void, onDone: () => void, onError: (err: string) => void, regenerate = false) => {
+    return parseSSEStream('/api/v1/agent/chat', { session_id: sessionId, message, regenerate }, { onChunk, onDone, onError })
   },
 
   // confirm 工具调用确认（SSE）

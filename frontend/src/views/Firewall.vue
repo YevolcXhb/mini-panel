@@ -94,6 +94,41 @@
           </template>
         </el-table-column>
       </el-table>
+
+      <!-- 回收站：已删除的面板规则 -->
+      <el-card style="margin-top: 16px">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px">
+          <span style="font-weight: 600">🗑️ 已删除规则（可恢复）</span>
+          <div style="display: flex; gap: 8px">
+            <el-button size="small" @click="loadDeletedRules" :loading="deletedLoading">刷新</el-button>
+            <el-button size="small" type="primary" @click="restoreAllDeleted" :disabled="!deletedRules.length">全部恢复</el-button>
+          </div>
+        </div>
+        <el-table :data="deletedRules" size="small" v-loading="deletedLoading" empty-text="没有已删除的规则">
+          <el-table-column prop="name" label="名称" min-width="120" />
+          <el-table-column prop="type" label="类型" width="80">
+            <template #default="{ row }">
+              <el-tag :type="row.type === 'port' ? 'primary' : 'warning'" size="small">{{ row.type === 'port' ? '端口' : 'IP' }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="action" label="动作" width="80">
+            <template #default="{ row }">
+              <el-tag :type="row.action === 'allow' ? 'success' : 'danger'" size="small">{{ row.action === 'allow' ? '允许' : '拒绝' }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="protocol" label="协议" width="80" />
+          <el-table-column prop="port" label="端口" width="100" />
+          <el-table-column prop="ip" label="IP" width="120" />
+          <el-table-column prop="direction" label="方向" width="80">
+            <template #default="{ row }">{{ row.direction === 'in' ? '入站' : '出站' }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="90" fixed="right">
+            <template #default="{ row }">
+              <el-button size="small" type="primary" @click="restoreRule(row.id)">恢复</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-card>
     </template>
 
     <!-- 诊断弹窗 -->
@@ -304,6 +339,8 @@ const quickPortForm = reactive({ port: '', protocol: 'tcp', chain: 'INPUT' })
 const quickIPForm = reactive({ ip: '', action: 'DROP' })
 const lockdownLoading = ref(false)
 const resetLoading = ref(false)
+const deletedRules = ref<any[]>([])
+const deletedLoading = ref(false)
 
 const firewallType = computed(() => {
   const name = serviceStatus.value.backend || serviceStatus.value.name || 'firewalld'
@@ -371,6 +408,35 @@ async function loadRules() {
   try { const res: any = await firewallApi.list(); rules.value = res.data || [] }
   catch (e: any) { ElMessage.error(e?.message || '加载失败') }
   finally { loading.value = false }
+}
+
+async function loadDeletedRules() {
+  deletedLoading.value = true
+  try { const res: any = await firewallApi.listDeleted(); deletedRules.value = res.data || [] }
+  catch (e: any) { ElMessage.error(e?.message || '加载已删除规则失败') }
+  finally { deletedLoading.value = false }
+}
+
+async function restoreRule(id: number) {
+  try {
+    await firewallApi.restoreRule(id)
+    ElMessage.success('规则已恢复')
+    loadDeletedRules()
+    loadRules()
+  } catch (e: any) { ElMessage.error(e?.message || '恢复失败') }
+}
+
+async function restoreAllDeleted() {
+  if (!deletedRules.value.length) return
+  try {
+    await ElMessageBox.confirm(`确定恢复全部 ${deletedRules.value.length} 条已删除规则吗？`, '恢复规则', { type: 'warning' })
+    for (const r of [...deletedRules.value]) {
+      await firewallApi.restoreRule(r.id)
+    }
+    ElMessage.success('已全部恢复')
+    loadDeletedRules()
+    loadRules()
+  } catch (e: any) { if (e !== 'cancel') ElMessage.error(e?.message || '恢复失败') }
 }
 
 async function saveRule() {
@@ -493,7 +559,10 @@ async function resetAllRules() {
 
 onMounted(async () => {
   await checkStatus()
-  if (serviceStatus.value.installed) loadRules()
+  if (serviceStatus.value.installed) {
+    loadRules()
+    loadDeletedRules()
+  }
 })
 </script>
 
