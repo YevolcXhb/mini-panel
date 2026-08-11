@@ -54,20 +54,20 @@
       <div class="meter-card">
         <div class="meter-header">
           <span>内存使用</span>
-          <span class="meter-pct" :style="{ color: pctColor(memPct) }">{{ memPct }}%</span>
+          <span class="meter-pct" :style="{ color: pctColor(Number(memPct)) }">{{ memPct }}%</span>
         </div>
         <div class="progress-bar">
-          <div class="progress-fill mem" :style="{ width: memPct + '%', background: pctColor(memPct) }"></div>
+          <div class="progress-fill mem" :style="{ width: memPct + '%', background: pctColor(Number(memPct)) }"></div>
         </div>
         <div class="meter-detail">{{ formatBytes(monitor.memory?.used) }} / {{ formatBytes(monitor.memory?.total) }}</div>
       </div>
       <div class="meter-card">
         <div class="meter-header">
           <span>磁盘使用</span>
-          <span class="meter-pct" :style="{ color: pctColor(diskPct) }">{{ diskPct }}%</span>
+          <span class="meter-pct" :style="{ color: pctColor(Number(diskPct)) }">{{ diskPct }}%</span>
         </div>
         <div class="progress-bar">
-          <div class="progress-fill disk" :style="{ width: diskPct + '%', background: pctColor(diskPct) }"></div>
+          <div class="progress-fill disk" :style="{ width: diskPct + '%', background: pctColor(Number(diskPct)) }"></div>
         </div>
         <div class="meter-detail">{{ formatBytes(diskUsed) }} / {{ formatBytes(diskTotal) }}</div>
       </div>

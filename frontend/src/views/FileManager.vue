@@ -453,7 +453,7 @@ async function pasteFiles() {
       success++
     } catch (e) {}
   }
-  ElMessage.success(`成功 ${clipboardMode.value === 'copy' ? '复制' : '移动'} ${success}/${clipboard.length} 项`)
+  ElMessage.success(`成功 ${clipboardMode.value === 'copy' ? '复制' : '移动'} ${success}/${clipboard.value.length} 项`)
   if (clipboardMode.value === 'cut') clipboard.value = []
   loadFiles()
 }

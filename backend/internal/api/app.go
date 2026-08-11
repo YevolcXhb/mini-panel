@@ -1,7 +1,6 @@
-﻿package api
+package api
 
 import (
-	"io"
 	"net/http"
 	"strconv"
 	"sync"
@@ -9,7 +8,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/minipanel/minipanel/internal/dto"
+	"github.com/minipanel/minipanel/internal/global"
 	"github.com/minipanel/minipanel/internal/service"
+	"github.com/minipanel/minipanel/internal/utils/ssrf"
 )
 
 type iconCache struct {
@@ -206,37 +207,21 @@ func (a *AppAPI) Icon(c *gin.Context) {
 		return
 	}
 
-	resp, err := http.Get(iconURL)
+	data, err := ssrf.Fetch(iconURL, 2<<20, 10*time.Second)
 	if err != nil {
+		global.LOG.Warnf("[App] icon fetch failed: %v", err)
 		c.Status(http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		c.Status(http.StatusBadGateway)
-		return
-	}
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil || len(data) == 0 {
-		c.Status(http.StatusBadGateway)
-		return
-	}
-
-	etag := resp.Header.Get("ETag")
 
 	iconCacheMu.Lock()
 	iconCacheMap[key] = &iconCache{
 		data:      data,
-		etag:      etag,
+		etag:      "",
 		fetchedAt: time.Now(),
 	}
 	iconCacheMu.Unlock()
 
-	if etag != "" {
-		c.Header("ETag", etag)
-	}
 	c.Header("Cache-Control", "public, max-age=86400")
 	c.Data(http.StatusOK, "image/png", data)
 }

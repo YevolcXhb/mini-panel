@@ -12,9 +12,12 @@ import (
 
 // 危险命令黑名单：匹配规则为命令小写后是否包含模式
 var dangerousPatterns = []string{
-	"rm -rf /", "rm -rf /*", "mkfs", "dd if=/dev/zero",
+	"rm -rf /", "rm -rf /*", "rm -rf", "rm -fr", "rm -r -f",
+	"mkfs", "dd if=/dev/zero", "dd if=/dev/sd", "dd if=/dev/hd",
 	":(){:|:&};:", "shutdown", "poweroff", "halt -p",
+	"reboot", "init 0", "init 6",
 	"> /dev/sda", "> /dev/hda", "chmod -R 777 /",
+	"curl | sh", "curl|sh", "wget | sh", "wget|sh", "base64 -d",
 }
 
 // ExecOptions ExecTool 运行时配置（用于控制危险命令拦截和超时）

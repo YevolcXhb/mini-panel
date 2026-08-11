@@ -61,10 +61,11 @@ function initTerminal() {
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const token = localStorage.getItem('token') || ''
-  const wsUrl = `${protocol}//${window.location.host}/api/v1/terminal/ws?id=main&token=${token}`
+  const wsUrl = `${protocol}//${window.location.host}/api/v1/terminal/ws?id=main`
   ws = new WebSocket(wsUrl)
 
   ws.onopen = () => {
+    ws.send(JSON.stringify({ type: 'auth', token }))
     term.writeln('\x1b[32m[mini-panel terminal connected]\x1b[0m')
   }
 

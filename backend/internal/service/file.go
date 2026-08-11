@@ -4,6 +4,9 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -46,10 +49,31 @@ func (s *FileService) resolvePath(path string) (string, error) {
 	if !strings.HasPrefix(absPath, rootAbs) {
 		return "", fmt.Errorf("path traversal detected")
 	}
-	if s.isDangerousPath(absPath) {
+	// 解析符号链接（已存在的部分），防止通过链接绕过 /proc、/sys 等拦截
+	resolved, err := evalPath(absPath)
+	if err != nil {
+		return "", fmt.Errorf("invalid path")
+	}
+	if !strings.HasPrefix(resolved, rootAbs) {
+		return "", fmt.Errorf("path traversal detected")
+	}
+	if s.isDangerousPath(resolved) {
 		return "", fmt.Errorf("access denied")
 	}
-	return absPath, nil
+	return resolved, nil
+}
+
+// evalPath 解析路径中已存在部分的符号链接；文件本身不存在时解析父目录。
+func evalPath(p string) (string, error) {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved, nil
+	}
+	parent := filepath.Dir(p)
+	resolvedParent, err := filepath.EvalSymlinks(parent)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(resolvedParent, filepath.Base(p)), nil
 }
 
 func (s *FileService) ResolvePath(path string) (string, error) {
@@ -155,7 +179,7 @@ func (s *FileService) Upload(path string, reader io.Reader) error {
 func (s *FileService) isDangerousPath(path string) bool {
 	dangerous := []string{"/proc", "/sys", "/dev", "/boot"}
 	for _, d := range dangerous {
-		if strings.HasPrefix(path, d) {
+		if path == d || strings.HasPrefix(path, d+string(filepath.Separator)) {
 			return true
 		}
 	}
@@ -209,8 +233,8 @@ func (s *FileService) CreateZip(dirPath string, writer io.Writer) error {
 		if err != nil {
 			return err
 		}
-		defer file.Close()
 		_, err = io.Copy(writer, file)
+		file.Close()
 		return err
 	})
 }
@@ -221,7 +245,15 @@ func (s *FileService) Rename(oldPath, newName string) error {
 	if err != nil {
 		return err
 	}
+	newName = strings.TrimSpace(newName)
+	if newName == "" || newName == "." || newName == ".." ||
+		strings.ContainsAny(newName, "/\\") {
+		return fmt.Errorf("invalid file name")
+	}
 	newFull := filepath.Join(filepath.Dir(oldFull), newName)
+	if s.isDangerousPath(newFull) {
+		return fmt.Errorf("access denied")
+	}
 	return os.Rename(oldFull, newFull)
 }
 
@@ -339,7 +371,27 @@ func (s *FileService) Compress(paths []string, outputPath, format string) error 
 	return nil
 }
 
-// Extract 解压文件
+const (
+	maxExtractEntries = 100000
+	maxExtractTotal   = 8 << 30 // 8GB，防 zip 炸弹
+)
+
+// safeExtractPath 校验压缩包条目路径不会逃逸目标目录。
+func safeExtractPath(destFull, name string) (string, error) {
+	clean := filepath.Clean(filepath.FromSlash(name))
+	if clean == "." || filepath.IsAbs(clean) || clean == ".." ||
+		strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("archive entry contains invalid path: %s", name)
+	}
+	target := filepath.Join(destFull, clean)
+	prefix := destFull + string(filepath.Separator)
+	if target != destFull && !strings.HasPrefix(target, prefix) {
+		return "", fmt.Errorf("archive entry escapes destination: %s", name)
+	}
+	return target, nil
+}
+
+// Extract 解压文件（防 zip-slip、符号链接与解压炸弹）。
 func (s *FileService) Extract(archivePath, destDir string) error {
 	archiveFull, err := s.resolvePath(archivePath)
 	if err != nil {
@@ -356,6 +408,19 @@ func (s *FileService) Extract(archivePath, destDir string) error {
 	}
 	defer file.Close()
 
+	entries := 0
+	var total int64
+	checkLimits := func(size int64) error {
+		entries++
+		if entries > maxExtractEntries {
+			return fmt.Errorf("压缩包条目数超过限制")
+		}
+		if total+size > maxExtractTotal {
+			return fmt.Errorf("压缩包解压总大小超过限制")
+		}
+		return nil
+	}
+
 	ext := strings.ToLower(filepath.Ext(archiveFull))
 	switch {
 	case ext == ".zip":
@@ -365,19 +430,42 @@ func (s *FileService) Extract(archivePath, destDir string) error {
 			return err
 		}
 		for _, f := range zr.File {
-			target := filepath.Join(destFull, f.Name)
+			target, err := safeExtractPath(destFull, f.Name)
+			if err != nil {
+				return err
+			}
+			mode := f.Mode()
+			if mode&os.ModeSymlink != 0 {
+				return fmt.Errorf("压缩包包含符号链接，已拒绝: %s", f.Name)
+			}
 			if f.FileInfo().IsDir() {
-				os.MkdirAll(target, 0755)
+				if err := os.MkdirAll(target, 0755); err != nil {
+					return err
+				}
 				continue
 			}
-			os.MkdirAll(filepath.Dir(target), 0755)
-			rc, _ := f.Open()
-			out, _ := os.Create(target)
-			if rc != nil && out != nil {
-				io.Copy(out, rc)
-				out.Close()
-				rc.Close()
+			if err := checkLimits(int64(f.UncompressedSize64)); err != nil {
+				return err
 			}
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return err
+			}
+			rc, err := f.Open()
+			if err != nil {
+				return err
+			}
+			out, err := os.Create(target)
+			if err != nil {
+				rc.Close()
+				return err
+			}
+			n, copyErr := io.Copy(out, rc)
+			out.Close()
+			rc.Close()
+			if copyErr != nil {
+				return copyErr
+			}
+			total += n
 		}
 	case strings.HasSuffix(archiveFull, ".tar.gz") || strings.HasSuffix(archiveFull, ".tgz"):
 		gzr, err := gzip.NewReader(file)
@@ -394,18 +482,36 @@ func (s *FileService) Extract(archivePath, destDir string) error {
 			if err != nil {
 				return err
 			}
-			target := filepath.Join(destFull, hdr.Name)
-			switch hdr.Typeflag {
-			case tar.TypeDir:
-				os.MkdirAll(target, 0755)
-			case tar.TypeReg:
-				os.MkdirAll(filepath.Dir(target), 0755)
-				out, _ := os.Create(target)
-				if out != nil {
-					io.Copy(out, tr)
-					out.Close()
-				}
+			if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeDir {
+				// 拒绝符号链接、设备等特殊条目
+				return fmt.Errorf("压缩包包含不支持的特殊条目: %s", hdr.Name)
 			}
+			target, err := safeExtractPath(destFull, hdr.Name)
+			if err != nil {
+				return err
+			}
+			if hdr.Typeflag == tar.TypeDir {
+				if err := os.MkdirAll(target, 0755); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := checkLimits(hdr.Size); err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return err
+			}
+			out, err := os.Create(target)
+			if err != nil {
+				return err
+			}
+			n, copyErr := io.Copy(out, tr)
+			out.Close()
+			if copyErr != nil {
+				return copyErr
+			}
+			total += n
 		}
 	default:
 		return fmt.Errorf("unsupported archive format: %s", ext)
@@ -486,9 +592,31 @@ func (s *FileService) GetRecycleDir() string {
 	return filepath.Join(s.root, "tmp", ".minipanel_recycle")
 }
 
+const (
+	recycleDataName = "data"
+	recycleMetaName = "meta.json"
+)
+
+type recycleMeta struct {
+	Original string `json:"original"`
+	IsDir    bool   `json:"is_dir"`
+}
+
+func recycleSuffix() string {
+	b := make([]byte, 6)
+	if _, err := rand.Read(b); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 10)
+	}
+	return hex.EncodeToString(b)
+}
+
 // MoveToRecycle 移动文件到回收站（支持跨文件系统）
 func (s *FileService) MoveToRecycle(path string) error {
 	fullPath, err := s.resolvePath(path)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(fullPath)
 	if err != nil {
 		return err
 	}
@@ -496,14 +624,19 @@ func (s *FileService) MoveToRecycle(path string) error {
 	if err := os.MkdirAll(recycleDir, 0755); err != nil {
 		return err
 	}
-	// 保留原始路径结构以防冲突
-	safeName := strings.ReplaceAll(fullPath, "/", "_")
-	safeName = strings.ReplaceAll(safeName, string(filepath.Separator), "_")
-	ts := strconv.FormatInt(time.Now().UnixNano(), 10)
-	dest := filepath.Join(recycleDir, safeName+"_"+ts)
+	itemDir := filepath.Join(recycleDir, fmt.Sprintf("%d_%s", time.Now().UnixNano(), recycleSuffix()))
+	if err := os.MkdirAll(itemDir, 0700); err != nil {
+		return err
+	}
 
-	// 使用 copy + remove 替代 os.Rename，解决跨文件系统 invalid cross-device link 问题
-	if err := s.copyOrMove(fullPath, dest); err != nil {
+	dataDir := filepath.Join(itemDir, recycleDataName)
+	if err := s.copyOrMove(fullPath, dataDir); err != nil {
+		os.RemoveAll(itemDir)
+		return err
+	}
+	metaBytes, _ := json.Marshal(recycleMeta{Original: fullPath, IsDir: info.IsDir()})
+	if err := os.WriteFile(filepath.Join(itemDir, recycleMetaName), metaBytes, 0600); err != nil {
+		os.RemoveAll(itemDir)
 		return err
 	}
 	return os.RemoveAll(fullPath)
@@ -567,13 +700,39 @@ func (s *FileService) ListRecycleBin() ([]FileInfo, error) {
 		if err != nil {
 			continue
 		}
+		itemDir := filepath.Join(recycleDir, e.Name())
+		if !e.IsDir() {
+			// 兼容旧版扁平文件回收项
+			files = append(files, FileInfo{
+				Name:    e.Name(),
+				Path:    itemDir,
+				Size:    info.Size(),
+				Mode:    info.Mode().String(),
+				ModTime: info.ModTime().Unix(),
+				IsDir:   false,
+				IsLink:  false,
+			})
+			continue
+		}
+		metaBytes, err := os.ReadFile(filepath.Join(itemDir, recycleMetaName))
+		if err != nil {
+			continue
+		}
+		var meta recycleMeta
+		if err := json.Unmarshal(metaBytes, &meta); err != nil || meta.Original == "" {
+			continue
+		}
+		dataInfo, err := os.Stat(filepath.Join(itemDir, recycleDataName))
+		if err != nil {
+			continue
+		}
 		files = append(files, FileInfo{
-			Name:    e.Name(),
-			Path:    filepath.Join(recycleDir, e.Name()),
-			Size:    info.Size(),
-			Mode:    info.Mode().String(),
-			ModTime: info.ModTime().Unix(),
-			IsDir:   e.IsDir(),
+			Name:    filepath.Base(meta.Original),
+			Path:    itemDir,
+			Size:    dataInfo.Size(),
+			Mode:    dataInfo.Mode().String(),
+			ModTime: dataInfo.ModTime().Unix(),
+			IsDir:   meta.IsDir,
 			IsLink:  false,
 		})
 	}
@@ -584,13 +743,46 @@ func (s *FileService) ListRecycleBin() ([]FileInfo, error) {
 func (s *FileService) RestoreFromRecycle(recyclePath string) error {
 	recycleDir := s.GetRecycleDir()
 	fullPath := filepath.Join(recycleDir, recyclePath)
-	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+	clean := filepath.Clean(fullPath)
+	if clean != recycleDir && !strings.HasPrefix(clean, recycleDir+string(filepath.Separator)) {
+		return fmt.Errorf("invalid recycle path")
+	}
+	info, err := os.Stat(clean)
+	if os.IsNotExist(err) {
 		return fmt.Errorf("recycle item not found")
 	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return s.restoreLegacyRecycle(clean, filepath.Base(clean))
+	}
 
-	// 从回收站文件名反向解析原始路径
-	// 格式：{safeName}_{timestamp}，safeName = 原始路径中 / 替换为 _
-	// 例：_home_user_index.html_1680000000000 → /home/user/index.html
+	metaBytes, err := os.ReadFile(filepath.Join(clean, recycleMetaName))
+	if err != nil {
+		return fmt.Errorf("recycle item metadata not found")
+	}
+	var meta recycleMeta
+	if err := json.Unmarshal(metaBytes, &meta); err != nil || meta.Original == "" || !filepath.IsAbs(meta.Original) {
+		return fmt.Errorf("recycle item metadata invalid")
+	}
+
+	originalPath := meta.Original
+	os.MkdirAll(filepath.Dir(originalPath), 0755)
+
+	dest := originalPath
+	if _, err := os.Stat(dest); err == nil {
+		dest = originalPath + "_restored"
+	}
+
+	if err := s.copyOrMove(filepath.Join(clean, recycleDataName), dest); err != nil {
+		return err
+	}
+	return os.RemoveAll(clean)
+}
+
+// restoreLegacyRecycle 兼容旧版扁平文件回收项（文件名编码了原始路径）。
+func (s *FileService) restoreLegacyRecycle(fullPath, recyclePath string) error {
 	baseName := recyclePath
 	// 去掉末尾的 _timestamp（最后一段以 _ 开头且全为数字）
 	lastUnderscore := strings.LastIndex(baseName, "_")

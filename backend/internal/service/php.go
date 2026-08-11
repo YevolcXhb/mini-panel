@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -23,6 +24,19 @@ type PhpService struct {
 
 func NewPhpService() *PhpService {
 	return &PhpService{webRepo: repository.NewWebsiteRepository(global.DB)}
+}
+
+var (
+	phpVersionRe = regexp.MustCompile(`^\d+(\.\d+)?$`)
+	phpExtNameRe = regexp.MustCompile(`^[a-zA-Z0-9_+-]+$`)
+)
+
+func validPhpVersion(version string) bool {
+	return phpVersionRe.MatchString(strings.TrimSpace(version))
+}
+
+func validPhpExtName(name string) bool {
+	return phpExtNameRe.MatchString(strings.TrimSpace(name))
 }
 
 // GetInstalledVersions 获取已安装的 PHP 版本
@@ -95,6 +109,9 @@ func (s *PhpService) isServiceRunning(name string) bool {
 
 // InstallVersion 安装 PHP 版本（默认超时 15 分钟）
 func (s *PhpService) InstallVersion(version string) error {
+	if !validPhpVersion(version) {
+		return fmt.Errorf("PHP 版本格式非法: %s", version)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	return s.InstallVersionWithContext(ctx, version)
@@ -102,6 +119,9 @@ func (s *PhpService) InstallVersion(version string) error {
 
 // InstallVersionWithContext 安装 PHP 版本（带 context，可被取消/超时）
 func (s *PhpService) InstallVersionWithContext(ctx context.Context, version string) error {
+	if !validPhpVersion(version) {
+		return fmt.Errorf("PHP 版本格式非法: %s", version)
+	}
 	global.LOG.Infof("[PHP] InstallVersion start: %s", version)
 	if !syscmd.Which("apt") && !syscmd.Which("yum") && !syscmd.Which("dnf") {
 		return fmt.Errorf("不支持的包管理器，仅支持 apt/yum/dnf")
@@ -338,6 +358,9 @@ func (s *PhpService) waitForAptLock(ctx context.Context, maxWaitSeconds int) err
 
 // RemoveVersion 卸载 PHP 版本
 func (s *PhpService) RemoveVersion(version string) error {
+	if !validPhpVersion(version) {
+		return fmt.Errorf("PHP 版本格式非法: %s", version)
+	}
 	global.LOG.Infof("[PHP] RemoveVersion start: %s", version)
 
 	// 依赖检查：若有 PHP 类型网站使用此版本，拒绝卸载
@@ -375,6 +398,9 @@ func (s *PhpService) RemoveVersion(version string) error {
 
 // StartFpm 启动 PHP-FPM
 func (s *PhpService) StartFpm(version string) error {
+	if !validPhpVersion(version) {
+		return fmt.Errorf("PHP 版本格式非法: %s", version)
+	}
 	svcName := fmt.Sprintf("php%s-fpm", version)
 	if err := s.runSystemctl(svcName, "start"); err != nil {
 		return err
@@ -390,6 +416,9 @@ func (s *PhpService) StartFpm(version string) error {
 
 // startFpmDirect 直接启动 php-fpm 进程（systemctl 失败时的备选）
 func (s *PhpService) startFpmDirect(version string) error {
+	if !validPhpVersion(version) {
+		return fmt.Errorf("PHP 版本格式非法: %s", version)
+	}
 	fpmBin := fmt.Sprintf("/usr/sbin/php-fpm%s", version)
 	if _, err := os.Stat(fpmBin); err != nil {
 		fpmBin = fmt.Sprintf("/usr/sbin/php-fpm%s.0", version)
@@ -474,6 +503,9 @@ func (s *PhpService) signalPids(pids []string, sig os.Signal) []string {
 
 // StopFpm 停止 PHP-FPM
 func (s *PhpService) StopFpm(version string) error {
+	if !validPhpVersion(version) {
+		return fmt.Errorf("PHP 版本格式非法: %s", version)
+	}
 	svcName := fmt.Sprintf("php%s-fpm", version)
 	global.LOG.Infof("[PHP] StopFpm start: %s", version)
 
@@ -523,6 +555,9 @@ func (s *PhpService) StopFpm(version string) error {
 
 // RestartFpm 重启 PHP-FPM
 func (s *PhpService) RestartFpm(version string) error {
+	if !validPhpVersion(version) {
+		return fmt.Errorf("PHP 版本格式非法: %s", version)
+	}
 	svcName := fmt.Sprintf("php%s-fpm", version)
 	// 优先尝试 systemctl restart
 	if err := s.runSystemctl(svcName, "restart"); err == nil {
@@ -552,6 +587,9 @@ func (s *PhpService) runSystemctl(name, action string) error {
 
 // GetExtensions 获取 PHP 扩展列表
 func (s *PhpService) GetExtensions(version string) ([]model.PhpExtension, error) {
+	if !validPhpVersion(version) {
+		return nil, fmt.Errorf("PHP 版本格式非法: %s", version)
+	}
 	binPath := fmt.Sprintf("/usr/bin/php%s", version)
 	if _, err := os.Stat(binPath); os.IsNotExist(err) {
 		binPath = "/usr/bin/php"
@@ -590,6 +628,9 @@ func (s *PhpService) GetExtensions(version string) ([]model.PhpExtension, error)
 
 // InstallExtension 安装 PHP 扩展
 func (s *PhpService) InstallExtension(version, extName string) error {
+	if !validPhpVersion(version) || !validPhpExtName(extName) {
+		return fmt.Errorf("PHP 版本或扩展名格式非法")
+	}
 	global.LOG.Infof("[PHP] InstallExtension: php%s ext=%s", version, extName)
 	if !syscmd.Which("apt") && !syscmd.Which("yum") && !syscmd.Which("dnf") {
 		return fmt.Errorf("不支持的包管理器")
@@ -634,6 +675,9 @@ func (s *PhpService) InstallExtension(version, extName string) error {
 
 // RemoveExtension 卸载 PHP 扩展
 func (s *PhpService) RemoveExtension(version, extName string) error {
+	if !validPhpVersion(version) || !validPhpExtName(extName) {
+		return fmt.Errorf("PHP 版本或扩展名格式非法")
+	}
 	global.LOG.Infof("[PHP] RemoveExtension: php%s ext=%s", version, extName)
 	pkgName := fmt.Sprintf("php%s-%s", version, extName)
 	var cmd *exec.Cmd
@@ -656,6 +700,9 @@ func (s *PhpService) RemoveExtension(version, extName string) error {
 
 // GetPhpIni 获取 php.ini 配置
 func (s *PhpService) GetPhpIni(version string) ([]model.PhpConfigItem, error) {
+	if !validPhpVersion(version) {
+		return nil, fmt.Errorf("PHP 版本格式非法: %s", version)
+	}
 	iniPath := s.findPhpIni(version)
 	if iniPath == "" {
 		return nil, fmt.Errorf("找不到 PHP %s 的 php.ini", version)
@@ -702,6 +749,9 @@ func (s *PhpService) GetPhpIni(version string) ([]model.PhpConfigItem, error) {
 
 // UpdatePhpIni 修改 php.ini 配置项
 func (s *PhpService) UpdatePhpIni(version string, items []model.PhpConfigItem) error {
+	if !validPhpVersion(version) {
+		return fmt.Errorf("PHP 版本格式非法: %s", version)
+	}
 	iniPath := s.findPhpIni(version)
 	if iniPath == "" {
 		return fmt.Errorf("找不到 PHP %s 的 php.ini", version)
@@ -777,6 +827,9 @@ func (s *PhpService) findPhpIni(version string) string {
 
 // GetFpmSocket 获取 PHP-FPM socket 路径
 func (s *PhpService) GetFpmSocket(version string) string {
+	if !validPhpVersion(version) {
+		return ""
+	}
 	paths := []string{
 		fmt.Sprintf("/run/php/php%s-fpm.sock", version),
 		fmt.Sprintf("/var/run/php/php%s-fpm.sock", version),
@@ -795,6 +848,9 @@ func (s *PhpService) GetFpmSocket(version string) string {
 
 // SetFpmPool 为网站设置 PHP-FPM 池配置
 func (s *PhpService) SetFpmPool(version, domain, root string, port int) error {
+	if !validPhpVersion(version) || !validWebsiteDomain(domain) {
+		return fmt.Errorf("PHP 版本或域名格式非法")
+	}
 	// 查找 FPM pool 配置目录
 	poolDirs := []string{
 		fmt.Sprintf("/etc/php/%s/fpm/pool.d", version),

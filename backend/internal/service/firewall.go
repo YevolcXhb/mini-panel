@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -197,6 +198,96 @@ func resolveAndroidIptablesPrefix(bin string) []string {
 	return resolved
 }
 
+var (
+	firewallChainRe = regexp.MustCompile(`^[A-Za-z0-9_\-]{1,64}$`)
+	firewallSpecRe  = regexp.MustCompile(`^[A-Za-z0-9_\-.:,/*!\[\]]{1,256}$`)
+)
+
+// validateFirewallPort 校验端口表达式：单个端口、a-b 区间、逗号分隔多端口。
+func validateFirewallPort(port string) error {
+	port = strings.TrimSpace(port)
+	if port == "" {
+		return fmt.Errorf("端口不能为空")
+	}
+	if !regexp.MustCompile(`^[0-9,\- ]+$`).MatchString(port) {
+		return fmt.Errorf("端口格式非法")
+	}
+	for _, part := range strings.Split(port, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if strings.Contains(part, "-") {
+			segs := strings.Split(part, "-")
+			if len(segs) != 2 {
+				return fmt.Errorf("端口区间格式非法: %s", part)
+			}
+			lo, err1 := strconv.Atoi(strings.TrimSpace(segs[0]))
+			hi, err2 := strconv.Atoi(strings.TrimSpace(segs[1]))
+			if err1 != nil || err2 != nil || lo < 1 || hi > 65535 || lo > hi {
+				return fmt.Errorf("端口区间非法: %s", part)
+			}
+			continue
+		}
+		n, err := strconv.Atoi(part)
+		if err != nil || n < 1 || n > 65535 {
+			return fmt.Errorf("端口非法: %s", part)
+		}
+	}
+	return nil
+}
+
+func validateFirewallRule(rule *model.FirewallRule) error {
+	switch rule.Type {
+	case "port", "ip", "dnat":
+	default:
+		return fmt.Errorf("规则类型非法: %s", rule.Type)
+	}
+	switch rule.Action {
+	case "allow", "deny":
+	default:
+		return fmt.Errorf("动作非法: %s", rule.Action)
+	}
+	switch rule.Direction {
+	case "in", "out":
+	default:
+		return fmt.Errorf("方向非法: %s", rule.Direction)
+	}
+	switch rule.Protocol {
+	case "tcp", "udp", "all":
+	default:
+		return fmt.Errorf("协议非法: %s", rule.Protocol)
+	}
+	if rule.Type == "port" || rule.Type == "dnat" {
+		if err := validateFirewallPort(rule.Port); err != nil {
+			return err
+		}
+	}
+	if rule.Type == "ip" || rule.Type == "dnat" {
+		isV4, isV6 := ipFamily(rule.IP)
+		if !isV4 && !isV6 {
+			return fmt.Errorf("IP 地址非法: %s", rule.IP)
+		}
+	}
+	if rule.Type == "dnat" {
+		if rule.TargetPort == "" {
+			return fmt.Errorf("DNAT 需要目标端口")
+		}
+		if n, err := strconv.Atoi(strings.TrimSpace(rule.TargetPort)); err != nil || n < 1 || n > 65535 {
+			return fmt.Errorf("DNAT 目标端口非法")
+		}
+		if rule.Chain != "" && !firewallChainRe.MatchString(rule.Chain) {
+			return fmt.Errorf("DNAT 链名非法")
+		}
+	}
+	return nil
+}
+
+// shq 对写入 Magisk 开机脚本的值做单引号转义，防止命令注入。
+func shq(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 func (s *FirewallService) Create(item *model.FirewallRule) error {
 	if item.Protocol == "" {
 		item.Protocol = "tcp"
@@ -206,6 +297,9 @@ func (s *FirewallService) Create(item *model.FirewallRule) error {
 	}
 	if item.Action == "" {
 		item.Action = "allow"
+	}
+	if err := validateFirewallRule(item); err != nil {
+		return err
 	}
 	if err := s.repo.Create(item); err != nil {
 		return err
@@ -219,6 +313,9 @@ func (s *FirewallService) List() ([]model.FirewallRule, error) {
 }
 
 func (s *FirewallService) Update(item *model.FirewallRule) error {
+	if err := validateFirewallRule(item); err != nil {
+		return err
+	}
 	old, err := s.repo.GetByID(item.ID)
 	if err == nil && old.Type == "dnat" && (item.Type != "dnat" || !item.Enabled) {
 		s.deleteDnatRule(old)
@@ -934,26 +1031,26 @@ func buildAndroidPersistScript(rules []model.FirewallRule) string {
 				}
 				sb.WriteString(fmt.Sprintf(
 					"$AIPT -C %s -p %s --dport %s -j %s 2>/dev/null || $AIPT -A %s -p %s --dport %s -j %s\n",
-					chain, proto, port, action, chain, proto, port, action))
+					shq(chain), shq(proto), shq(port), shq(action), shq(chain), shq(proto), shq(port), shq(action)))
 				sb.WriteString(fmt.Sprintf(
 					"$AIPT6 -C %s -p %s --dport %s -j %s 2>/dev/null || $AIPT6 -A %s -p %s --dport %s -j %s\n",
-					chain, proto, port, action, chain, proto, port, action))
+					shq(chain), shq(proto), shq(port), shq(action), shq(chain), shq(proto), shq(port), shq(action)))
 			}
 		} else if rule.Type == "ip" && rule.IP != "" {
 			ip := strings.TrimSpace(rule.IP)
-			if ip == "" || strings.ContainsAny(ip, "' \t") {
+			if ip == "" {
 				continue
 			}
 			isV4, isV6 := ipFamily(ip)
 			if isV4 {
 				sb.WriteString(fmt.Sprintf(
 					"$AIPT -C %s -s %s -j %s 2>/dev/null || $AIPT -A %s -s %s -j %s\n",
-					chain, ip, action, chain, ip, action))
+					shq(chain), shq(ip), shq(action), shq(chain), shq(ip), shq(action)))
 			}
 			if isV6 {
 				sb.WriteString(fmt.Sprintf(
 					"$AIPT6 -C %s -s %s -j %s 2>/dev/null || $AIPT6 -A %s -s %s -j %s\n",
-					chain, ip, action, chain, ip, action))
+					shq(chain), shq(ip), shq(action), shq(chain), shq(ip), shq(action)))
 			}
 		} else if rule.Type == "dnat" {
 			proto := rule.Protocol
@@ -963,7 +1060,7 @@ func buildAndroidPersistScript(rules []model.FirewallRule) string {
 			publicPort := strings.TrimSpace(rule.Port)
 			targetIP := strings.TrimSpace(rule.IP)
 			targetPort := strings.TrimSpace(rule.TargetPort)
-			if publicPort == "" || targetIP == "" || targetPort == "" || strings.ContainsAny(targetIP, "' \t") {
+			if publicPort == "" || targetIP == "" || targetPort == "" {
 				continue
 			}
 			natChain := dnatChain(&rule)
@@ -971,27 +1068,27 @@ func buildAndroidPersistScript(rules []model.FirewallRule) string {
 			if isV4 {
 				sb.WriteString(fmt.Sprintf(
 					"$AIPT -t nat -N %s 2>/dev/null; $AIPT -t nat -C PREROUTING -j %s 2>/dev/null || $AIPT -t nat -A PREROUTING -j %s 2>/dev/null\n",
-					natChain, natChain, natChain))
+					shq(natChain), shq(natChain), shq(natChain)))
 				sb.WriteString(fmt.Sprintf(
 					"$AIPT -t nat -C %s -p %s --dport %s -j DNAT --to-destination %s:%s 2>/dev/null || $AIPT -t nat -A %s -p %s --dport %s -j DNAT --to-destination %s:%s\n",
-					natChain, proto, publicPort, targetIP, targetPort, natChain, proto, publicPort, targetIP, targetPort))
+					shq(natChain), shq(proto), shq(publicPort), shq(targetIP), shq(targetPort), shq(natChain), shq(proto), shq(publicPort), shq(targetIP), shq(targetPort)))
 				if rule.Masq {
 					sb.WriteString(fmt.Sprintf(
 						"$AIPT -t nat -C POSTROUTING -d %s -j MASQUERADE 2>/dev/null || $AIPT -t nat -A POSTROUTING -d %s -j MASQUERADE\n",
-						targetIP, targetIP))
+						shq(targetIP), shq(targetIP)))
 				}
 			}
 			if isV6 {
 				sb.WriteString(fmt.Sprintf(
 					"$AIPT6 -t nat -N %s 2>/dev/null; $AIPT6 -t nat -C PREROUTING -j %s 2>/dev/null || $AIPT6 -t nat -A PREROUTING -j %s 2>/dev/null\n",
-					natChain, natChain, natChain))
+					shq(natChain), shq(natChain), shq(natChain)))
 				sb.WriteString(fmt.Sprintf(
 					"$AIPT6 -t nat -C %s -p %s --dport %s -j DNAT --to-destination [%s]:%s 2>/dev/null || $AIPT6 -t nat -A %s -p %s --dport %s -j DNAT --to-destination [%s]:%s\n",
-					natChain, proto, publicPort, targetIP, targetPort, natChain, proto, publicPort, targetIP, targetPort))
+					shq(natChain), shq(proto), shq(publicPort), shq(targetIP), shq(targetPort), shq(natChain), shq(proto), shq(publicPort), shq(targetIP), shq(targetPort)))
 				if rule.Masq {
 					sb.WriteString(fmt.Sprintf(
 						"$AIPT6 -t nat -C POSTROUTING -d %s -j MASQUERADE 2>/dev/null || $AIPT6 -t nat -A POSTROUTING -d %s -j MASQUERADE\n",
-						targetIP, targetIP))
+						shq(targetIP), shq(targetIP)))
 				}
 			}
 		}
@@ -1473,8 +1570,19 @@ func (s *FirewallService) InsertRule(chain string, position int, spec []string, 
 	if chain == "" {
 		chain = "INPUT"
 	}
+	if !firewallChainRe.MatchString(chain) {
+		return fmt.Errorf("链名非法")
+	}
 	if position < 1 {
 		position = 1
+	}
+	if position > 99999 {
+		return fmt.Errorf("插入位置过大")
+	}
+	for _, token := range spec {
+		if token == "" || !firewallSpecRe.MatchString(token) {
+			return fmt.Errorf("规则参数包含非法字符: %q", token)
+		}
 	}
 	args := append([]string{"-I", chain, fmt.Sprintf("%d", position)}, spec...)
 	useV6 := family == "6" || family == "ipv6"
@@ -1505,6 +1613,9 @@ func (s *FirewallService) DeleteLiveRule(chain string, num int, family string) e
 	}
 	if chain == "" {
 		chain = "INPUT"
+	}
+	if !firewallChainRe.MatchString(chain) {
+		return fmt.Errorf("链名非法")
 	}
 	if num < 1 {
 		return fmt.Errorf("行号必须大于 0")

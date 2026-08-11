@@ -60,7 +60,7 @@ func (s *SettingService) ClearData() error {
 		return err
 	}
 	auth := NewAuthService()
-	return auth.InitAdmin("admin", "123456")
+	return auth.InitAdmin("admin", "admin123")
 }
 
 func (s *SettingService) InitDefaults() error {

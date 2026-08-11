@@ -60,7 +60,7 @@ var allowedCommands = map[string]bool{
 	// 其他只读工具
 	"echo": true, "printf": true, "env": true, "printenv": true, "export": true,
 	"history": true, "clear": true, "man": true, "help": true, "info": true,
-	"bc": true, "seq": true, "factor": true, "time": true, "watch": true,
+	"bc": true, "seq": true, "factor": true,
 	"true": true, "false": true, "test": true, "hash": true,
 	"tput": true, "exit": true, "logout": true,
 }
@@ -88,6 +88,17 @@ func isCommandAllowed(line string) (bool, string) {
 		}
 		if !allowedCommands[cmd] {
 			return false, cmd
+		}
+		// find 本身只读，但 -exec/-delete/-ok/-fprint 等参数可执行命令或写文件
+		if cmd == "find" {
+			for _, arg := range strings.Fields(part) {
+				low := strings.ToLower(arg)
+				if strings.HasPrefix(low, "-exec") || strings.HasPrefix(low, "-ok") ||
+					low == "-delete" || strings.HasPrefix(low, "-fprint") ||
+					low == "-fls" || low == "-printf" {
+					return false, "find 参数被禁止: " + arg
+				}
+			}
 		}
 	}
 	return true, ""

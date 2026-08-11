@@ -198,7 +198,7 @@ func (r *ConfigRepo) GetOrCreate(userID uint) (*model.AgentConfig, error) {
 			Model:        "gpt-4o-mini",
 			Temperature:  0.3,
 			MaxTokens:    4096,
-			Enabled:      true,
+			Enabled:      false,
 			SystemPrompt: defaultSystemPrompt,
 		}
 		if err := global.DB.Create(&cfg).Error; err != nil {

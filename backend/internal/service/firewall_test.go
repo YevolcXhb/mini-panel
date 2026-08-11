@@ -59,17 +59,17 @@ func TestBuildAndroidPersistScript(t *testing.T) {
 		"sleep 30",
 		"AIPT=/system/bin/iptables",
 		"AIPT6=/system/bin/ip6tables",
-		"$AIPT -C INPUT -p tcp --dport 22 -j DROP 2>/dev/null || $AIPT -A INPUT -p tcp --dport 22 -j DROP",
-		"$AIPT6 -C INPUT -p tcp --dport 22 -j DROP 2>/dev/null || $AIPT6 -A INPUT -p tcp --dport 22 -j DROP",
-		"$AIPT -C INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || $AIPT -A INPUT -p tcp --dport 80 -j ACCEPT",
-		"$AIPT6 -C INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || $AIPT6 -A INPUT -p tcp --dport 80 -j ACCEPT",
-		"$AIPT -C INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || $AIPT -A INPUT -p tcp --dport 443 -j ACCEPT",
-		"$AIPT6 -C INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || $AIPT6 -A INPUT -p tcp --dport 443 -j ACCEPT",
-		"$AIPT -C INPUT -s 10.0.0.8 -j DROP 2>/dev/null || $AIPT -A INPUT -s 10.0.0.8 -j DROP",
-		"$AIPT6 -C INPUT -s 2409:8a55::1 -j DROP 2>/dev/null || $AIPT6 -A INPUT -s 2409:8a55::1 -j DROP",
-		"$AIPT -C OUTPUT -p tcp --dport 8080 -j DROP 2>/dev/null || $AIPT -A OUTPUT -p tcp --dport 8080 -j DROP",
-		"$AIPT -t nat -C PREROUTING -p tcp --dport 25565 -j DNAT --to-destination 192.168.3.50:25565 2>/dev/null || $AIPT -t nat -A PREROUTING -p tcp --dport 25565 -j DNAT --to-destination 192.168.3.50:25565",
-		"$AIPT -t nat -C POSTROUTING -d 192.168.3.50 -j MASQUERADE 2>/dev/null || $AIPT -t nat -A POSTROUTING -d 192.168.3.50 -j MASQUERADE",
+		"$AIPT -C 'INPUT' -p 'tcp' --dport '22' -j 'DROP' 2>/dev/null || $AIPT -A 'INPUT' -p 'tcp' --dport '22' -j 'DROP'",
+		"$AIPT6 -C 'INPUT' -p 'tcp' --dport '22' -j 'DROP' 2>/dev/null || $AIPT6 -A 'INPUT' -p 'tcp' --dport '22' -j 'DROP'",
+		"$AIPT -C 'INPUT' -p 'tcp' --dport '80' -j 'ACCEPT' 2>/dev/null || $AIPT -A 'INPUT' -p 'tcp' --dport '80' -j 'ACCEPT'",
+		"$AIPT6 -C 'INPUT' -p 'tcp' --dport '80' -j 'ACCEPT' 2>/dev/null || $AIPT6 -A 'INPUT' -p 'tcp' --dport '80' -j 'ACCEPT'",
+		"$AIPT -C 'INPUT' -p 'tcp' --dport '443' -j 'ACCEPT' 2>/dev/null || $AIPT -A 'INPUT' -p 'tcp' --dport '443' -j 'ACCEPT'",
+		"$AIPT6 -C 'INPUT' -p 'tcp' --dport '443' -j 'ACCEPT' 2>/dev/null || $AIPT6 -A 'INPUT' -p 'tcp' --dport '443' -j 'ACCEPT'",
+		"$AIPT -C 'INPUT' -s '10.0.0.8' -j 'DROP' 2>/dev/null || $AIPT -A 'INPUT' -s '10.0.0.8' -j 'DROP'",
+		"$AIPT6 -C 'INPUT' -s '2409:8a55::1' -j 'DROP' 2>/dev/null || $AIPT6 -A 'INPUT' -s '2409:8a55::1' -j 'DROP'",
+		"$AIPT -C 'OUTPUT' -p 'tcp' --dport '8080' -j 'DROP' 2>/dev/null || $AIPT -A 'OUTPUT' -p 'tcp' --dport '8080' -j 'DROP'",
+		"$AIPT -t nat -C 'PREROUTING' -p 'tcp' --dport '25565' -j DNAT --to-destination '192.168.3.50':'25565' 2>/dev/null || $AIPT -t nat -A 'PREROUTING' -p 'tcp' --dport '25565' -j DNAT --to-destination '192.168.3.50':'25565'",
+		"$AIPT -t nat -C POSTROUTING -d '192.168.3.50' -j MASQUERADE 2>/dev/null || $AIPT -t nat -A POSTROUTING -d '192.168.3.50' -j MASQUERADE",
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("persist script missing %q:\n%s", want, script)
@@ -77,5 +77,15 @@ func TestBuildAndroidPersistScript(t *testing.T) {
 	}
 	if strings.Contains(script, "dport 23") {
 		t.Errorf("disabled rule should be skipped:\n%s", script)
+	}
+}
+
+func TestShqEscapesInjection(t *testing.T) {
+	got := shq(`22; touch /data/local/tmp/pwn`)
+	if !strings.HasPrefix(got, "'") || !strings.HasSuffix(got, "'") {
+		t.Fatalf("shq should wrap value in single quotes, got %q", got)
+	}
+	if strings.Contains(got, `'; touch`) {
+		t.Fatalf("shq failed to escape quote: %q", got)
 	}
 }

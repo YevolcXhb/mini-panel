@@ -69,7 +69,7 @@ const allMenus = [
   { path: '/files', label: '文件管理', icon: Folder },
   { path: '/processes', label: '进程管理', icon: Cpu },
   { path: '/cronjobs', label: '计划任务', icon: Timer },
-  { path: '/ssh', label: 'SSH管理', icon: Monitor },
+  { path: '/ssh', label: 'Web终端', icon: Monitor },
   { path: '/agent', label: 'Mini Agent', icon: Monitor },
   { path: '/logs', label: '系统日志', icon: Document },
   { path: '/settings', label: '设置', icon: Setting },

@@ -250,7 +250,7 @@ func (s *DatabaseService) TestConnection(item *model.DatabaseInstance) (string, 
 		global.LOG.Infof("[DB] TestConnection SQLite OK: dir=%s", item.Database)
 		return "SQLite 就绪（嵌入式数据库，无需网络连接）", nil
 	}
-	addr := fmt.Sprintf("%s:%d", item.Host, item.Port)
+	addr := net.JoinHostPort(item.Host, fmt.Sprintf("%d", item.Port))
 	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	if err != nil {
 		global.LOG.Errorf("[DB] TestConnection TCP dial failed: %v", err)

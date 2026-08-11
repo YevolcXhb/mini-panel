@@ -81,20 +81,19 @@ func (a *AgentAPI) cleanupOrchestrators() {
 	}
 }
 
-// RegisterRoutes 注册路由
+// RegisterRoutes 注册路由。r 应为已带 /agent 前缀并挂好权限中间件的分组。
 func (a *AgentAPI) RegisterRoutes(r *gin.RouterGroup) {
-	agentGroup := r.Group("/agent")
 	{
-		agentGroup.GET("/config", a.GetConfig)
-		agentGroup.PUT("/config", a.UpdateConfig)
-		agentGroup.GET("/sessions", a.ListSessions)
-		agentGroup.POST("/sessions", a.CreateSession)
-		agentGroup.DELETE("/sessions/:id", a.DeleteSession)
-		agentGroup.GET("/sessions/:id/messages", a.GetSessionMessages)
-		agentGroup.POST("/chat", a.Chat)
-		agentGroup.POST("/confirm", a.Confirm)
-		agentGroup.POST("/orchestrate", a.Orchestrate)
-		agentGroup.POST("/confirm-plan", a.ConfirmPlan)
+		r.GET("/config", a.GetConfig)
+		r.PUT("/config", a.UpdateConfig)
+		r.GET("/sessions", a.ListSessions)
+		r.POST("/sessions", a.CreateSession)
+		r.DELETE("/sessions/:id", a.DeleteSession)
+		r.GET("/sessions/:id/messages", a.GetSessionMessages)
+		r.POST("/chat", a.Chat)
+		r.POST("/confirm", a.Confirm)
+		r.POST("/orchestrate", a.Orchestrate)
+		r.POST("/confirm-plan", a.ConfirmPlan)
 	}
 }
 

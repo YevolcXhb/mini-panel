@@ -59,6 +59,9 @@ func (s *BackupService) LoadAll() error {
 }
 
 func (s *BackupService) Create(task *model.BackupTask) error {
+	if err := validateBackupPaths(task); err != nil {
+		return err
+	}
 	if task.TargetDir == "" {
 		task.TargetDir = filepath.Join(global.GetDataDir(), "backups")
 	}
@@ -99,6 +102,9 @@ func (s *BackupService) GetTaskByID(id uint) (*model.BackupTask, error) {
 }
 
 func (s *BackupService) UpdateTask(task *model.BackupTask) error {
+	if err := validateBackupPaths(task); err != nil {
+		return err
+	}
 	oldTask, err := s.repo.GetTaskByID(task.ID)
 	if err != nil {
 		return err
@@ -127,6 +133,30 @@ func (s *BackupService) UpdateTask(task *model.BackupTask) error {
 		} else {
 			task.Note = fmt.Sprintf("scheduled:entry_%d", entryID)
 			_ = s.repo.UpdateTask(task)
+		}
+	}
+	return nil
+}
+
+func validateBackupPaths(task *model.BackupTask) error {
+	if task.TargetDir != "" {
+		if !filepath.IsAbs(task.TargetDir) || filepath.Clean(task.TargetDir) == string(filepath.Separator) {
+			return fmt.Errorf("备份目标目录必须是绝对路径且不能是根目录")
+		}
+		for _, seg := range strings.Split(filepath.Clean(task.TargetDir), string(filepath.Separator)) {
+			if seg == ".." {
+				return fmt.Errorf("备份目标目录不能包含 ..")
+			}
+		}
+	}
+	if task.SourcePath != "" {
+		if !filepath.IsAbs(task.SourcePath) {
+			return fmt.Errorf("备份源路径必须是绝对路径")
+		}
+		for _, seg := range strings.Split(filepath.Clean(task.SourcePath), string(filepath.Separator)) {
+			if seg == ".." {
+				return fmt.Errorf("备份源路径不能包含 ..")
+			}
 		}
 	}
 	return nil
@@ -294,8 +324,8 @@ func (s *BackupService) backupFiles(task *model.BackupTask, record *model.Backup
 		if err != nil {
 			return err
 		}
-		defer file.Close()
 		_, err = io.Copy(writer, file)
+		file.Close()
 		return err
 	})
 

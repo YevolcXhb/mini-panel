@@ -3,6 +3,8 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,9 +38,198 @@ func NewWebsiteService() *WebsiteService {
 	}
 }
 
+var (
+	websiteDomainRe = regexp.MustCompile(`^(?:\*\.)?([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$`)
+	websiteRateRe   = regexp.MustCompile(`^\d+[rR]/[smhd]$`)
+	websiteSizeRe   = regexp.MustCompile(`^\d+[kKmM]?$`)
+)
+
+// validWebsiteDomain 校验域名/主机名（支持 IPv4/IPv6 字面量与 *. 通配前缀）。
+func validWebsiteDomain(s string) bool {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if s == "" || len(s) > 253 {
+		return false
+	}
+	if strings.ContainsAny(s, " \t\r\n;{}`$\"'\\/") {
+		return false
+	}
+	if strings.Contains(s, ":") {
+		return net.ParseIP(strings.Trim(s, "[]")) != nil
+	}
+	if net.ParseIP(s) != nil {
+		return true
+	}
+	if strings.HasPrefix(s, "*.") {
+		return websiteDomainRe.MatchString(s[2:])
+	}
+	return websiteDomainRe.MatchString(s)
+}
+
+func validIPOrCIDR(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	if strings.Contains(s, "/") {
+		_, _, err := net.ParseCIDR(s)
+		return err == nil
+	}
+	return net.ParseIP(s) != nil
+}
+
+func validateRedirectsJSON(raw string) error {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var rules []model.RedirectRule
+	if err := json.Unmarshal([]byte(raw), &rules); err != nil {
+		return fmt.Errorf("redirects 格式错误: %v", err)
+	}
+	for _, r := range rules {
+		if r.From == "" || r.To == "" {
+			return fmt.Errorf("redirects 中存在空字段")
+		}
+		if r.Code != 301 && r.Code != 302 {
+			return fmt.Errorf("redirect code 仅支持 301/302")
+		}
+		if strings.ContainsAny(r.From+r.To, "\r\n;{}`$\"'#") {
+			return fmt.Errorf("redirects 包含非法字符")
+		}
+		lowerTo := strings.ToLower(r.To)
+		if strings.HasPrefix(lowerTo, "http://") || strings.HasPrefix(lowerTo, "https://") {
+			u, err := url.Parse(r.To)
+			if err != nil || u.Host == "" {
+				return fmt.Errorf("redirect 目标 URL 非法")
+			}
+		} else if !strings.HasPrefix(r.To, "/") {
+			return fmt.Errorf("redirect 目标必须是 http(s) URL 或以 / 开头的路径")
+		}
+	}
+	return nil
+}
+
+// validateWebsiteFields 白名单校验所有会写入 nginx 配置或文件系统的网站字段。
+func validateWebsiteFields(w *model.Website) error {
+	w.Name = strings.TrimSpace(w.Name)
+	w.Domain = strings.TrimSpace(w.Domain)
+	if w.Name == "" {
+		return fmt.Errorf("网站名称不能为空")
+	}
+	if len(w.Name) > 100 {
+		return fmt.Errorf("网站名称过长")
+	}
+	if !validWebsiteDomain(w.Domain) {
+		return fmt.Errorf("域名格式非法")
+	}
+	switch w.Type {
+	case "", "static", "proxy", "php":
+	default:
+		return fmt.Errorf("网站类型非法: %s", w.Type)
+	}
+	if w.Port < 0 || w.Port > 65535 {
+		return fmt.Errorf("端口非法")
+	}
+	if w.Root != "" {
+		if !filepath.IsAbs(w.Root) {
+			return fmt.Errorf("网站根目录必须是绝对路径")
+		}
+		if strings.ContainsAny(w.Root, "\r\n;{}`$\"'#\\") {
+			return fmt.Errorf("网站根目录包含非法字符")
+		}
+		for _, seg := range strings.Split(filepath.Clean(w.Root), string(filepath.Separator)) {
+			if seg == ".." {
+				return fmt.Errorf("网站根目录不能包含 ..")
+			}
+		}
+	}
+	if w.ProxyTarget != "" {
+		if strings.ContainsAny(w.ProxyTarget, "\r\n;{}`$\"'#") {
+			return fmt.Errorf("代理目标包含非法字符")
+		}
+		u, err := url.Parse(w.ProxyTarget)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("代理目标必须是 http/https URL")
+		}
+	}
+	if w.ClientMaxBodySize != "" && !websiteSizeRe.MatchString(w.ClientMaxBodySize) {
+		return fmt.Errorf("client_max_body_size 格式非法")
+	}
+	if w.RateLimitRate != "" && !websiteRateRe.MatchString(w.RateLimitRate) {
+		return fmt.Errorf("频率限制格式非法，示例: 10r/s")
+	}
+	if w.IndexPage != "" && strings.ContainsAny(w.IndexPage, "\r\n;{}`$\"'\\#") {
+		return fmt.Errorf("index 配置包含非法字符")
+	}
+	if w.HotlinkExts != "" && !regexp.MustCompile(`^[a-zA-Z0-9,]+$`).MatchString(w.HotlinkExts) {
+		return fmt.Errorf("防盗链扩展名格式非法")
+	}
+	if w.HotlinkDomains != "" {
+		for _, d := range strings.Fields(w.HotlinkDomains) {
+			d = strings.TrimSuffix(d, ",")
+			if d != "none" && d != "blocked" && !validWebsiteDomain(d) {
+				return fmt.Errorf("防盗链域名非法: %s", d)
+			}
+		}
+	}
+	if w.IPFilterEnabled {
+		if w.IPFilterMode != "blacklist" && w.IPFilterMode != "whitelist" {
+			return fmt.Errorf("IP 过滤模式非法")
+		}
+		for _, line := range strings.Split(w.IPFilterList, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if !validIPOrCIDR(line) {
+				return fmt.Errorf("IP 过滤列表包含非法地址: %s", line)
+			}
+		}
+	}
+	if err := validateRedirectsJSON(w.Redirects); err != nil {
+		return err
+	}
+	if w.AuthEnabled {
+		if w.AuthUser == "" || w.AuthPassword == "" {
+			return fmt.Errorf("目录保护需要用户名和密码")
+		}
+		if strings.ContainsAny(w.AuthUser, ":\r\n") || len(w.AuthUser) > 64 {
+			return fmt.Errorf("目录保护用户名非法")
+		}
+		if strings.ContainsAny(w.AuthPassword, "\r\n") || len(w.AuthPassword) > 128 {
+			return fmt.Errorf("目录保护密码非法")
+		}
+	}
+	for _, html := range []string{w.ErrorPage404, w.ErrorPage502, w.ErrorPage503} {
+		if len(html) > 64*1024 {
+			return fmt.Errorf("自定义错误页过大")
+		}
+		if strings.ContainsRune(html, 0) {
+			return fmt.Errorf("自定义错误页包含空字节")
+		}
+	}
+	if len(w.SSLCertPEM) > 1024*1024 || len(w.SSLKeyPEM) > 1024*1024 {
+		return fmt.Errorf("SSL PEM 内容过大")
+	}
+	if w.PhpVersion != "" && !regexp.MustCompile(`^\d+(\.\d+)?$`).MatchString(w.PhpVersion) {
+		return fmt.Errorf("PHP 版本格式非法")
+	}
+	if w.RateLimitBurst < 0 || w.RateLimitBurst > 100000 {
+		return fmt.Errorf("频率限制 burst 非法")
+	}
+	return nil
+}
+
+// websiteDirName 生成用于文件系统目录的域名安全名（去除通配符与特殊字符）。
+func websiteDirName(domain string) string {
+	return sanitizeNginxFileName(strings.TrimPrefix(strings.TrimSpace(domain), "*."))
+}
+
 func (s *WebsiteService) Create(w *model.Website) error {
 	w.Managed = true
 	normalizeWebsitePort(w)
+	if err := validateWebsiteFields(w); err != nil {
+		return err
+	}
 	// 检查 Domain:Port 是否已存在，存在则改为更新
 	existing, _ := s.repo.GetByDomainPort(w.Domain, w.Port)
 	if existing != nil {
@@ -62,6 +253,9 @@ func (s *WebsiteService) CreateWithDB(req *dto.WebsiteCreateRequest) error {
 	w := &req.Website
 	w.Managed = true
 	normalizeWebsitePort(w)
+	if err := validateWebsiteFields(w); err != nil {
+		return err
+	}
 
 	global.LOG.Infof("[Engine] 会话ID: %d | CreateWithDB 入口 | name=%s domain=%s port=%d type=%s php_version=%s db_create=%v",
 		sessionID, w.Name, w.Domain, w.Port, w.Type, w.PhpVersion, req.DBCreate)
@@ -213,6 +407,9 @@ func (s *WebsiteService) Update(w *model.Website) error {
 	}
 	w.Managed = true
 	normalizeWebsitePort(w)
+	if err := validateWebsiteFields(w); err != nil {
+		return err
+	}
 	if err := s.repo.Update(w); err != nil {
 		return err
 	}
@@ -319,6 +516,9 @@ func (s *WebsiteService) DeleteWithCascade(id uint, cascadeDB bool) error {
 
 // DeleteExternal 删除外部站点（仅删除配置文件，不入库）
 func (s *WebsiteService) DeleteExternal(domain string, port int) error {
+	if !validWebsiteDomain(domain) || port < 1 || port > 65535 {
+		return fmt.Errorf("域名或端口非法")
+	}
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
 
@@ -352,6 +552,9 @@ func (s *WebsiteService) DeleteExternal(domain string, port int) error {
 
 // ToggleExternal 切换外部站点状态
 func (s *WebsiteService) ToggleExternal(domain string, port int, enabled bool) error {
+	if !validWebsiteDomain(domain) || port < 1 || port > 65535 {
+		return fmt.Errorf("域名或端口非法")
+	}
 	existing, _ := s.repo.GetByDomainPort(domain, port)
 	if existing != nil {
 		existing.Enabled = enabled
@@ -1301,7 +1504,7 @@ func (s *WebsiteService) buildWebsiteNginxConfig(w *model.Website) (content stri
 
 	// 频率限制 zone（全局，在所有 server 块之前）
 	if w.RateLimitEnabled && w.RateLimitRate != "" {
-		zoneName := fmt.Sprintf("zone_%s_%d", strings.ReplaceAll(w.Domain, ".", "_"), w.Port)
+		zoneName := fmt.Sprintf("zone_%s_%d", websiteDirName(w.Domain), w.Port)
 		burst := w.RateLimitBurst
 		if burst <= 0 {
 			burst = 10
@@ -1315,7 +1518,7 @@ func (s *WebsiteService) buildWebsiteNginxConfig(w *model.Website) (content stri
 		certPath = w.SSLCert
 		keyPath = w.SSLKey
 		if w.SSLCertPEM != "" || w.SSLKeyPEM != "" {
-			sslDir := filepath.Join(global.GetDataDir(), "ssl", w.Domain)
+			sslDir := filepath.Join(global.GetDataDir(), "ssl", websiteDirName(w.Domain))
 			_ = os.MkdirAll(sslDir, 0700)
 			if w.SSLCertPEM != "" {
 				certPath = filepath.Join(sslDir, "fullchain.pem")
@@ -1380,7 +1583,7 @@ func (s *WebsiteService) buildWebsiteNginxConfig(w *model.Website) (content stri
 	} else {
 		root := w.Root
 		if root == "" {
-			root = filepath.Join(global.GetDataDir(), "www", w.Domain)
+			root = filepath.Join(global.GetDataDir(), "www", websiteDirName(w.Domain))
 		}
 		_ = os.MkdirAll(root, 0755)
 		indexFile := filepath.Join(root, "index.html")
@@ -1457,7 +1660,7 @@ func (s *WebsiteService) buildWebsiteNginxConfig(w *model.Website) (content stri
 
 	// 目录密码保护（静态和代理均生效）
 	if w.AuthEnabled && w.AuthUser != "" && w.AuthPassword != "" {
-		authDir := filepath.Join(global.GetDataDir(), "auth", w.Domain)
+		authDir := filepath.Join(global.GetDataDir(), "auth", websiteDirName(w.Domain))
 		_ = os.MkdirAll(authDir, 0700)
 		htpasswdPath := filepath.Join(authDir, ".htpasswd")
 		_ = s.generateHtpasswd(htpasswdPath, w.AuthUser, w.AuthPassword)
@@ -1468,7 +1671,7 @@ func (s *WebsiteService) buildWebsiteNginxConfig(w *model.Website) (content stri
 
 	// 自定义错误页面
 	if w.ErrorPage404 != "" || w.ErrorPage502 != "" || w.ErrorPage503 != "" {
-		errDir := filepath.Join(global.GetDataDir(), "error", w.Domain)
+		errDir := filepath.Join(global.GetDataDir(), "error", websiteDirName(w.Domain))
 		_ = os.MkdirAll(errDir, 0755)
 		errPages := map[int]string{404: w.ErrorPage404, 502: w.ErrorPage502, 503: w.ErrorPage503}
 		for code, html := range errPages {
@@ -1484,7 +1687,7 @@ func (s *WebsiteService) buildWebsiteNginxConfig(w *model.Website) (content stri
 
 	// 频率限制（server 块内）
 	if w.RateLimitEnabled && w.RateLimitRate != "" {
-		zoneName := fmt.Sprintf("zone_%s_%d", strings.ReplaceAll(w.Domain, ".", "_"), w.Port)
+		zoneName := fmt.Sprintf("zone_%s_%d", websiteDirName(w.Domain), w.Port)
 		burst := w.RateLimitBurst
 		if burst <= 0 {
 			burst = 10

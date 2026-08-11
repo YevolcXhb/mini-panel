@@ -9,7 +9,6 @@ import (
 	"io"
 	"math/rand"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -23,6 +22,7 @@ import (
 	"github.com/minipanel/minipanel/internal/model"
 	"github.com/minipanel/minipanel/internal/repository"
 	"github.com/minipanel/minipanel/internal/utils/dockroot"
+	"github.com/minipanel/minipanel/internal/utils/ssrf"
 	"gopkg.in/yaml.v3"
 )
 
@@ -576,20 +576,9 @@ func (s *AppService) SyncFromRemote(sourceID uint) error {
 }
 
 func (s *AppService) syncFromJSON(source *model.AppSource) error {
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(source.URL)
+	body, err := ssrf.Fetch(source.URL, 50<<20, 30*time.Second)
 	if err != nil {
 		return fmt.Errorf("fetch remote apps: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("remote returned status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("read response: %w", err)
 	}
 
 	var remoteApps []dto.RemoteApp
@@ -695,14 +684,9 @@ type panelFormField struct {
 
 func (s *AppService) syncFrom1PanelZip(source *model.AppSource) error {
 	global.LOG.Infof("[Sync] downloading app list from %s", source.URL)
-	client := &http.Client{Timeout: 180 * time.Second}
-	resp, err := client.Get(source.URL)
+	data, err := ssrf.Fetch(source.URL, 200<<20, 180*time.Second)
 	if err != nil {
 		return fmt.Errorf("download zip: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("remote returned status %d", resp.StatusCode)
 	}
 
 	tmpDir := filepath.Join(os.TempDir(), "minipanel-apps")
@@ -712,7 +696,7 @@ func (s *AppService) syncFrom1PanelZip(source *model.AppSource) error {
 	if err != nil {
 		return err
 	}
-	_, err = io.Copy(f, resp.Body)
+	_, err = f.Write(data)
 	f.Close()
 	if err != nil {
 		return fmt.Errorf("save zip: %w", err)
@@ -820,15 +804,9 @@ func (s *AppService) extractImageFrom1Panel(downloadURL string) string {
 		return ""
 	}
 	global.LOG.Infof("[Sync] downloading package from %s to extract image", downloadURL)
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(downloadURL)
+	data, err := ssrf.Fetch(downloadURL, 50<<20, 30*time.Second)
 	if err != nil {
 		global.LOG.Warnf("[Sync] download failed: %v", err)
-		return ""
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		global.LOG.Warnf("[Sync] download status %d", resp.StatusCode)
 		return ""
 	}
 
@@ -839,7 +817,7 @@ func (s *AppService) extractImageFrom1Panel(downloadURL string) string {
 	if err != nil {
 		return ""
 	}
-	_, err = io.Copy(f, resp.Body)
+	_, err = f.Write(data)
 	f.Close()
 	if err != nil {
 		global.LOG.Warnf("[Sync] save package failed: %v", err)
@@ -1251,6 +1229,14 @@ func (s *AppService) ListSources() ([]model.AppSource, error) {
 }
 
 func (s *AppService) AddSource(name, url string) (*model.AppSource, error) {
+	name = strings.TrimSpace(name)
+	url = strings.TrimSpace(url)
+	if name == "" || len(name) > 100 {
+		return nil, fmt.Errorf("应用源名称非法")
+	}
+	if !strings.HasPrefix(strings.ToLower(url), "http://") && !strings.HasPrefix(strings.ToLower(url), "https://") {
+		return nil, fmt.Errorf("应用源 URL 必须是 http/https")
+	}
 	source := &model.AppSource{Name: name, URL: url, Enabled: true}
 	return source, s.sourceRepo.Create(source)
 }
@@ -1532,14 +1518,9 @@ func extractImageFromScripts(tarGzPath string) string {
 // downloadAppPackage 下载 1Panel 版本包并解压到目标目录
 func downloadAppPackage(url, destDir string) error {
 	global.LOG.Infof("[Install] downloading package from %s", url)
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Get(url)
+	data, err := ssrf.Fetch(url, 512<<20, 60*time.Second)
 	if err != nil {
 		return fmt.Errorf("download: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("status %d", resp.StatusCode)
 	}
 
 	os.MkdirAll(destDir, 0755)
@@ -1548,7 +1529,7 @@ func downloadAppPackage(url, destDir string) error {
 	if err != nil {
 		return err
 	}
-	_, err = io.Copy(f, resp.Body)
+	_, err = f.Write(data)
 	f.Close()
 	if err != nil {
 		return fmt.Errorf("save: %w", err)

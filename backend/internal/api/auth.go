@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/base64"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -26,6 +27,8 @@ type ipTracker struct {
 	lockUntil map[string]time.Time
 	lastFail  map[string]time.Time
 }
+
+const ipTrackWindow = 30 * time.Minute
 
 var ipTrack = &ipTracker{
 	failures:  make(map[string]int),
@@ -58,10 +61,19 @@ func (t *ipTracker) needCaptcha(ip string) bool {
 func (t *ipTracker) recordFailure(ip string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	now := time.Now()
+	// 清理超过统计窗口的旧记录，防止 map 无限增长
+	for k, last := range t.lastFail {
+		if now.Sub(last) > ipTrackWindow {
+			delete(t.failures, k)
+			delete(t.lockUntil, k)
+			delete(t.lastFail, k)
+		}
+	}
 	t.failures[ip]++
-	t.lastFail[ip] = time.Now()
+	t.lastFail[ip] = now
 	if t.failures[ip] >= 5 {
-		t.lockUntil[ip] = time.Now().Add(15 * time.Minute)
+		t.lockUntil[ip] = now.Add(15 * time.Minute)
 	}
 }
 
@@ -96,7 +108,7 @@ func (a *AuthAPI) Login(c *gin.Context) {
 		return
 	}
 
-	ip := c.ClientIP()
+	ip := remoteIP(c)
 
 	if ipTrack.isLocked(ip) {
 		c.JSON(http.StatusOK, dto.Response{Code: 429, Message: "登录尝试过多，请15分钟后再试"})
@@ -115,8 +127,6 @@ func (a *AuthAPI) Login(c *gin.Context) {
 		}
 	}
 
-	_ = a.service.InitAdmin("admin", "admin123")
-
 	token, role, perms, err := a.service.Login(req.Username, req.Password, ip)
 	if err != nil {
 		ipTrack.recordFailure(ip)
@@ -126,6 +136,15 @@ func (a *AuthAPI) Login(c *gin.Context) {
 
 	ipTrack.recordSuccess(ip)
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Data: dto.LoginResponse{Token: token, Username: req.Username, Role: role, Permissions: perms}})
+}
+
+// remoteIP 使用 TCP 对端地址，避免 X-Forwarded-For 伪造。
+func remoteIP(c *gin.Context) string {
+	host, _, err := net.SplitHostPort(c.Request.RemoteAddr)
+	if err == nil {
+		return host
+	}
+	return c.Request.RemoteAddr
 }
 
 func (a *AuthAPI) Logout(c *gin.Context) {

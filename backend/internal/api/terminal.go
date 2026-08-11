@@ -1,8 +1,10 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -15,7 +17,15 @@ import (
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
-		return true
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true // 非浏览器客户端
+		}
+		u, err := url.Parse(origin)
+		if err != nil {
+			return false
+		}
+		return strings.EqualFold(u.Host, r.Host)
 	},
 }
 
@@ -26,23 +36,10 @@ func NewTerminalAPI() *TerminalAPI {
 }
 
 func (a *TerminalAPI) HandleWS(c *gin.Context) {
-	auth := c.Query("token")
+	auth := c.GetHeader("Authorization")
 	if auth == "" {
-		auth = c.GetHeader("Authorization")
-	}
-	if auth == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing token"})
-		c.Abort()
-		return
-	}
-	tokenStr := strings.TrimPrefix(auth, "Bearer ")
-	token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
-		return []byte(global.CONF.JwtSecret), nil
-	})
-	if err != nil || !token.Valid {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
-		c.Abort()
-		return
+		// 允许连接后通过首条 JSON 消息 {type:"auth", token:"..."} 鉴权
+		auth = ""
 	}
 
 	id := c.Query("id")
@@ -54,6 +51,37 @@ func (a *TerminalAPI) HandleWS(c *gin.Context) {
 		return
 	}
 	defer conn.Close()
+
+	tokenStr := ""
+	if strings.HasPrefix(auth, "Bearer ") {
+		tokenStr = strings.TrimPrefix(auth, "Bearer ")
+	} else {
+		// 浏览器 WebSocket 无法自定义 Header，改为连接后首条消息发送 token
+		_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			conn.WriteMessage(websocket.TextMessage, []byte("auth timeout"))
+			return
+		}
+		var authMsg struct {
+			Type  string `json:"type"`
+			Token string `json:"token"`
+		}
+		if err := json.Unmarshal(data, &authMsg); err != nil || authMsg.Type != "auth" || authMsg.Token == "" {
+			conn.WriteMessage(websocket.TextMessage, []byte("auth required"))
+			return
+		}
+		tokenStr = authMsg.Token
+		_ = conn.SetReadDeadline(time.Time{})
+	}
+
+	token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
+		return []byte(global.CONF.JwtSecret), nil
+	})
+	if err != nil || !token.Valid {
+		conn.WriteMessage(websocket.TextMessage, []byte("invalid token"))
+		return
+	}
 
 	role := "user"
 	if claims, ok := token.Claims.(jwt.MapClaims); ok {

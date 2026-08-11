@@ -1,6 +1,8 @@
 package service
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/minipanel/minipanel/internal/global"
+	"github.com/minipanel/minipanel/internal/utils/ssrf"
 )
 
 // GitHub 仓库坐标（与 install.sh 保持一致）
@@ -121,9 +124,10 @@ func (s *UpdateService) checkFromGitHub(info *UpdateInfo) error {
 
 // versionJSONResponse version.json 结构
 type versionJSONResponse struct {
-	Version      string `json:"version"`
-	URL          string `json:"url"`
-	ReleaseNotes string `json:"release_notes"`
+	Version       string `json:"version"`
+	URL           string `json:"url"`
+	ReleaseNotes  string `json:"release_notes"`
+	InstallSHA256 string `json:"install_sha256"`
 }
 
 // checkFromVersionJSON 从 version.json 降级获取最新版本
@@ -235,6 +239,26 @@ func (s *UpdateService) ApplyUpdate() (*ApplyResult, error) {
 	if err := downloadFile(installScriptURL, scriptPath); err != nil {
 		return nil, fmt.Errorf("下载 install.sh 失败: %w", err)
 	}
+	// 下载后做基础完整性校验：shebang、仓库标记、SHA256
+	scriptData, err := os.ReadFile(scriptPath)
+	if err != nil {
+		return nil, fmt.Errorf("读取 install.sh 失败: %w", err)
+	}
+	scriptStr := string(scriptData)
+	if !strings.HasPrefix(scriptStr, "#!") || !strings.Contains(scriptStr, "YevolcXhb/mini-panel") {
+		return nil, fmt.Errorf("install.sh 内容异常，已中止更新")
+	}
+	expectedHash, hashErr := s.expectedInstallSHA256()
+	if hashErr != nil {
+		return nil, fmt.Errorf("获取 install.sh 校验和失败，已中止更新: %w", hashErr)
+	}
+	if expectedHash == "" {
+		return nil, fmt.Errorf("version.json 缺少 install_sha256，已中止更新")
+	}
+	actual := sha256.Sum256(scriptData)
+	if !strings.EqualFold(hex.EncodeToString(actual[:]), expectedHash) {
+		return nil, fmt.Errorf("install.sh SHA256 校验失败，已中止更新")
+	}
 	if err := os.Chmod(scriptPath, 0755); err != nil {
 		return nil, fmt.Errorf("设置可执行权限失败: %w", err)
 	}
@@ -285,6 +309,20 @@ func (s *UpdateService) ApplyUpdate() (*ApplyResult, error) {
 	}, nil
 }
 
+// expectedInstallSHA256 从仓库 version.json 获取 install.sh 的期望 SHA256。
+func (s *UpdateService) expectedInstallSHA256() (string, error) {
+	url := fmt.Sprintf("https://raw.githubusercontent.com/%s/main/version.json", githubRepo)
+	data, err := ssrf.Fetch(url, 1<<20, 15*time.Second)
+	if err != nil {
+		return "", err
+	}
+	var vj versionJSONResponse
+	if err := json.Unmarshal(data, &vj); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(vj.InstallSHA256), nil
+}
+
 // GetUpdateStatus 获取当前更新任务状态
 type UpdateStatus struct {
 	Running   bool   `json:"running"`
@@ -326,19 +364,15 @@ func (s *UpdateService) GetUpdateLog(tailLines int) (string, error) {
 
 // downloadFile 下载文件到本地
 func downloadFile(url, destPath string) error {
-	resp, err := http.Get(url)
+	data, err := ssrf.Fetch(url, 1<<20, 30*time.Second)
 	if err != nil {
 		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	f, err := os.Create(destPath)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
+	_, err = f.Write(data)
 	return err
 }

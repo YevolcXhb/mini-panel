@@ -2,10 +2,12 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/minipanel/minipanel/internal/dto"
@@ -135,6 +137,7 @@ func (s *CronjobService) schedule(item *model.Cronjob) error {
 }
 
 func (s *CronjobService) execute(item *model.Cronjob) error {
+	const execTimeout = 1 * time.Hour
 	item.LastRun = time.Now().Unix()
 	var out bytes.Buffer
 	var cmd *exec.Cmd
@@ -161,14 +164,21 @@ func (s *CronjobService) execute(item *model.Cronjob) error {
 		}
 		tmpFile.Close()
 		os.Chmod(tmpFile.Name(), 0755)
-		cmd = exec.Command(shell, tmpFile.Name())
+		ctx, cancel := context.WithTimeout(context.Background(), execTimeout)
+		defer cancel()
+		cmd = exec.CommandContext(ctx, shell, tmpFile.Name())
 	} else {
-		cmd = exec.Command(shell, shellArg, item.Command)
+		ctx, cancel := context.WithTimeout(context.Background(), execTimeout)
+		defer cancel()
+		cmd = exec.CommandContext(ctx, shell, shellArg, item.Command)
 	}
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	err := cmd.Run()
 	item.LastLog = out.String()
+	if err != nil && strings.Contains(err.Error(), "context deadline exceeded") {
+		item.LastLog += "\n[命令执行超时，已强制终止（最长 1 小时）]"
+	}
 	item.LastStatus = "success"
 	if err != nil {
 		item.LastLog += fmt.Sprintf("\nError: %v", err)

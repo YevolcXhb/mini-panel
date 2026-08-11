@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/minipanel/minipanel/internal/agent/provider"
+	"github.com/minipanel/minipanel/internal/utils/ssrf"
 )
 
 // WebFetchTool 网页抓取工具
@@ -36,6 +37,9 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]interface{})
 	if pageURL == "" {
 		return ErrorResult("url is required")
 	}
+	if err := ssrf.ValidateHTTPURL(pageURL); err != nil {
+		return ErrorErr(err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", pageURL, nil)
 	if err != nil {
@@ -54,9 +58,12 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]interface{})
 		return ErrorResult("fetch failed: %s", resp.Status)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 5<<20+1))
 	if err != nil {
 		return ErrorErr(err)
+	}
+	if len(body) > 5<<20 {
+		return ErrorResult("网页内容超过 5MB 限制")
 	}
 
 	text := extractTextFromHTML(string(body))

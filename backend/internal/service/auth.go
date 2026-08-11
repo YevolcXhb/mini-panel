@@ -18,6 +18,22 @@ const (
 	windowDuration   = 30 * time.Minute
 )
 
+func init() {
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			if global.DB == nil {
+				continue
+			}
+			s := NewAuthService()
+			if err := s.attemptRepo.ClearOld(time.Now().Add(-7 * 24 * time.Hour)); err != nil {
+				global.LOG.Warnf("[Auth] cleanup old login attempts failed: %v", err)
+			}
+		}
+	}()
+}
+
 type AuthService struct {
 	userRepo    *repository.UserRepository
 	attemptRepo *repository.LoginAttemptRepository
@@ -98,6 +114,11 @@ func (s *AuthService) recordAttempt(username, ip string, success bool, lockedUnt
 		Success:     success,
 		LockedUntil: lockedUntil,
 	})
+}
+
+// CleanupOldAttempts 清理超过保留期的登录尝试记录。
+func (s *AuthService) CleanupOldAttempts() {
+	_ = s.attemptRepo.ClearOld(time.Now().Add(-7 * 24 * time.Hour))
 }
 
 func (s *AuthService) ChangePassword(username, oldPassword, newPassword string) error {

@@ -173,7 +173,7 @@ async function loadData() {
 
 async function loadNetInfo() {
 	  try {
-	    const res: any = await dashboardApi.monitor()
+	    const res: any = await dashboardApi.getMonitor()
 	    netInfo.value = res.data?.network || []
 	  } catch (e) {}
 	}

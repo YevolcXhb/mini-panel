@@ -1,35 +1,9 @@
 <template>
   <div>
-    <h2 class="page-title">🔑 SSH 管理</h2>
+    <h2 class="page-title">💻 Web 终端</h2>
     <el-tabs v-model="activeTab">
-      <el-tab-pane label="SSH 配置" name="config">
-        <div class="info-card" style="max-width:600px">
-          <div style="display:flex;flex-direction:column;gap:16px">
-            <el-form :model="sshForm" label-width="100px">
-              <el-form-item label="主机地址">
-                <el-input v-model="sshForm.host" placeholder="如 192.168.1.100" />
-              </el-form-item>
-              <el-form-item label="端口">
-                <el-input v-model="sshForm.port" placeholder="22" />
-              </el-form-item>
-              <el-form-item label="用户名">
-                <el-input v-model="sshForm.username" placeholder="root" />
-              </el-form-item>
-              <el-form-item label="密码">
-                <el-input v-model="sshForm.password" type="password" placeholder="SSH 密码" show-password />
-              </el-form-item>
-              <el-form-item label="密钥">
-                <el-input v-model="sshForm.privateKey" type="textarea" :rows="4" placeholder="粘贴 SSH 私钥（可选）" />
-              </el-form-item>
-              <el-form-item>
-                <el-button type="primary" @click="saveConfig">保存配置</el-button>
-                <el-button @click="testConnection">测试连接</el-button>
-              </el-form-item>
-            </el-form>
-          </div>
-        </div>
-      </el-tab-pane>
-      <el-tab-pane label="Web 终端" name="terminal">
+      <el-tab-pane label="本地终端" name="terminal">
+        <el-alert type="info" show-icon :closable="false" style="margin-bottom: 12px" title="这是面板所在设备的本地终端，不是远程 SSH 连接。" />
         <div class="terminal-wrap">
           <div ref="terminalRef" class="term-output"></div>
         </div>
@@ -46,7 +20,6 @@ import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { Terminal } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
 import 'xterm/css/xterm.css'
-import { ElMessage } from 'element-plus'
 
 const activeTab = ref('terminal')
 const terminalRef = ref<HTMLElement>()
@@ -56,45 +29,6 @@ let fitAddon: FitAddon
 let themeObserver: MutationObserver | null = null
 let resizeObserver: ResizeObserver | null = null
 let writeQueue: Promise<void> = Promise.resolve()
-
-const SSH_CONFIG_KEY = 'minipanel_ssh_config'
-
-interface SSHConfig {
-  host: string
-  port: string
-  username: string
-  password: string
-  privateKey: string
-}
-
-const sshForm = ref<SSHConfig>({
-  host: '',
-  port: '22',
-  username: 'root',
-  password: '',
-  privateKey: ''
-})
-
-function loadConfig() {
-  try {
-    const raw = localStorage.getItem(SSH_CONFIG_KEY)
-    if (raw) {
-      const cfg = JSON.parse(raw)
-      sshForm.value = { ...sshForm.value, ...cfg }
-    }
-  } catch (e) {
-    // ignore
-  }
-}
-
-function saveConfig() {
-  localStorage.setItem(SSH_CONFIG_KEY, JSON.stringify(sshForm.value))
-  ElMessage.success('配置已保存')
-}
-
-function testConnection() {
-  ElMessage.info('测试连接功能开发中，请先使用 Web 终端')
-}
 
 function getTerminalTheme() {
   const isDark = document.documentElement.classList.contains('dark')
@@ -147,10 +81,11 @@ function initTerminal() {
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const token = localStorage.getItem('token') || ''
-  const wsUrl = `${protocol}//${window.location.host}/api/v1/terminal/ws?id=main&token=${token}`
+  const wsUrl = `${protocol}//${window.location.host}/api/v1/terminal/ws?id=main`
   ws = new WebSocket(wsUrl)
 
   ws.onopen = () => {
+    ws.send(JSON.stringify({ type: 'auth', token }))
     term.writeln('\x1b[32m[mini-panel terminal connected]\x1b[0m')
     sendResize()
   }
@@ -204,7 +139,6 @@ watch(activeTab, (v) => {
 })
 
 onMounted(() => {
-  loadConfig()
   if (activeTab.value === 'terminal') {
     initTerminal()
   }

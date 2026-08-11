@@ -239,7 +239,7 @@
 import { ref, onMounted, nextTick } from 'vue'
 import { ChatDotRound, Setting, Delete, ChatLineRound, CircleCheck, Promotion, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { agentApi, type AgentConfig, type StreamChunk } from '../api/agent'
+import { agentApi, type StreamChunk } from '../api/agent'
 import PhaseProgress from '../components/agent/PhaseProgress.vue'
 import PlanPanel from '../components/agent/PlanPanel.vue'
 import ToolCallCard from '../components/agent/ToolCallCard.vue'
@@ -351,7 +351,19 @@ const examples = [
   '重启 MySQL 容器',
 ]
 
-const config = ref<AgentConfig & { apiKey: string; skills: string[]; allow_dangerous_commands: boolean; exec_timeout_seconds: number }>({
+const config = ref<{
+  provider: string
+  base_url: string
+  model: string
+  temperature: number
+  max_tokens: number
+  enabled: boolean
+  system_prompt: string
+  apiKey: string
+  skills: string[]
+  allow_dangerous_commands: boolean
+  exec_timeout_seconds: number
+}>({
   provider: 'openai',
   base_url: '',
   model: 'gpt-4o-mini',

@@ -59,7 +59,7 @@ export const authApi = {
 
 export const dashboardApi = {
   getInfo: () => api.get('/dashboard'),
-  getMonitor: () => api.get('/dashboard/monitor')
+  getMonitor: (mode?: string) => api.get('/dashboard/monitor', { params: mode ? { mode } : {} })
 }
 
 export const fileApi = {
