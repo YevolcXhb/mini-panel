@@ -1,11 +1,32 @@
 package service
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/minipanel/minipanel/internal/model"
 )
+
+func TestLiveRuleArgs(t *testing.T) {
+	cases := []struct {
+		name, chain, table string
+		want               []string
+	}{
+		{"all filter chains", "", "", []string{"-L", "--line-numbers", "-n", "-v"}},
+		{"specific chain", "INPUT", "", []string{"-L", "INPUT", "--line-numbers", "-n", "-v"}},
+		{"all nat chains", "", "nat", []string{"-t", "nat", "-L", "--line-numbers", "-n", "-v"}},
+		{"specific nat chain", "PREROUTING", "nat", []string{"-t", "nat", "-L", "PREROUTING", "--line-numbers", "-n", "-v"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := liveRuleArgs(tc.chain, tc.table)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("liveRuleArgs(%q, %q) = %v, want %v", tc.chain, tc.table, got, tc.want)
+			}
+		})
+	}
+}
 
 func TestAndroidIptablesCandidates(t *testing.T) {
 	roots := []string{"/proc/123/root", "/proc/1/root"}

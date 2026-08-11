@@ -1511,6 +1511,21 @@ func init() {
 	os.MkdirAll("/etc/nftables", 0755)
 }
 
+// liveRuleArgs 构造 iptables/ip6tables 的 -L 参数。
+// chain 为空时列出全部链，否则只列出指定链；不会出现重复的 -L。
+func liveRuleArgs(chain, table string) []string {
+	var args []string
+	if table == "nat" {
+		args = append(args, "-t", "nat")
+	}
+	if chain != "" {
+		args = append(args, "-L", chain, "--line-numbers", "-n", "-v")
+	} else {
+		args = append(args, "-L", "--line-numbers", "-n", "-v")
+	}
+	return args
+}
+
 // LiveRules 实时查看系统 iptables/ip6tables 规则（-L --line-numbers -n）
 // chain: INPUT / OUTPUT / FORWARD / 空=all
 // family: 空=全部(先 IPv4 后 IPv6), "4"/"ipv4"=仅 IPv4, "6"/"ipv6"=仅 IPv6
@@ -1521,14 +1536,7 @@ func (s *FirewallService) LiveRules(chain, family, table string) (string, error)
 		return "", fmt.Errorf("当前后端 %s 不支持实时规则查看，仅 iptables 后端支持", backend)
 	}
 
-	var args []string
-	if table == "nat" {
-		args = append(args, "-t", "nat")
-	}
-	args = append(args, "-L", "--line-numbers", "-n", "-v")
-	if chain != "" {
-		args = append(args, "-L", chain, "--line-numbers", "-n", "-v")
-	}
+	args := liveRuleArgs(chain, table)
 
 	useV4 := family == "" || family == "4" || family == "ipv4"
 	useV6 := family == "" || family == "6" || family == "ipv6"
