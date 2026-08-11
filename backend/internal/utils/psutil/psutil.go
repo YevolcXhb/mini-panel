@@ -3,6 +3,7 @@ package psutil
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -154,23 +155,24 @@ func GetDiskInfo(path string) (*DiskInfo, error) {
 }
 
 func GetAllDiskInfo() ([]DiskInfo, error) {
-	partitions, err := disk.Partitions(false)
+	partitions, hostRoot, err := getDiskPartitions()
 	if err != nil {
 		return nil, err
 	}
 	var result []DiskInfo
-	seen := make(map[string]bool)
-	for _, p := range partitions {
-		if seen[p.Mountpoint] {
-			continue
+	for _, p := range selectPhysicalPartitions(partitions) {
+		usagePath := p.Mountpoint
+		if hostRoot != "" {
+			// Android chroot：通过宿主机逃逸路径执行 statfs，
+			// 否则 / 与 /data 都会解析到 chroot 所在的同一块用户分区
+			usagePath = filepath.Join(hostRoot, p.Mountpoint)
 		}
-		seen[p.Mountpoint] = true
-		usage, err := disk.Usage(p.Mountpoint)
+		usage, err := disk.Usage(usagePath)
 		if err != nil {
 			continue
 		}
 		result = append(result, DiskInfo{
-			Path:        usage.Path,
+			Path:        p.Mountpoint,
 			Total:       usage.Total,
 			Used:        usage.Used,
 			Free:        usage.Free,
@@ -179,6 +181,75 @@ func GetAllDiskInfo() ([]DiskInfo, error) {
 		})
 	}
 	return result, nil
+}
+
+// selectPhysicalPartitions 过滤虚拟文件系统，并按底层设备去重。
+// 同一设备可能以多个挂载点出现（如 / 与 /data 是同一块 f2fs 的绑定挂载），
+// 若逐个统计会导致磁盘容量和用量被重复累加。
+func selectPhysicalPartitions(partitions []disk.PartitionStat) []disk.PartitionStat {
+	var result []disk.PartitionStat
+	seen := make(map[string]int) // normalized device -> index in result
+	for _, p := range partitions {
+		if isVirtualFSType(p.Fstype) || isAndroidMirrorMount(p) {
+			continue
+		}
+		key := normalizeDeviceKey(p)
+		if idx, ok := seen[key]; ok {
+			// 同一设备保留层级更浅的挂载点（如 / 优先于 /data）
+			if preferMountpoint(p.Mountpoint, result[idx].Mountpoint) {
+				result[idx] = p
+			}
+			continue
+		}
+		seen[key] = len(result)
+		result = append(result, p)
+	}
+	return result
+}
+
+// isAndroidMirrorMount 判断是否为 Android 内部存储的 FUSE/sdcardfs 镜像挂载
+// （/storage/emulated、/mnt/runtime 等）。它们的内容来自 /data/media，
+// 与 /data 是同一块物理存储，重复计入会让磁盘总量和用量虚高。
+func isAndroidMirrorMount(p disk.PartitionStat) bool {
+	fsType := strings.ToLower(strings.TrimSpace(p.Fstype))
+	if fsType != "fuse" && fsType != "sdcardfs" {
+		return false
+	}
+	mp := p.Mountpoint
+	return strings.HasPrefix(mp, "/storage/emulated") ||
+		strings.HasPrefix(mp, "/mnt/runtime/") ||
+		strings.HasPrefix(mp, "/mnt/user/")
+}
+
+func isVirtualFSType(fsType string) bool {
+	switch strings.ToLower(strings.TrimSpace(fsType)) {
+	case "tmpfs", "devtmpfs", "devfs", "proc", "sysfs", "cgroup", "cgroup2",
+		"devpts", "ramfs", "shm", "mqueue", "debugfs", "tracefs", "securityfs",
+		"pstore", "hugetlbfs", "autofs", "binfmt_misc", "configfs", "fusectl",
+		"nsfs", "overlay", "squashfs", "sockfs", "pipefs", "bpf", "rpc_pipefs":
+		return true
+	}
+	return false
+}
+
+// normalizeDeviceKey 生成设备去重键；设备名为空时退回“文件系统类型+挂载点”，
+// 避免把所有未知设备合并成一个。
+func normalizeDeviceKey(p disk.PartitionStat) string {
+	if key := platformPartitionKey(p); key != "" {
+		return key
+	}
+	return strings.ToLower(strings.TrimSpace(p.Fstype)) + ":" + strings.TrimRight(p.Mountpoint, `/\`)
+}
+
+// preferMountpoint 返回 true 表示 a 比 b 更适合作为代表挂载点。
+// 优先选择路径更短的（/ 优于 /data，C:\ 优于 C:\subdir）。
+func preferMountpoint(a, b string) bool {
+	a = strings.TrimRight(a, `/\`)
+	b = strings.TrimRight(b, `/\`)
+	if len(a) != len(b) {
+		return len(a) < len(b)
+	}
+	return a < b
 }
 
 func GetNetInfo() ([]NetInfo, error) {
