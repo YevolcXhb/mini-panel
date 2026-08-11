@@ -1,0 +1,2 @@
+*.sh text eol=lf
+version.json text eol=lf
