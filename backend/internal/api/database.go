@@ -1,4 +1,4 @@
-﻿package api
+package api
 
 import (
 	"net/http"
@@ -117,10 +117,11 @@ func (h *DatabaseAPI) ListTables(c *gin.Context) {
 		return
 	}
 	// 支持通过 query 参数指定数据库名
-	if dbName := c.Query("db_name"); dbName != "" {
-		item.Database = dbName
+	dbName := c.Query("db_name")
+	if dbName == "" {
+		dbName = item.Database
 	}
-	tables, err := h.service.ListTables(item)
+	tables, err := h.service.ListTables(item, dbName)
 	if err != nil {
 		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
 		return

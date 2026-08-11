@@ -1,5 +1,5 @@
 {
-  "version": "5.9.0",
+  "version": "6.0.0",
   "url": "https://github.com/YevolcXhb/mini-panel/releases/latest",
-  "release_notes": "Mini Panel v5.5.5 - 防火墙面板快捷操作完整版"
+  "release_notes": "Mini Panel v6.0.0 - 数据库管理页支持SQLite，移除PostgreSQL"
 }

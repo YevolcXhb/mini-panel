@@ -331,6 +331,9 @@ func (s *BackupService) backupDatabase(task *model.BackupTask, record *model.Bac
 	if err != nil {
 		return "", 0, fmt.Errorf("database instance not found: %w", err)
 	}
+	if db.Type != "" && db.Type != "mysql" {
+		return "", 0, fmt.Errorf("计划备份暂仅支持 MySQL，%s 请在数据库管理页手动备份", db.Type)
+	}
 
 	if !syscmd.Which("mysqldump") {
 		return "", 0, fmt.Errorf("mysqldump not found, please install mysql client")
@@ -460,6 +463,9 @@ func (s *BackupService) restoreDatabase(task *model.BackupTask, rec *model.Backu
 	db, err := dbSvc.GetByID(task.SourceID)
 	if err != nil {
 		return err
+	}
+	if db.Type != "" && db.Type != "mysql" {
+		return fmt.Errorf("计划恢复暂仅支持 MySQL，%s 请在数据库管理页手动恢复", db.Type)
 	}
 
 	source := rec.FilePath

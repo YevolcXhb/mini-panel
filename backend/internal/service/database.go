@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -57,14 +58,24 @@ func logItem(prefix string, item *model.DatabaseInstance) {
 }
 
 func (s *DatabaseService) Create(item *model.DatabaseInstance) error {
-	if item.Port == 0 {
-		item.Port = 3306
-	}
 	if item.Host == "" {
 		item.Host = "127.0.0.1"
 	}
 	if item.Type == "" {
 		item.Type = "mysql"
+	}
+	switch item.Type {
+	case "sqlite":
+		item.Port = 0
+		item.Username = ""
+		item.Password = ""
+		if item.Database == "" {
+			item.Database = filepath.Join(global.GetDataDir(), "sqlite")
+		}
+	default:
+		if item.Port == 0 {
+			item.Port = 3306
+		}
 	}
 	item.Name = strings.TrimSpace(item.Name)
 	if item.Name == "" {
@@ -176,8 +187,69 @@ func (s *DatabaseService) runMysqlCmd(item *model.DatabaseInstance, args ...stri
 	return out, err
 }
 
+// sqliteDataDir 返回 SQLite 数据目录（不存在则自动创建）
+func (s *DatabaseService) sqliteDataDir(item *model.DatabaseInstance) (string, error) {
+	dir := strings.TrimSpace(item.Database)
+	if dir == "" {
+		dir = filepath.Join(global.GetDataDir(), "sqlite")
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("创建 SQLite 数据目录失败: %v", err)
+	}
+	return dir, nil
+}
+
+// sqliteFilePath 返回指定 SQLite 数据库文件的完整路径（自动补 .db 后缀并防路径穿越）
+func (s *DatabaseService) sqliteFilePath(item *model.DatabaseInstance, dbName string) (string, error) {
+	dir, err := s.sqliteDataDir(item)
+	if err != nil {
+		return "", err
+	}
+	name := strings.TrimSpace(dbName)
+	if name == "" {
+		return "", fmt.Errorf("数据库名不能为空")
+	}
+	if !strings.HasSuffix(name, ".db") && !strings.HasSuffix(name, ".sqlite") && !strings.HasSuffix(name, ".sqlite3") {
+		name += ".db"
+	}
+	if filepath.Base(name) != name {
+		return "", fmt.Errorf("非法的数据库文件名: %s", dbName)
+	}
+	return filepath.Join(dir, name), nil
+}
+
+// runSqliteCmd 执行 sqlite3 命令。调用方需保证参数顺序：
+// 选项（如 -header）在前，数据库文件路径在中间，SQL 在最后。
+func (s *DatabaseService) runSqliteCmd(args ...string) ([]byte, error) {
+	global.LOG.Debugf("[DB] sqlite3 CLI exec: args=%v", args)
+	start := time.Now()
+	cmd := exec.Command("sqlite3", args...)
+	out, err := cmd.CombinedOutput()
+	elapsed := time.Since(start)
+	output := strings.TrimSpace(string(out))
+	if len(output) > 500 {
+		output = output[:500] + "...(truncated)"
+	}
+	if err != nil {
+		global.LOG.Errorf("[DB] sqlite3 CLI FAILED (%.2fs): %v | output: %s", elapsed.Seconds(), err, output)
+	} else {
+		global.LOG.Debugf("[DB] sqlite3 CLI OK (%.2fs): %s", elapsed.Seconds(), output)
+	}
+	return out, err
+}
+
 func (s *DatabaseService) TestConnection(item *model.DatabaseInstance) (string, error) {
 	logItem("TestConnection start", item)
+	if item.Type == "sqlite" {
+		if !syscmd.Which("sqlite3") {
+			return "", fmt.Errorf("sqlite3 未安装，请先安装 SQLite")
+		}
+		if _, err := s.sqliteDataDir(item); err != nil {
+			return "", err
+		}
+		global.LOG.Infof("[DB] TestConnection SQLite OK: dir=%s", item.Database)
+		return "SQLite 就绪（嵌入式数据库，无需网络连接）", nil
+	}
 	addr := fmt.Sprintf("%s:%d", item.Host, item.Port)
 	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	if err != nil {
@@ -197,25 +269,41 @@ func (s *DatabaseService) TestConnection(item *model.DatabaseInstance) (string, 
 		global.LOG.Infof("[DB] TestConnection MySQL auth OK")
 		return "Connection successful", nil
 	}
-	global.LOG.Infof("[DB] TestConnection result: TCP only (type=%s mysql_client=%v)", item.Type, syscmd.Which("mysql"))
+	global.LOG.Infof("[DB] TestConnection result: TCP only (type=%s)", item.Type)
 	return "TCP connection successful", nil
 }
 
 func (s *DatabaseService) CreateDatabase(item *model.DatabaseInstance, dbName string) error {
 	logItem("CreateDatabase start", item)
 	global.LOG.Infof("[DB] CreateDatabase target: db=%s", dbName)
-	if item.Type != "mysql" {
-		return fmt.Errorf("only mysql database creation is supported currently")
-	}
-	if !syscmd.Which("mysql") {
-		return fmt.Errorf("mysql client not found, please install mysql first")
-	}
-	args := s.getMysqlArgs(item, "")
-	query := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", escapeIdent(dbName))
-	args = append(args, "-e", query)
-	if out, err := s.runMysqlCmd(item, args...); err != nil {
-		global.LOG.Errorf("[DB] CreateDatabase FAILED: db=%s err=%v", dbName, err)
-		return fmt.Errorf("create database failed: %s: %v", string(out), err)
+	switch item.Type {
+	case "mysql":
+		if !syscmd.Which("mysql") {
+			return fmt.Errorf("mysql client not found, please install mysql first")
+		}
+		args := s.getMysqlArgs(item, "")
+		query := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", escapeIdent(dbName))
+		args = append(args, "-e", query)
+		if out, err := s.runMysqlCmd(item, args...); err != nil {
+			global.LOG.Errorf("[DB] CreateDatabase FAILED: db=%s err=%v", dbName, err)
+			return fmt.Errorf("create database failed: %s: %v", string(out), err)
+		}
+	case "sqlite":
+		if !syscmd.Which("sqlite3") {
+			return fmt.Errorf("sqlite3 未安装，请先安装 SQLite")
+		}
+		path, err := s.sqliteFilePath(item, dbName)
+		if err != nil {
+			return err
+		}
+		if _, err := os.Stat(path); err == nil {
+			return fmt.Errorf("SQLite 数据库文件已存在: %s", path)
+		}
+		if out, err := s.runSqliteCmd(path, "VACUUM;"); err != nil {
+			return fmt.Errorf("create sqlite database failed: %s: %v", string(out), err)
+		}
+	default:
+		return fmt.Errorf("unsupported database type: %s", item.Type)
 	}
 	global.LOG.Infof("[DB] CreateDatabase OK: db=%s", dbName)
 	return nil
@@ -224,28 +312,32 @@ func (s *DatabaseService) CreateDatabase(item *model.DatabaseInstance, dbName st
 func (s *DatabaseService) CreateUser(item *model.DatabaseInstance, username, password string, privDB string) error {
 	logItem("CreateUser start", item)
 	global.LOG.Infof("[DB] CreateUser target: user=%s priv=%s", username, privDB)
-	if item.Type != "mysql" {
-		return fmt.Errorf("only mysql user creation is supported currently")
-	}
-	if !syscmd.Which("mysql") {
-		return fmt.Errorf("mysql client not found, please install mysql first")
-	}
-	if privDB == "" || privDB == "*" {
-		privDB = "*.*"
-	} else {
-		privDB = fmt.Sprintf("`%s`.*", escapeIdent(privDB))
-	}
-	queries := []string{
-		fmt.Sprintf("CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED BY '%s'", escapeStr(username), escapeStr(password)),
-		fmt.Sprintf("GRANT ALL PRIVILEGES ON %s TO '%s'@'%%'", privDB, escapeStr(username)),
-		"FLUSH PRIVILEGES",
-	}
-	fullQuery := strings.Join(queries, "; ")
-	args := s.getMysqlArgs(item, "")
-	args = append(args, "-e", fullQuery)
-	if out, err := s.runMysqlCmd(item, args...); err != nil {
-		global.LOG.Errorf("[DB] CreateUser FAILED: user=%s err=%v", username, err)
-		return fmt.Errorf("create user failed: %s: %v", string(out), err)
+	switch item.Type {
+	case "mysql":
+		if !syscmd.Which("mysql") {
+			return fmt.Errorf("mysql client not found, please install mysql first")
+		}
+		if privDB == "" || privDB == "*" {
+			privDB = "*.*"
+		} else {
+			privDB = fmt.Sprintf("`%s`.*", escapeIdent(privDB))
+		}
+		queries := []string{
+			fmt.Sprintf("CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED BY '%s'", escapeStr(username), escapeStr(password)),
+			fmt.Sprintf("GRANT ALL PRIVILEGES ON %s TO '%s'@'%%'", privDB, escapeStr(username)),
+			"FLUSH PRIVILEGES",
+		}
+		fullQuery := strings.Join(queries, "; ")
+		args := s.getMysqlArgs(item, "")
+		args = append(args, "-e", fullQuery)
+		if out, err := s.runMysqlCmd(item, args...); err != nil {
+			global.LOG.Errorf("[DB] CreateUser FAILED: user=%s err=%v", username, err)
+			return fmt.Errorf("create user failed: %s: %v", string(out), err)
+		}
+	case "sqlite":
+		return fmt.Errorf("SQLite 不支持用户管理")
+	default:
+		return fmt.Errorf("unsupported database type: %s", item.Type)
 	}
 	global.LOG.Infof("[DB] CreateUser OK: user=%s", username)
 	return nil
@@ -255,18 +347,31 @@ func (s *DatabaseService) CreateUser(item *model.DatabaseInstance, username, pas
 func (s *DatabaseService) DropDatabase(item *model.DatabaseInstance, dbName string) error {
 	logItem("DropDatabase start", item)
 	global.LOG.Infof("[DB] DropDatabase target: db=%s", dbName)
-	if item.Type != "mysql" {
-		return fmt.Errorf("only mysql database drop is supported currently")
-	}
-	if !syscmd.Which("mysql") {
-		return fmt.Errorf("mysql client not found, please install mysql first")
-	}
-	args := s.getMysqlArgs(item, "")
-	query := fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", escapeIdent(dbName))
-	args = append(args, "-e", query)
-	if out, err := s.runMysqlCmd(item, args...); err != nil {
-		global.LOG.Errorf("[DB] DropDatabase FAILED: db=%s err=%v", dbName, err)
-		return fmt.Errorf("drop database failed: %s: %v", string(out), err)
+	switch item.Type {
+	case "mysql":
+		if !syscmd.Which("mysql") {
+			return fmt.Errorf("mysql client not found, please install mysql first")
+		}
+		args := s.getMysqlArgs(item, "")
+		query := fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", escapeIdent(dbName))
+		args = append(args, "-e", query)
+		if out, err := s.runMysqlCmd(item, args...); err != nil {
+			global.LOG.Errorf("[DB] DropDatabase FAILED: db=%s err=%v", dbName, err)
+			return fmt.Errorf("drop database failed: %s: %v", string(out), err)
+		}
+	case "sqlite":
+		path, err := s.sqliteFilePath(item, dbName)
+		if err != nil {
+			return err
+		}
+		if err := os.Remove(path); err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return fmt.Errorf("删除 SQLite 数据库文件失败: %v", err)
+		}
+	default:
+		return fmt.Errorf("unsupported database type: %s", item.Type)
 	}
 	global.LOG.Infof("[DB] DropDatabase OK: db=%s", dbName)
 	return nil
@@ -276,22 +381,26 @@ func (s *DatabaseService) DropDatabase(item *model.DatabaseInstance, dbName stri
 func (s *DatabaseService) DropUser(item *model.DatabaseInstance, username string) error {
 	logItem("DropUser start", item)
 	global.LOG.Infof("[DB] DropUser target: user=%s", username)
-	if item.Type != "mysql" {
-		return fmt.Errorf("only mysql user drop is supported currently")
-	}
-	if !syscmd.Which("mysql") {
-		return fmt.Errorf("mysql client not found, please install mysql first")
-	}
-	args := s.getMysqlArgs(item, "")
-	queries := []string{
-		fmt.Sprintf("DROP USER IF EXISTS '%s'@'%%'", escapeStr(username)),
-		"FLUSH PRIVILEGES",
-	}
-	fullQuery := strings.Join(queries, "; ")
-	args = append(args, "-e", fullQuery)
-	if out, err := s.runMysqlCmd(item, args...); err != nil {
-		global.LOG.Errorf("[DB] DropUser FAILED: user=%s err=%v", username, err)
-		return fmt.Errorf("drop user failed: %s: %v", string(out), err)
+	switch item.Type {
+	case "mysql":
+		if !syscmd.Which("mysql") {
+			return fmt.Errorf("mysql client not found, please install mysql first")
+		}
+		args := s.getMysqlArgs(item, "")
+		queries := []string{
+			fmt.Sprintf("DROP USER IF EXISTS '%s'@'%%'", escapeStr(username)),
+			"FLUSH PRIVILEGES",
+		}
+		fullQuery := strings.Join(queries, "; ")
+		args = append(args, "-e", fullQuery)
+		if out, err := s.runMysqlCmd(item, args...); err != nil {
+			global.LOG.Errorf("[DB] DropUser FAILED: user=%s err=%v", username, err)
+			return fmt.Errorf("drop user failed: %s: %v", string(out), err)
+		}
+	case "sqlite":
+		return fmt.Errorf("SQLite 不支持用户管理")
+	default:
+		return fmt.Errorf("unsupported database type: %s", item.Type)
 	}
 	global.LOG.Infof("[DB] DropUser OK: user=%s", username)
 	return nil
@@ -302,6 +411,9 @@ func (s *DatabaseService) DropUser(item *model.DatabaseInstance, username string
 func (s *DatabaseService) CreateDatabaseForWebsite(item *model.DatabaseInstance, dbName, username, password string) error {
 	logItem("CreateDatabaseForWebsite start", item)
 	global.LOG.Infof("[DB] CreateDatabaseForWebsite db=%s user=%s", dbName, username)
+	if item.Type != "mysql" {
+		return fmt.Errorf("数据库类型 %s 不支持联动建库", item.Type)
+	}
 
 	if err := s.CreateDatabase(item, dbName); err != nil {
 		return fmt.Errorf("建库失败: %v", err)
@@ -324,34 +436,61 @@ type DBInfo struct {
 
 func (s *DatabaseService) ListDatabases(item *model.DatabaseInstance) ([]DBInfo, error) {
 	logItem("ListDatabases start", item)
-	if item.Type != "mysql" {
-		return nil, fmt.Errorf("only mysql list databases is supported currently")
-	}
-	if !syscmd.Which("mysql") {
-		return nil, fmt.Errorf("mysql client not found, please install mysql first")
-	}
-	args := s.getMysqlArgs(item, "")
-	args = append(args, "-N", "-B", "-e", "SHOW DATABASES")
-	out, err := s.runMysqlCmd(item, args...)
-	if err != nil {
-		global.LOG.Errorf("[DB] ListDatabases FAILED: %v", err)
-		return nil, fmt.Errorf("list databases failed: %s: %v", string(out), err)
-	}
-	skip := map[string]bool{
-		"information_schema": true,
-		"performance_schema": true,
-		"sys":                true,
-	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	var dbs []DBInfo
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || skip[line] {
-			continue
+	switch item.Type {
+	case "mysql":
+		if !syscmd.Which("mysql") {
+			return nil, fmt.Errorf("mysql client not found, please install mysql first")
 		}
-		dbs = append(dbs, DBInfo{Name: line})
+		args := s.getMysqlArgs(item, "")
+		args = append(args, "-N", "-B", "-e", "SHOW DATABASES")
+		out, err := s.runMysqlCmd(item, args...)
+		if err != nil {
+			global.LOG.Errorf("[DB] ListDatabases FAILED: %v", err)
+			return nil, fmt.Errorf("list databases failed: %s: %v", string(out), err)
+		}
+		skip := map[string]bool{
+			"information_schema": true,
+			"performance_schema": true,
+			"sys":                true,
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || skip[line] {
+				continue
+			}
+			dbs = append(dbs, DBInfo{Name: line})
+		}
+	case "sqlite":
+		if !syscmd.Which("sqlite3") {
+			return nil, fmt.Errorf("sqlite3 未安装，请先安装 SQLite")
+		}
+		dir, err := s.sqliteDataDir(item)
+		if err != nil {
+			return nil, err
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return nil, fmt.Errorf("读取 SQLite 数据目录失败: %v", err)
+		}
+		var names []string
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			name := e.Name()
+			if strings.HasSuffix(name, ".db") || strings.HasSuffix(name, ".sqlite") || strings.HasSuffix(name, ".sqlite3") {
+				names = append(names, name)
+			}
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			dbs = append(dbs, DBInfo{Name: name})
+		}
+	default:
+		return nil, fmt.Errorf("unsupported database type: %s", item.Type)
 	}
-	global.LOG.Infof("[DB] ListDatabases OK: count=%d (total=%d)", len(dbs), len(lines))
+	global.LOG.Infof("[DB] ListDatabases OK: count=%d", len(dbs))
 	return dbs, nil
 }
 
@@ -359,48 +498,71 @@ type TableInfo struct {
 	Name string `json:"name"`
 }
 
-func (s *DatabaseService) ListTables(item *model.DatabaseInstance) ([]TableInfo, error) {
+func (s *DatabaseService) ListTables(item *model.DatabaseInstance, dbName string) ([]TableInfo, error) {
 	logItem("ListTables start", item)
-	if item.Type != "mysql" || item.Database == "" {
+	if dbName == "" {
 		return nil, fmt.Errorf("please select a database first")
 	}
-	if !syscmd.Which("mysql") {
-		return nil, fmt.Errorf("mysql client not found, please install mysql first")
+	var tables []TableInfo
+	var out []byte
+	var err error
+	switch item.Type {
+	case "mysql":
+		if !syscmd.Which("mysql") {
+			return nil, fmt.Errorf("mysql client not found, please install mysql first")
+		}
+		args := s.getMysqlArgs(item, dbName)
+		args = append(args, "-N", "-B", "-e", "SHOW TABLES")
+		out, err = s.runMysqlCmd(item, args...)
+	case "sqlite":
+		if !syscmd.Which("sqlite3") {
+			return nil, fmt.Errorf("sqlite3 未安装，请先安装 SQLite")
+		}
+		path, pathErr := s.sqliteFilePath(item, dbName)
+		if pathErr != nil {
+			return nil, pathErr
+		}
+		if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+			return nil, fmt.Errorf("SQLite 数据库文件不存在: %s", path)
+		}
+		out, err = s.runSqliteCmd(path,
+			"SELECT name FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY name;")
+	default:
+		return nil, fmt.Errorf("unsupported database type: %s", item.Type)
 	}
-	args := s.getMysqlArgs(item, item.Database)
-	args = append(args, "-N", "-B", "-e", "SHOW TABLES")
-	out, err := s.runMysqlCmd(item, args...)
 	if err != nil {
-		global.LOG.Errorf("[DB] ListTables FAILED: db=%s err=%v", item.Database, err)
+		global.LOG.Errorf("[DB] ListTables FAILED: db=%s err=%v", dbName, err)
 		return nil, fmt.Errorf("list tables failed: %s: %v", string(out), err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	var tables []TableInfo
-	for _, line := range lines {
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" {
 			tables = append(tables, TableInfo{Name: line})
 		}
 	}
-	global.LOG.Infof("[DB] ListTables OK: db=%s count=%d", item.Database, len(tables))
+	global.LOG.Infof("[DB] ListTables OK: db=%s count=%d", dbName, len(tables))
 	return tables, nil
 }
 
 func (s *DatabaseService) ChangePassword(item *model.DatabaseInstance, newPassword string) error {
 	logItem("ChangePassword start", item)
 	global.LOG.Infof("[DB] ChangePassword target: user=%s new_pass=%s", item.Username, maskPassword(newPassword))
-	if item.Type != "mysql" {
-		return fmt.Errorf("only mysql password change is supported currently")
-	}
-	if !syscmd.Which("mysql") {
-		return fmt.Errorf("mysql client not found")
-	}
-	args := s.getMysqlArgs(item, "")
-	query := fmt.Sprintf("ALTER USER '%s'@'%%' IDENTIFIED BY '%s'", escapeStr(item.Username), escapeStr(newPassword))
-	args = append(args, "-e", query)
-	if out, err := s.runMysqlCmd(item, args...); err != nil {
-		global.LOG.Errorf("[DB] ChangePassword FAILED: user=%s err=%v", item.Username, err)
-		return fmt.Errorf("change password failed: %s: %v", string(out), err)
+	switch item.Type {
+	case "mysql":
+		if !syscmd.Which("mysql") {
+			return fmt.Errorf("mysql client not found")
+		}
+		args := s.getMysqlArgs(item, "")
+		query := fmt.Sprintf("ALTER USER '%s'@'%%' IDENTIFIED BY '%s'", escapeStr(item.Username), escapeStr(newPassword))
+		args = append(args, "-e", query)
+		if out, err := s.runMysqlCmd(item, args...); err != nil {
+			global.LOG.Errorf("[DB] ChangePassword FAILED: user=%s err=%v", item.Username, err)
+			return fmt.Errorf("change password failed: %s: %v", string(out), err)
+		}
+	case "sqlite":
+		return fmt.Errorf("SQLite 不支持用户密码管理")
+	default:
+		return fmt.Errorf("unsupported database type: %s", item.Type)
 	}
 	global.LOG.Infof("[DB] ChangePassword OK: user=%s", item.Username)
 	return nil
@@ -420,33 +582,72 @@ type ColumnInfo struct {
 func (s *DatabaseService) DescribeTable(item *model.DatabaseInstance, dbName, tableName string) ([]ColumnInfo, error) {
 	logItem("DescribeTable start", item)
 	global.LOG.Infof("[DB] DescribeTable db=%s table=%s", dbName, tableName)
-	if item.Type != "mysql" {
-		return nil, fmt.Errorf("only mysql is supported currently")
-	}
-	if !syscmd.Which("mysql") {
-		return nil, fmt.Errorf("mysql client not found")
-	}
-	args := s.getMysqlArgs(item, dbName)
-	args = append(args, "-N", "-B", "-e", fmt.Sprintf("SHOW FULL COLUMNS FROM `%s`", escapeIdent(tableName)))
-	out, err := s.runMysqlCmd(item, args...)
-	if err != nil {
-		return nil, fmt.Errorf("describe table failed: %s: %v", string(out), err)
-	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	var cols []ColumnInfo
-	for _, line := range lines {
-		fields := strings.Split(line, "\t")
-		if len(fields) < 6 {
-			continue
+	var out []byte
+	var err error
+	switch item.Type {
+	case "mysql":
+		if !syscmd.Which("mysql") {
+			return nil, fmt.Errorf("mysql client not found")
 		}
-		cols = append(cols, ColumnInfo{
-			Name:    fields[0],
-			Type:    fields[1],
-			Null:    fields[3],
-			Key:     fields[4],
-			Default: fields[5],
-			Extra:   fields[6],
-		})
+		args := s.getMysqlArgs(item, dbName)
+		args = append(args, "-N", "-B", "-e", fmt.Sprintf("SHOW FULL COLUMNS FROM `%s`", escapeIdent(tableName)))
+		out, err = s.runMysqlCmd(item, args...)
+		if err != nil {
+			return nil, fmt.Errorf("describe table failed: %s: %v", string(out), err)
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			fields := strings.Split(line, "\t")
+			if len(fields) < 6 {
+				continue
+			}
+			cols = append(cols, ColumnInfo{
+				Name:    fields[0],
+				Type:    fields[1],
+				Null:    fields[3],
+				Key:     fields[4],
+				Default: fields[5],
+				Extra:   fields[6],
+			})
+		}
+	case "sqlite":
+		if !syscmd.Which("sqlite3") {
+			return nil, fmt.Errorf("sqlite3 未安装")
+		}
+		path, err := s.sqliteFilePath(item, dbName)
+		if err != nil {
+			return nil, err
+		}
+		out, err = s.runSqliteCmd(path, fmt.Sprintf("PRAGMA table_info(\"%s\");", strings.ReplaceAll(tableName, `"`, `""`)))
+		if err != nil {
+			return nil, fmt.Errorf("describe table failed: %s: %v", string(out), err)
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			fields := strings.Split(line, "|")
+			if len(fields) < 6 {
+				continue
+			}
+			key := ""
+			if strings.TrimSpace(fields[5]) != "0" {
+				key = "PRI"
+			}
+			null := "NO"
+			if strings.TrimSpace(fields[3]) == "0" {
+				null = "YES"
+			} else {
+				null = "NO"
+			}
+			cols = append(cols, ColumnInfo{
+				Name:    fields[1],
+				Type:    fields[2],
+				Null:    null,
+				Key:     key,
+				Default: fields[4],
+				Extra:   "",
+			})
+		}
+	default:
+		return nil, fmt.Errorf("unsupported database type: %s", item.Type)
 	}
 	global.LOG.Infof("[DB] DescribeTable OK: db=%s table=%s cols=%d", dbName, tableName, len(cols))
 	return cols, nil
@@ -464,21 +665,63 @@ func (s *DatabaseService) ExecuteQuery(item *model.DatabaseInstance, dbName, que
 	global.LOG.Infof("[DB] ExecuteQuery db=%s query=%s", dbName, query)
 	query = strings.TrimSpace(query)
 	upper := strings.ToUpper(query)
+	if strings.HasPrefix(query, ".") {
+		return nil, fmt.Errorf("不允许执行 sqlite 点命令，仅支持 SELECT/SHOW/DESCRIBE/EXPLAIN 查询")
+	}
 	// 安全检查：仅允许只读操作
 	for _, keyword := range []string{"DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "CREATE", "TRUNCATE", "RENAME", "REPLACE"} {
 		if strings.HasPrefix(upper, keyword) || strings.Contains(upper, " "+keyword+" ") {
 			return nil, fmt.Errorf("不允许执行 %s 操作，仅支持 SELECT/SHOW/DESCRIBE/EXPLAIN 查询", keyword)
 		}
 	}
-	if item.Type != "mysql" {
-		return nil, fmt.Errorf("only mysql is supported currently")
+	var out []byte
+	var err error
+	var columns []string
+	switch item.Type {
+	case "mysql":
+		if !syscmd.Which("mysql") {
+			return nil, fmt.Errorf("mysql client not found")
+		}
+		args := s.getMysqlArgs(item, dbName)
+		args = append(args, "-N", "-B", "-e", query)
+		out, err = s.runMysqlCmd(item, args...)
+		if err != nil {
+			return nil, fmt.Errorf("query failed: %s: %v", string(out), err)
+		}
+		// 获取列名
+		colArgs2 := s.getMysqlArgs(item, dbName)
+		colArgs2 = append(colArgs2, "-e", query+" LIMIT 0")
+		colOut, colErr := s.runMysqlCmd(item, colArgs2...)
+		if colErr == nil {
+			colLines := strings.Split(strings.TrimSpace(string(colOut)), "\n")
+			if len(colLines) > 0 {
+				columns = strings.Split(colLines[0], "\t")
+			}
+		}
+	case "sqlite":
+		if !syscmd.Which("sqlite3") {
+			return nil, fmt.Errorf("sqlite3 未安装")
+		}
+		path, pathErr := s.sqliteFilePath(item, dbName)
+		if pathErr != nil {
+			return nil, pathErr
+		}
+		if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+			return nil, fmt.Errorf("SQLite 数据库文件不存在: %s", path)
+		}
+		out, err = s.runSqliteCmd("-header", "-separator", "\t", path, query)
+		if err != nil {
+			return nil, fmt.Errorf("query failed: %s: %v", string(out), err)
+		}
+		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		if len(lines) > 0 {
+			columns = strings.Split(lines[0], "\t")
+			lines = lines[1:]
+			out = []byte(strings.Join(lines, "\n"))
+		}
+	default:
+		return nil, fmt.Errorf("unsupported database type: %s", item.Type)
 	}
-	if !syscmd.Which("mysql") {
-		return nil, fmt.Errorf("mysql client not found")
-	}
-	args := s.getMysqlArgs(item, dbName)
-	args = append(args, "-N", "-B", "-e", query)
-	out, err := s.runMysqlCmd(item, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query failed: %s: %v", string(out), err)
 	}
@@ -492,22 +735,6 @@ func (s *DatabaseService) ExecuteQuery(item *model.DatabaseInstance, dbName, que
 		rows = append(rows, strings.Split(line, "\t"))
 	}
 
-	// 获取列名
-	colArgs := s.getMysqlArgs(item, dbName)
-	colArgs = append(colArgs, "-N", "-B", "-e", query+" LIMIT 0")
-	// 尝试用 --column-names 获取列名
-	colArgs2 := s.getMysqlArgs(item, dbName)
-	colArgs2 = append(colArgs2, "-e", query+" LIMIT 0")
-	colOut, colErr := s.runMysqlCmd(item, colArgs2...)
-	var columns []string
-	if colErr == nil {
-		colLines := strings.Split(strings.TrimSpace(string(colOut)), "\n")
-		if len(colLines) > 0 {
-			columns = strings.Split(colLines[0], "\t")
-		}
-	}
-	_ = colArgs // unused but kept for fallback
-
 	global.LOG.Infof("[DB] ExecuteQuery OK: db=%s rows=%d cols=%d", dbName, len(rows), len(columns))
 	return &QueryResult{Columns: columns, Rows: rows}, nil
 }
@@ -516,12 +743,6 @@ func (s *DatabaseService) ExecuteQuery(item *model.DatabaseInstance, dbName, que
 func (s *DatabaseService) BackupDatabase(item *model.DatabaseInstance, dbName string) (string, error) {
 	logItem("BackupDatabase start", item)
 	global.LOG.Infof("[DB] BackupDatabase db=%s", dbName)
-	if item.Type != "mysql" {
-		return "", fmt.Errorf("only mysql backup is supported currently")
-	}
-	if !syscmd.Which("mysqldump") {
-		return "", fmt.Errorf("mysqldump not found, please install mysql client")
-	}
 	backupDir := filepath.Join(global.GetDataDir(), "backups", "database")
 	if err := os.MkdirAll(backupDir, 0755); err != nil {
 		return "", fmt.Errorf("create backup dir failed: %v", err)
@@ -530,34 +751,62 @@ func (s *DatabaseService) BackupDatabase(item *model.DatabaseInstance, dbName st
 	fileName := fmt.Sprintf("%s_%s.sql", dbName, timestamp)
 	outputPath := filepath.Join(backupDir, fileName)
 
-	args := []string{
-		fmt.Sprintf("-h%s", item.Host),
-		fmt.Sprintf("-P%d", item.Port),
-		fmt.Sprintf("-u%s", item.Username),
-		"--single-transaction",
-		"--routines",
-		"--triggers",
-		dbName,
-	}
-	global.LOG.Debugf("[DB] mysqldump exec: host=%s port=%d user=%s db=%s output=%s",
-		item.Host, item.Port, item.Username, dbName, outputPath)
 	start := time.Now()
-	cmd := exec.Command("mysqldump", args...)
-	if item.Password != "" {
-		cmd.Env = append(os.Environ(), fmt.Sprintf("MYSQL_PWD=%s", item.Password))
-	}
-	outFile, err := os.Create(outputPath)
-	if err != nil {
-		return "", fmt.Errorf("create output file failed: %v", err)
-	}
-	defer outFile.Close()
-	cmd.Stdout = outFile
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		global.LOG.Errorf("[DB] BackupDatabase FAILED (%.2fs): %v | stderr: %s", time.Since(start).Seconds(), err, stderr.String())
-		os.Remove(outputPath)
-		return "", fmt.Errorf("backup failed: %s: %v", stderr.String(), err)
+	switch item.Type {
+	case "mysql":
+		if !syscmd.Which("mysqldump") {
+			return "", fmt.Errorf("mysqldump not found, please install mysql client")
+		}
+		args := []string{
+			fmt.Sprintf("-h%s", item.Host),
+			fmt.Sprintf("-P%d", item.Port),
+			fmt.Sprintf("-u%s", item.Username),
+			"--single-transaction",
+			"--routines",
+			"--triggers",
+			dbName,
+		}
+		global.LOG.Debugf("[DB] mysqldump exec: host=%s port=%d user=%s db=%s output=%s",
+			item.Host, item.Port, item.Username, dbName, outputPath)
+		cmd := exec.Command("mysqldump", args...)
+		if item.Password != "" {
+			cmd.Env = append(os.Environ(), fmt.Sprintf("MYSQL_PWD=%s", item.Password))
+		}
+		outFile, err := os.Create(outputPath)
+		if err != nil {
+			return "", fmt.Errorf("create output file failed: %v", err)
+		}
+		cmd.Stdout = outFile
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		err = cmd.Run()
+		outFile.Close()
+		if err != nil {
+			global.LOG.Errorf("[DB] BackupDatabase FAILED (%.2fs): %v | stderr: %s", time.Since(start).Seconds(), err, stderr.String())
+			os.Remove(outputPath)
+			return "", fmt.Errorf("backup failed: %s: %v", stderr.String(), err)
+		}
+	case "sqlite":
+		if !syscmd.Which("sqlite3") {
+			return "", fmt.Errorf("sqlite3 未安装")
+		}
+		srcPath, err := s.sqliteFilePath(item, dbName)
+		if err != nil {
+			return "", err
+		}
+		if _, err := os.Stat(srcPath); os.IsNotExist(err) {
+			return "", fmt.Errorf("SQLite 数据库文件不存在: %s", srcPath)
+		}
+		fileName = fmt.Sprintf("%s_%s.sqlite", dbName, timestamp)
+		outputPath = filepath.Join(backupDir, fileName)
+		backupCmd := fmt.Sprintf(".backup '%s'", strings.ReplaceAll(outputPath, "'", "''"))
+		if out, err := s.runSqliteCmd(srcPath, backupCmd); err != nil {
+			global.LOG.Errorf("[DB] BackupDatabase(sqlite) FAILED: %v | output: %s", err, string(out))
+			os.Remove(outputPath)
+			return "", fmt.Errorf("backup failed: %s: %v", string(out), err)
+		}
+	default:
+		return "", fmt.Errorf("unsupported database type: %s", item.Type)
 	}
 	global.LOG.Infof("[DB] BackupDatabase OK: db=%s output=%s (%.2fs)", dbName, outputPath, time.Since(start).Seconds())
 	return outputPath, nil
@@ -567,39 +816,54 @@ func (s *DatabaseService) BackupDatabase(item *model.DatabaseInstance, dbName st
 func (s *DatabaseService) RestoreDatabase(item *model.DatabaseInstance, dbName, inputPath string) error {
 	logItem("RestoreDatabase start", item)
 	global.LOG.Infof("[DB] RestoreDatabase db=%s input=%s", dbName, inputPath)
-	if item.Type != "mysql" {
-		return fmt.Errorf("only mysql restore is supported currently")
-	}
-	if !syscmd.Which("mysql") {
-		return fmt.Errorf("mysql client not found")
-	}
 	if _, err := os.Stat(inputPath); os.IsNotExist(err) {
 		return fmt.Errorf("backup file not found: %s", inputPath)
 	}
-	args := []string{
-		fmt.Sprintf("-h%s", item.Host),
-		fmt.Sprintf("-P%d", item.Port),
-		fmt.Sprintf("-u%s", item.Username),
-		dbName,
-	}
-	global.LOG.Debugf("[DB] mysql restore exec: host=%s port=%d user=%s db=%s input=%s",
-		item.Host, item.Port, item.Username, dbName, inputPath)
 	start := time.Now()
-	cmd := exec.Command("mysql", args...)
-	if item.Password != "" {
-		cmd.Env = append(os.Environ(), fmt.Sprintf("MYSQL_PWD=%s", item.Password))
-	}
-	inFile, err := os.Open(inputPath)
-	if err != nil {
-		return fmt.Errorf("open input file failed: %v", err)
-	}
-	defer inFile.Close()
-	cmd.Stdin = inFile
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		global.LOG.Errorf("[DB] RestoreDatabase FAILED (%.2fs): %v | stderr: %s", time.Since(start).Seconds(), err, stderr.String())
-		return fmt.Errorf("restore failed: %s: %v", stderr.String(), err)
+	switch item.Type {
+	case "mysql":
+		if !syscmd.Which("mysql") {
+			return fmt.Errorf("mysql client not found")
+		}
+		args := []string{
+			fmt.Sprintf("-h%s", item.Host),
+			fmt.Sprintf("-P%d", item.Port),
+			fmt.Sprintf("-u%s", item.Username),
+			dbName,
+		}
+		global.LOG.Debugf("[DB] mysql restore exec: host=%s port=%d user=%s db=%s input=%s",
+			item.Host, item.Port, item.Username, dbName, inputPath)
+		cmd := exec.Command("mysql", args...)
+		if item.Password != "" {
+			cmd.Env = append(os.Environ(), fmt.Sprintf("MYSQL_PWD=%s", item.Password))
+		}
+		inFile, err := os.Open(inputPath)
+		if err != nil {
+			return fmt.Errorf("open input file failed: %v", err)
+		}
+		cmd.Stdin = inFile
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		err = cmd.Run()
+		inFile.Close()
+		if err != nil {
+			global.LOG.Errorf("[DB] RestoreDatabase FAILED (%.2fs): %v | stderr: %s", time.Since(start).Seconds(), err, stderr.String())
+			return fmt.Errorf("restore failed: %s: %v", stderr.String(), err)
+		}
+	case "sqlite":
+		if !syscmd.Which("sqlite3") {
+			return fmt.Errorf("sqlite3 未安装")
+		}
+		targetPath, err := s.sqliteFilePath(item, dbName)
+		if err != nil {
+			return err
+		}
+		restoreCmd := fmt.Sprintf(".restore '%s'", strings.ReplaceAll(inputPath, "'", "''"))
+		if out, err := s.runSqliteCmd(targetPath, restoreCmd); err != nil {
+			return fmt.Errorf("restore failed: %s: %v", string(out), err)
+		}
+	default:
+		return fmt.Errorf("unsupported database type: %s", item.Type)
 	}
 	global.LOG.Infof("[DB] RestoreDatabase OK: db=%s input=%s (%.2fs)", dbName, inputPath, time.Since(start).Seconds())
 	return nil

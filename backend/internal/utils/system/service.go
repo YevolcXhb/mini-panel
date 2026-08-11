@@ -118,6 +118,20 @@ func CheckMySQL() ServiceStatus {
 	return status
 }
 
+func CheckSQLite() ServiceStatus {
+	status := ServiceStatus{Name: "sqlite", Installed: false, Running: true}
+	if !cmd.Which("sqlite3") {
+		status.Message = "SQLite3 未安装"
+		return status
+	}
+	status.Installed = true
+	out, err := exec.Command("sqlite3", "--version").CombinedOutput()
+	if err == nil {
+		status.Version = strings.TrimSpace(string(out))
+	}
+	return status
+}
+
 func CheckFirewalld() ServiceStatus {
 	status := ServiceStatus{Name: "firewalld", ServiceName: "firewalld"}
 
@@ -152,6 +166,7 @@ func GetAllServices() map[string]ServiceStatus {
 	return map[string]ServiceStatus{
 		"nginx":     CheckNginx(),
 		"mysql":     CheckMySQL(),
+		"sqlite":    CheckSQLite(),
 		"firewalld": CheckFirewalld(),
 	}
 }
@@ -179,6 +194,14 @@ func InstallService(name string) error {
 		} else if cmd.Which("dnf") {
 			installCmd = exec.Command("dnf", "install", "-y", "mariadb-server")
 		}
+	case "sqlite":
+		if cmd.Which("apt-get") {
+			installCmd = exec.Command("apt-get", "install", "-y", "sqlite3")
+		} else if cmd.Which("yum") {
+			installCmd = exec.Command("yum", "install", "-y", "sqlite")
+		} else if cmd.Which("dnf") {
+			installCmd = exec.Command("dnf", "install", "-y", "sqlite")
+		}
 	default:
 		return fmt.Errorf("unsupported service: %s", name)
 	}
@@ -195,6 +218,9 @@ func InstallService(name string) error {
 func StartService(name string) error {
 	if runtime.GOOS != "linux" {
 		return fmt.Errorf("service management is only supported on Linux")
+	}
+	if name == "sqlite" {
+		return nil // SQLite 是嵌入式数据库，无独立服务
 	}
 
 	var lastErr error
@@ -259,6 +285,8 @@ func checkServiceRunning(name string) bool {
 		return CheckNginx().Running
 	case "mysql", "mariadb":
 		return CheckMySQL().Running
+	case "sqlite":
+		return true
 	case "firewalld", "ufw":
 		return CheckFirewalld().Running
 	default:
@@ -289,6 +317,8 @@ func directStartService(name string) error {
 			cmd := exec.Command("nginx")
 			return cmd.Start()
 		}
+	case "sqlite":
+		return nil
 	}
 	return fmt.Errorf("direct start not supported for %s", name)
 }
@@ -296,6 +326,9 @@ func directStartService(name string) error {
 func StopService(name string) error {
 	if runtime.GOOS != "linux" {
 		return fmt.Errorf("service management is only supported on Linux")
+	}
+	if name == "sqlite" {
+		return nil // SQLite 是嵌入式数据库，无独立服务
 	}
 
 	// 先尝试systemctl
@@ -335,12 +368,17 @@ func directStopService(name string) {
 		exec.Command("pkill", "-f", "mysqld|mariadbd").Run()
 	case "nginx":
 		exec.Command("pkill", "nginx").Run()
+	case "sqlite":
+		// no-op
 	}
 }
 
 func RestartService(name string) error {
 	if runtime.GOOS != "linux" {
 		return fmt.Errorf("service management is only supported on Linux")
+	}
+	if name == "sqlite" {
+		return nil
 	}
 
 	var lastErr error

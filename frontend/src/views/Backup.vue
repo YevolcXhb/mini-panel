@@ -117,7 +117,7 @@
         </el-form-item>
         <el-form-item v-if="form.type === 'database'" label="选择数据库" prop="source_id">
           <el-select v-model="form.source_id" style="width: 100%" placeholder="选择要备份的数据库实例">
-            <el-option v-for="d in databases" :key="d.id" :label="d.name + ' (' + d.host + ':' + d.port + ')'" :value="d.id" />
+            <el-option v-for="d in databases.filter((x: any) => x.type === 'mysql')" :key="d.id" :label="d.name + ' (' + d.host + ':' + d.port + ')'" :value="d.id" />
           </el-select>
         </el-form-item>
         <el-form-item v-if="form.type === 'files'" label="源路径" prop="source_path">

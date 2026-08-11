@@ -3,7 +3,7 @@ package model
 type DatabaseInstance struct {
 	BaseModel
 	Name     string `json:"name" gorm:"uniqueIndex;not null"`
-	Type     string `json:"type" gorm:"not null"` // mysql, postgresql, redis, mongodb
+	Type     string `json:"type" gorm:"not null"` // mysql, sqlite
 	Host     string `json:"host" gorm:"not null"`
 	Port     int    `json:"port" gorm:"not null"`
 	Username string `json:"username"`

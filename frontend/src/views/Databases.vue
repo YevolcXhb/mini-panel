@@ -6,13 +6,18 @@
       </h2>
     </div>
 
-    <el-alert v-if="!serviceStatus.installed" type="warning" show-icon style="margin-bottom: 16px">
+    <el-radio-group v-model="activeType" style="margin-bottom: 16px">
+      <el-radio-button label="mysql">MySQL/MariaDB</el-radio-button>
+      <el-radio-button label="sqlite">SQLite</el-radio-button>
+    </el-radio-group>
+
+    <el-alert v-if="!currentService.installed" type="warning" show-icon style="margin-bottom: 16px">
       <template #title>
-        MySQL/MariaDB 未检测到，请先安装数据库服务
+        {{ typeLabel }} 未检测到，请先安装数据库服务
       </template>
       <template #default>
         <div style="margin-top: 8px">
-          <el-button type="primary" :loading="installing" @click="installService">安装 MySQL/MariaDB</el-button>
+          <el-button type="primary" :loading="installing" @click="installService">安装 {{ typeLabel }}</el-button>
         </div>
       </template>
     </el-alert>
@@ -21,14 +26,15 @@
       <el-card style="margin-bottom: 16px">
         <div style="display: flex; justify-content: space-between; align-items: center">
           <div style="display: flex; align-items: center; gap: 12px">
-            <el-tag :type="serviceStatus.running ? 'success' : 'danger'" size="large">
-              {{ serviceStatus.running ? '运行中' : '已停止' }}
+            <el-tag :type="currentService.running ? 'success' : 'danger'" size="large">
+              {{ currentService.running ? '运行中' : '已停止' }}
             </el-tag>
-            <span v-if="serviceStatus.version">{{ serviceStatus.name === 'ufw' ? '' : 'MySQL' }} v{{ serviceStatus.version }}</span>
+            <span v-if="currentService.version">{{ typeLabel }} v{{ currentService.version }}</span>
+            <span v-if="activeType === 'sqlite'" style="color: #909399; font-size: 12px">嵌入式数据库，无需启动/停止服务</span>
           </div>
-          <div style="display: flex; gap: 8px">
-            <el-button size="small" type="primary" @click="startService" v-if="!serviceStatus.running" :loading="actionLoading">启动</el-button>
-            <el-button size="small" type="warning" @click="stopService" v-if="serviceStatus.running" :loading="actionLoading">停止</el-button>
+          <div v-if="activeType !== 'sqlite'" style="display: flex; gap: 8px">
+            <el-button size="small" type="primary" @click="startService" v-if="!currentService.running" :loading="actionLoading">启动</el-button>
+            <el-button size="small" type="warning" @click="stopService" v-if="currentService.running" :loading="actionLoading">停止</el-button>
             <el-button size="small" @click="restartService" :loading="actionLoading">重启</el-button>
             <el-button size="small" @click="checkStatus">刷新状态</el-button>
           </div>
@@ -72,21 +78,26 @@
           <el-input v-model="form.name" placeholder="如: 本地 MySQL" />
         </el-form-item>
         <el-form-item label="类型" prop="type">
-          <el-select v-model="form.type" placeholder="选择数据库类型" style="width: 100%">
-            <el-option label="MySQL" value="mysql" />
+          <el-select v-model="form.type" placeholder="选择数据库类型" style="width: 100%" @change="onFormTypeChange">
+            <el-option label="MySQL/MariaDB" value="mysql" />
+            <el-option label="SQLite" value="sqlite" />
           </el-select>
         </el-form-item>
-        <el-form-item label="主机" prop="host">
+        <el-form-item v-if="form.type !== 'sqlite'" label="主机" prop="host">
           <el-input v-model="form.host" placeholder="如: 127.0.0.1" />
         </el-form-item>
-        <el-form-item label="端口" prop="port">
+        <el-form-item v-if="form.type !== 'sqlite'" label="端口" prop="port">
           <el-input-number v-model="form.port" :min="1" :max="65535" style="width: 100%" />
         </el-form-item>
-        <el-form-item label="用户名">
+        <el-form-item v-if="form.type !== 'sqlite'" label="用户名">
           <el-input v-model="form.username" placeholder="用户名" />
         </el-form-item>
-        <el-form-item label="密码">
+        <el-form-item v-if="form.type !== 'sqlite'" label="密码">
           <el-input v-model="form.password" type="password" placeholder="密码" show-password />
+        </el-form-item>
+        <el-form-item v-if="form.type === 'sqlite'" label="数据目录">
+          <el-input v-model="form.database" placeholder="如: /opt/minipanel/data/sqlite" />
+          <div style="font-size: 12px; color: #909399; margin-top: 4px">SQLite 数据库文件存放目录，每个文件对应一个数据库</div>
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="form.note" type="textarea" :rows="2" placeholder="备注信息" />
@@ -178,7 +189,7 @@
     <el-dialog v-model="createDbDialogVisible" title="创建数据库" width="400px">
       <el-form label-width="80px">
         <el-form-item label="数据库名">
-          <el-input v-model="newDbName" placeholder="输入数据库名" />
+          <el-input v-model="newDbName" :placeholder="activeType === 'sqlite' ? '如 app（自动补 .db）' : '输入数据库名'" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -190,7 +201,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { databaseApi, systemApi } from '../api'
 
@@ -203,7 +214,17 @@ const isEdit = ref(false)
 const formRef = ref<any>(null)
 const installing = ref(false)
 const actionLoading = ref(false)
-const serviceStatus = ref<any>({ installed: false, running: false, version: '', name: 'mysql' })
+const activeType = ref('mysql')
+const serviceStatus = ref<Record<string, any>>({
+  mysql: { installed: false, running: false, version: '', name: 'mysql' },
+  sqlite: { installed: false, running: false, version: '', name: 'sqlite' }
+})
+const currentService = computed(() => serviceStatus.value[activeType.value] || { installed: false, running: false })
+const typeLabels: Record<string, string> = {
+  mysql: 'MySQL/MariaDB',
+  sqlite: 'SQLite'
+}
+const typeLabel = computed(() => typeLabels[activeType.value] || '数据库')
 const currentDbInstance = ref<any>(null)
 const dbList = ref<any[]>([])
 const dbLoading = ref(false)
@@ -238,17 +259,17 @@ const form = reactive({
   note: ''
 })
 
-const rules = {
+const rules = computed(() => ({
   name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
   type: [{ required: true, message: '请选择类型', trigger: 'change' }],
-  host: [{ required: true, message: '请输入主机地址', trigger: 'blur' }],
-  port: [{ required: true, message: '请输入端口', trigger: 'blur' }]
-}
+  host: form.type !== 'sqlite' ? [{ required: true, message: '请输入主机地址', trigger: 'blur' }] : [],
+  port: form.type !== 'sqlite' ? [{ required: true, message: '请输入端口', trigger: 'blur' }] : []
+}))
 
 function getTypeTag(type: string) {
   const map: Record<string, string> = {
     mysql: 'primary',
-    postgresql: 'success',
+    sqlite: 'info',
     redis: 'warning',
     mongodb: 'danger'
   }
@@ -268,6 +289,23 @@ function resetForm() {
   form.note = ''
 }
 
+function onFormTypeChange(type: string) {
+  if (isEdit.value) return
+  if (type === 'sqlite') {
+    form.host = 'local'
+    form.port = 0
+    form.username = ''
+    form.password = ''
+    form.database = '/opt/minipanel/data/sqlite'
+  } else {
+    form.host = '127.0.0.1'
+    form.port = 3306
+    form.username = 'root'
+    form.password = ''
+    form.database = ''
+  }
+}
+
 function openDialog(row?: any) {
   if (row) {
     isEdit.value = true
@@ -282,7 +320,10 @@ function openDialog(row?: any) {
 async function checkStatus() {
   try {
     const res: any = await systemApi.checkServices()
-    serviceStatus.value = res.data?.mysql || { installed: false, running: false }
+    serviceStatus.value = {
+      mysql: res.data?.mysql || { installed: false, running: false, version: '' },
+      sqlite: res.data?.sqlite || { installed: false, running: false, version: '' }
+    }
   } catch (e: any) {
     ElMessage.error(e?.message || '检查服务状态失败')
   }
@@ -291,10 +332,10 @@ async function checkStatus() {
 async function installService() {
   installing.value = true
   try {
-    await systemApi.installService('mysql')
-    ElMessage.success('MySQL/MariaDB 安装成功')
+    await systemApi.installService(activeType.value)
+    ElMessage.success(`${typeLabel.value} 安装成功`)
     await checkStatus()
-    if (serviceStatus.value.installed) {
+    if (currentService.value.installed) {
       loadDatabases()
     }
   } catch (e: any) {
@@ -307,8 +348,8 @@ async function installService() {
 async function startService() {
   actionLoading.value = true
   try {
-    await systemApi.startService('mysql')
-    ElMessage.success('MySQL 启动成功')
+    await systemApi.startService(activeType.value)
+    ElMessage.success(`${typeLabel.value} 启动成功`)
     await checkStatus()
   } catch (e: any) {
     ElMessage.error(e?.message || '启动失败')
@@ -320,8 +361,8 @@ async function startService() {
 async function stopService() {
   actionLoading.value = true
   try {
-    await systemApi.stopService('mysql')
-    ElMessage.success('MySQL 停止成功')
+    await systemApi.stopService(activeType.value)
+    ElMessage.success(`${typeLabel.value} 停止成功`)
     await checkStatus()
   } catch (e: any) {
     ElMessage.error(e?.message || '停止失败')
@@ -333,8 +374,8 @@ async function stopService() {
 async function restartService() {
   actionLoading.value = true
   try {
-    await systemApi.restartService('mysql')
-    ElMessage.success('MySQL 重启成功')
+    await systemApi.restartService(activeType.value)
+    ElMessage.success(`${typeLabel.value} 重启成功`)
     await checkStatus()
   } catch (e: any) {
     ElMessage.error(e?.message || '重启失败')
@@ -392,7 +433,8 @@ async function testConnection(row: any) {
       host: row.host,
       port: row.port,
       username: row.username,
-      password: row.password
+      password: row.password,
+      database: row.database
     })
     ElMessage.success(res.message || '连接成功')
   } catch (e: any) {
@@ -535,7 +577,7 @@ async function dropDb(dbName: string) {
 
 	onMounted(async () => {
   await checkStatus()
-  if (serviceStatus.value.installed) {
+  if (serviceStatus.value.mysql.installed || serviceStatus.value.sqlite.installed) {
     loadDatabases()
   }
 })

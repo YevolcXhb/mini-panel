@@ -605,7 +605,7 @@ function showAdd() {
 async function loadDatabaseInstances() {
   try {
     const res: any = await databaseApi.list()
-    databaseInstances.value = res.data || []
+    databaseInstances.value = (res.data || []).filter((x: any) => x.type === 'mysql')
   } catch (e: any) {
     databaseInstances.value = []
   }
