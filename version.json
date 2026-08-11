@@ -1,6 +1,6 @@
 {
-  "version": "6.2.0",
+  "version": "6.2.1",
   "url": "https://github.com/YevolcXhb/mini-panel/releases/latest",
-  "release_notes": "Mini Panel v6.2.0 - 完善面板功能完整性，补齐备份恢复、防火墙实时规则删除等功能",
-  "install_sha256": "69488e9220d04ce2f69424c32e0a2f22700e519b94e0fc176ee8720a7eb8aa67"
+  "release_notes": "Mini Panel v6.2.1 - 修复Web终端无法连接与安装包校验和问题",
+  "install_sha256": "bf76fa9eaf97290a9c0864f141a09899fc657683489643780c6d9af279c094dc"
 }

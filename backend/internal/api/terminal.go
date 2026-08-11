@@ -12,6 +12,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
 	"github.com/minipanel/minipanel/internal/global"
+	"github.com/minipanel/minipanel/internal/permission"
 	"github.com/minipanel/minipanel/internal/service"
 )
 
@@ -84,10 +85,22 @@ func (a *TerminalAPI) HandleWS(c *gin.Context) {
 	}
 
 	role := "user"
+	var perms []string
 	if claims, ok := token.Claims.(jwt.MapClaims); ok {
 		if r, ok := claims["role"].(string); ok {
 			role = r
 		}
+		if raw, ok := claims["permissions"].([]interface{}); ok {
+			for _, p := range raw {
+				if s, ok := p.(string); ok {
+					perms = append(perms, s)
+				}
+			}
+		}
+	}
+	if !permission.HasFeature(role, perms, "/ssh") {
+		conn.WriteMessage(websocket.TextMessage, []byte("permission denied"))
+		return
 	}
 
 	if _, ok := service.GetSession(id); ok {

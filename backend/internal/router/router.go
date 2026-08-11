@@ -70,7 +70,9 @@ func NewRouter() *gin.Engine {
 		fileGroup.POST("/recycle-bin/clear", file.ClearRecycleBin)
 
 		term := api.NewTerminalAPI()
-		apiV1.GET("/terminal/ws", middleware.PermissionMiddleware("/ssh"), term.HandleWS)
+		// WebSocket 浏览器握手无法携带 Authorization 头，
+		// 因此该路由不经过 AuthMiddleware，改为在 HandleWS 内通过首条消息鉴权并校验 /ssh 权限。
+		r.GET("/api/v1/terminal/ws", term.HandleWS)
 
 		proc := api.NewProcessAPI()
 		apiV1.GET("/processes", middleware.PermissionMiddleware("/processes"), proc.List)
