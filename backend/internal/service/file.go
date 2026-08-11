@@ -15,6 +15,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/minipanel/minipanel/internal/global"
+	"github.com/minipanel/minipanel/internal/repository"
 )
 
 type FileInfo struct {
@@ -32,7 +35,32 @@ type FileService struct {
 }
 
 func NewFileService() *FileService {
-	return &FileService{root: "/"}
+	return &FileService{root: getFileManagerRoot()}
+}
+
+// NewFileServiceWithRoot 以显式根目录创建文件服务（供不受文件管理根目录限制的内部调用使用）。
+func NewFileServiceWithRoot(root string) *FileService {
+	if root == "" {
+		root = "/"
+	}
+	return &FileService{root: filepath.Clean(root)}
+}
+
+// getFileManagerRoot 读取设置中的文件管理根目录；默认 "/"。
+func getFileManagerRoot() string {
+	if global.DB == nil {
+		return "/"
+	}
+	repo := repository.NewSettingRepository(global.DB)
+	item, err := repo.Get("file_manager_root")
+	if err != nil || item.Value == "" {
+		return "/"
+	}
+	root := filepath.Clean(item.Value)
+	if !filepath.IsAbs(root) {
+		return "/"
+	}
+	return root
 }
 
 func (s *FileService) resolvePath(path string) (string, error) {
@@ -40,7 +68,16 @@ func (s *FileService) resolvePath(path string) (string, error) {
 	if strings.Contains(cleaned, "..") {
 		return "", fmt.Errorf("invalid path")
 	}
-	fullPath := filepath.Join(s.root, cleaned)
+	var fullPath string
+	if filepath.IsAbs(cleaned) {
+		if filepath.Clean(s.root) == string(filepath.Separator) {
+			fullPath = cleaned
+		} else {
+			fullPath = filepath.Join(s.root, strings.TrimPrefix(cleaned, string(filepath.Separator)))
+		}
+	} else {
+		fullPath = filepath.Join(s.root, cleaned)
+	}
 	absPath, err := filepath.Abs(fullPath)
 	if err != nil {
 		return "", fmt.Errorf("invalid path")

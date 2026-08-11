@@ -22,15 +22,6 @@
                   <el-radio-button label="auto">💻 跟随系统</el-radio-button>
                 </el-radio-group>
               </el-form-item>
-              <el-form-item label="语言">
-                <el-select v-model="settings.language" placeholder="选择语言" style="width: 200px">
-                  <el-option label="简体中文" value="zh" />
-                  <el-option label="English" value="en" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="时区">
-                <el-input v-model="settings.timezone" placeholder="Asia/Shanghai" style="width: 240px" />
-              </el-form-item>
             </el-form>
           </div>
 
@@ -351,7 +342,7 @@ async function loadVersion() {
 async function saveSettings() {
   try {
     const toSave: any = {}
-    for (const key of ['theme', 'language', 'timezone', 'container_mode', 'file_manager_root', 'SecurityEntrance', 'load_host_mode']) {
+    for (const key of ['theme', 'file_manager_root', 'SecurityEntrance', 'load_host_mode']) {
       if (settings.value[key] !== undefined) {
         toSave[key] = settings.value[key]
       }

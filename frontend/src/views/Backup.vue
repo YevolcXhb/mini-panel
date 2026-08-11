@@ -71,9 +71,11 @@
         <el-table-column label="任务名称" width="120">
           <template #default="scope">{{ getTaskName(scope.row.task_id) }}</template>
         </el-table-column>
-        <el-table-column prop="file_name" label="文件名" show-overflow-tooltip />
-        <el-table-column prop="file_size" label="大小" width="100">
-          <template #default="scope">{{ formatSize(scope.row.file_size) }}</template>
+        <el-table-column label="文件路径" show-overflow-tooltip>
+          <template #default="scope">{{ scope.row.file_path || '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="size" label="大小" width="100">
+          <template #default="scope">{{ formatSize(scope.row.size) }}</template>
         </el-table-column>
         <el-table-column prop="status" label="状态" width="90">
           <template #default="scope">

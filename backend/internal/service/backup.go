@@ -479,10 +479,45 @@ func (s *BackupService) RestoreBackup(recordID uint) error {
 	case "database":
 		return s.restoreDatabase(task, rec)
 	case "files", "website":
-		return fmt.Errorf("file restore is not supported yet, please extract manually")
+		return s.restoreFilesBackup(task, rec)
 	default:
 		return fmt.Errorf("unsupported backup type for restore")
 	}
+}
+
+// restoreFilesBackup 将文件/网站备份 zip 解压回原目录（覆盖同名文件）。
+func (s *BackupService) restoreFilesBackup(task *model.BackupTask, rec *model.BackupRecord) error {
+	source := strings.TrimSpace(task.SourcePath)
+	if task.Type == "website" {
+		ws := NewWebsiteService()
+		website, err := ws.GetByID(task.SourceID)
+		if err != nil {
+			return fmt.Errorf("website not found: %w", err)
+		}
+		source = website.Root
+		if source == "" {
+			source = filepath.Join(global.GetDataDir(), "www", website.Domain)
+		}
+	}
+	if source == "" {
+		return fmt.Errorf("备份源路径未知，无法恢复")
+	}
+	if !filepath.IsAbs(source) || filepath.Clean(source) == string(filepath.Separator) {
+		return fmt.Errorf("备份源路径非法，无法恢复")
+	}
+	for _, seg := range strings.Split(filepath.Clean(source), string(filepath.Separator)) {
+		if seg == ".." {
+			return fmt.Errorf("备份源路径非法")
+		}
+	}
+	if err := os.MkdirAll(source, 0755); err != nil {
+		return err
+	}
+	fileSvc := NewFileServiceWithRoot("/")
+	if err := fileSvc.Extract(rec.FilePath, source); err != nil {
+		return fmt.Errorf("恢复失败: %w", err)
+	}
+	return nil
 }
 
 func (s *BackupService) restoreDatabase(task *model.BackupTask, rec *model.BackupRecord) error {

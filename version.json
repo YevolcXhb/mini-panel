@@ -1,6 +1,6 @@
 {
-  "version": "6.1.0",
+  "version": "6.2.0",
   "url": "https://github.com/YevolcXhb/mini-panel/releases/latest",
-  "release_notes": "Mini Panel v6.1.0 - 全面修复安全权限、输入校验、SSRF与资源管理问题",
-  "install_sha256": "480e83ac5700ec710bdad1192f2342a3cef38d6f85f43337a3f3bcc1d5b0dd84"
+  "release_notes": "Mini Panel v6.2.0 - 完善面板功能完整性，补齐备份恢复、防火墙实时规则删除等功能",
+  "install_sha256": "694591f38bcb8f0b53985180de2238f5bbc1296356e9a8b12629a6f049c05411"
 }

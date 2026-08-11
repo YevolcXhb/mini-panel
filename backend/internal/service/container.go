@@ -133,6 +133,12 @@ func (s *ContainerService) Pull(image, name string) error {
 	if s.client == nil {
 		return fmt.Errorf("dockroot not available")
 	}
+	if strings.TrimSpace(name) == "" {
+		name = dockroot.ExtractContainerName(image)
+		if name == "" {
+			return fmt.Errorf("cannot extract container name from image %q", image)
+		}
+	}
 	_, err := s.client.Pull(image, name)
 	return err
 }

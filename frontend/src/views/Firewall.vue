@@ -272,6 +272,10 @@
           <el-option label="nat 表" value="nat" />
         </el-select>
         <el-button size="small" @click="showLiveRules" :loading="liveLoading">刷新</el-button>
+        <el-divider direction="vertical" />
+        <span style="color: #909399; font-size: 12px">删除行号</span>
+        <el-input-number v-model="liveDeleteNum" :min="1" :max="99999" size="small" style="width: 110px" />
+        <el-button size="small" type="danger" :loading="liveDeleting" @click="deleteLiveRule">删除该行</el-button>
         <span style="color: #999; font-size: 12px; margin-left: auto">删除规则后行号会变化，建议从大到小删</span>
       </div>
       <div style="background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; max-height: 500px; overflow: auto; font-family: 'Courier New', monospace; font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-all">{{ liveRulesText || '加载中...' }}</div>
@@ -380,6 +384,8 @@ const liveRulesText = ref('')
 const liveChain = ref('INPUT')
 const liveFamily = ref('')
 const liveTable = ref('')
+const liveDeleteNum = ref(1)
+const liveDeleting = ref(false)
 
 // 插入规则
 const insertDialogVisible = ref(false)
@@ -538,6 +544,20 @@ async function showLiveRules() {
   } catch (e: any) {
     liveRulesText.value = '加载失败: ' + (e?.message || '未知错误')
   } finally { liveLoading.value = false }
+}
+
+// === 删除系统实时规则 ===
+async function deleteLiveRule() {
+  liveDeleting.value = true
+  try {
+    await firewallApi.deleteLiveRule(liveChain.value, liveDeleteNum.value, liveFamily.value)
+    ElMessage.success('规则已删除')
+    await showLiveRules()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '删除失败')
+  } finally {
+    liveDeleting.value = false
+  }
 }
 
 // === 插入规则 ===
