@@ -157,11 +157,11 @@ func (r *AppInstallRepository) UpdateProgress(name string, progress int, status 
 }
 
 func (r *AppInstallRepository) DeleteByName(name string) error {
-	return r.db.Where("name = ? AND status != ?", name, "running").Delete(&model.AppInstall{}).Error
+	return r.db.Where("name = ? AND status NOT IN ?", name, []string{"running", "installing"}).Delete(&model.AppInstall{}).Error
 }
 
 func (r *AppInstallRepository) ClearHistory() error {
-	return r.db.Where("status != ?", "running").Delete(&model.AppInstall{}).Error
+	return r.db.Where("status NOT IN ?", []string{"running", "installing"}).Delete(&model.AppInstall{}).Error
 }
 
 func (r *AppInstallRepository) Update(item *model.AppInstall) error {

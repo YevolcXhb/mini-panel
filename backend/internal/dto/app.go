@@ -3,6 +3,7 @@ package dto
 type AppInstallRequest struct {
 	AppID       uint              `json:"app_id" binding:"required"`
 	AppDetailID uint              `json:"app_detail_id"`
+	Key         string            `json:"key"`
 	Name        string            `json:"name" binding:"required"`
 	Env         map[string]string `json:"env"`
 	Volumes     map[string]string `json:"volumes"`

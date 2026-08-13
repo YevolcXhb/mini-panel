@@ -31,8 +31,9 @@ api.interceptors.response.use(
       return res
     }
     if (res.data.code !== 200) {
-      ElMessage.error(res.data.message || '请求失败')
-      return Promise.reject(new Error(res.data.message || '请求失败'))
+      const msg = res.data.message || '请求失败'
+      if (!(res.config as any).silent) ElMessage.error(msg)
+      return Promise.reject(new Error(msg))
     }
     return res.data
   },
@@ -44,7 +45,7 @@ api.interceptors.response.use(
       return Promise.reject(err)
     }
     const errorMsg = err.response?.data?.message || err.message || '网络错误'
-    ElMessage.error(errorMsg)
+    if (!(err.config as any)?.silent) ElMessage.error(errorMsg)
     return Promise.reject(err)
   }
 )
@@ -136,7 +137,7 @@ export const appApi = {
   detail: (id: number) => api.get(`/apps/${id}`),
   installed: () => api.get('/apps/installed'),
   install: (data: any) => api.post('/apps/install', data),
-  installStatus: (name: string) => api.get(`/apps/install/${name}/status`),
+  installStatus: (name: string, silent = true) => api.get(`/apps/install/${name}/status`, { silent } as any),
   uninstall: (id: number) => api.post(`/apps/${id}/uninstall`),
   clearHistory: () => api.delete('/apps/history'),
   sync: (source_id: number) => api.post('/apps/sync', { source_id }),

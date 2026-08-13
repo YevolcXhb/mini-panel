@@ -318,8 +318,12 @@ async function openInstall(app: any) {
       installForm.value.app_detail_id = appDetails.value[0].id
       initEnvFromFields(appDetails.value[0].id)
     }
-  } catch (e) { appDetails.value = [] }
-  showInstall.value = true
+    showInstall.value = true
+  } catch (e: any) {
+    appDetails.value = []
+    ElMessage.error(`应用数据已过期，已刷新列表：${e?.message || '请重试'}`)
+    loadApps()
+  }
 }
 
 watch(() => installForm.value.app_detail_id, (newVal) => {
@@ -351,6 +355,7 @@ async function doInstall() {
     const res: any = await appApi.install({
       app_id: selectedApp.value.id,
       app_detail_id: installForm.value.app_detail_id,
+      key: selectedApp.value.key,
       name: installForm.value.name,
       env: env
     })
@@ -396,8 +401,18 @@ function pollInstallStatus(taskId: number, name: string) {
           saveBgTasks()
         }
       }
-    } catch (e) {
-      // 忽略错误，继续轮询
+    } catch (e: any) {
+      const msg = e?.message || e?.response?.data?.message || ''
+      if (/不存在|not found/i.test(msg)) {
+        clearInterval(pollTimer)
+        task.status = 'error'
+        task.progress = 100
+        task.message = '安装任务不存在，可能已被清空，请重新安装'
+        saveBgTasks()
+        ElMessage.error(task.message)
+        return
+      }
+      // 其他错误忽略，继续轮询
     }
   }, 800)
 }

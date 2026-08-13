@@ -1,6 +1,6 @@
 {
-  "version": "6.4.0",
+  "version": "6.5.0",
   "url": "https://github.com/YevolcXhb/mini-panel/releases/latest",
-  "release_notes": "Mini Panel v6.4.0 - 修复应用商店拉取镜像失败，支持多镜像源自动回退",
-  "install_sha256": "2b2bc08c70bdfe704d67f675e00932b9ff4c6f065c9e12366238a8f8d63a5a10"
+  "release_notes": "Mini Panel v6.5.0 - 修复应用商店安装时报 record not found，安装任务不再被清空误删",
+  "install_sha256": "e5e7ee87b8dc30f4693d6065c59ff45fa180bb5ff3f5edaa0e87662d0cafb8ca"
 }

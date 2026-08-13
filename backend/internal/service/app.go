@@ -62,7 +62,7 @@ func (s *AppService) Search(keyword string) ([]model.App, error) {
 func (s *AppService) GetWithDetails(id uint) (*model.App, []model.AppDetail, error) {
 	app, err := s.appRepo.GetByID(id)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("应用 %d 不存在: %w", id, err)
 	}
 	details, err := s.detailRepo.ListByAppID(id)
 	if err != nil {
@@ -76,19 +76,27 @@ func (s *AppService) Installed() ([]model.AppInstall, error) {
 }
 
 func (s *AppService) GetInstallStatus(name string) (*model.AppInstall, error) {
-	return s.instRepo.GetByName(name)
+	inst, err := s.instRepo.GetByName(name)
+	if err != nil {
+		return nil, fmt.Errorf("安装任务 %s 不存在或已被删除: %w", name, err)
+	}
+	return inst, nil
 }
 
 func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, error) {
 	appInstallMu.Lock()
 
-	global.LOG.Infof("[Install] start install app_id=%d detail_id=%d name=%s", req.AppID, req.AppDetailID, req.Name)
+	global.LOG.Infof("[Install] start install app_id=%d detail_id=%d key=%s name=%s", req.AppID, req.AppDetailID, req.Key, req.Name)
 
 	app, err := s.appRepo.GetByID(req.AppID)
+	if err != nil && strings.TrimSpace(req.Key) != "" {
+		global.LOG.Warnf("[Install] app id=%d not found, fallback to key=%s: %v", req.AppID, req.Key, err)
+		app, err = s.appRepo.GetByKey(strings.TrimSpace(req.Key))
+	}
 	if err != nil {
 		appInstallMu.Unlock()
 		global.LOG.Errorf("[Install] get app failed: %v", err)
-		return nil, fmt.Errorf("app not found: %w", err)
+		return nil, fmt.Errorf("应用不存在 (id=%d key=%s): %v", req.AppID, req.Key, err)
 	}
 	global.LOG.Infof("[Install] app found key=%s name=%s", app.Key, app.Name)
 
@@ -96,18 +104,24 @@ func (s *AppService) Install(req dto.AppInstallRequest) (*model.AppInstall, erro
 	if req.AppDetailID > 0 {
 		detail, err = s.detailRepo.GetByID(req.AppDetailID)
 		if err != nil {
-			appInstallMu.Unlock()
-			global.LOG.Errorf("[Install] get detail failed: %v", err)
-			return nil, fmt.Errorf("version not found: %w", err)
+			global.LOG.Warnf("[Install] detail id=%d not found for app %s, fallback to first active detail: %v", req.AppDetailID, app.Key, err)
+			details, _ := s.detailRepo.ListByAppID(app.ID)
+			if len(details) > 0 {
+				detail = &details[0]
+			}
 		}
-		global.LOG.Infof("[Install] detail found image=%s version=%s", detail.Image, detail.Version)
+		if detail != nil {
+			global.LOG.Infof("[Install] detail found image=%s version=%s", detail.Image, detail.Version)
+		} else {
+			global.LOG.Warnf("[Install] no detail found for app_id=%d", app.ID)
+		}
 	} else {
-		details, _ := s.detailRepo.ListByAppID(req.AppID)
+		details, _ := s.detailRepo.ListByAppID(app.ID)
 		if len(details) > 0 {
 			detail = &details[0]
 			global.LOG.Infof("[Install] using first detail image=%s version=%s", detail.Image, detail.Version)
 		} else {
-			global.LOG.Warnf("[Install] no detail found for app_id=%d", req.AppID)
+			global.LOG.Warnf("[Install] no detail found for app_id=%d", app.ID)
 		}
 	}
 
@@ -550,7 +564,7 @@ func getAvailablePort() (int, error) {
 func (s *AppService) Uninstall(id uint) error {
 	inst, err := s.instRepo.GetByID(id)
 	if err != nil {
-		return err
+		return fmt.Errorf("安装记录 %d 不存在: %w", id, err)
 	}
 	if s.ctnService.IsAvailable() {
 		_ = s.ctnService.client.Rm(inst.Container)
