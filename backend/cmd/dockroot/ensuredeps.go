@@ -56,12 +56,12 @@ func writeDefaultRegistry(binaryDir string) error {
 	}
 	info := &registryInfo{
 		Mirrors: []string{
-			"https://registry.istoreos.com",
-			"https://docker1.linkease.com:60005",
-			"https://kooldocker.openpop.cn",
-			"https://kooldocker.gvpu.cn",
 			"https://docker.1ms.run",
 			"https://docker.m.daocloud.io",
+			"https://registry.istoreos.com",
+			"https://kooldocker.openpop.cn",
+			"https://kooldocker.gvpu.cn",
+			"https://docker1.linkease.com:60005",
 		},
 		UseKspeeder: true,
 		DataRoot:    dataRoot,

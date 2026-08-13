@@ -1,6 +1,6 @@
 {
-  "version": "6.3.0",
+  "version": "6.4.0",
   "url": "https://github.com/YevolcXhb/mini-panel/releases/latest",
-  "release_notes": "Mini Panel v6.3.0 - 修复防火墙查看系统规则时 iptables -L 重复参数",
-  "install_sha256": "89d99a12f2b02b8db3f46d3ab117444468e5270c6ab9122db1bc0b2e6c15a4f8"
+  "release_notes": "Mini Panel v6.4.0 - 修复应用商店拉取镜像失败，支持多镜像源自动回退",
+  "install_sha256": "2b2bc08c70bdfe704d67f675e00932b9ff4c6f065c9e12366238a8f8d63a5a10"
 }

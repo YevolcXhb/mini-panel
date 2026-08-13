@@ -12,6 +12,7 @@ import (
 type Client struct {
 	BinaryPath string
 	DataRoot   string
+	Mirrors    []string
 }
 
 type ContainerState struct {
@@ -53,6 +54,7 @@ func NewClientWithPath(binaryPath string) (*Client, error) {
 	return &Client{
 		BinaryPath: binaryPath,
 		DataRoot:   info.DataRoot,
+		Mirrors:    info.Mirrors,
 	}, nil
 }
 
@@ -73,15 +75,22 @@ func (c *Client) Pull(image, name string) (string, error) {
 	if image == "" {
 		return "", fmt.Errorf("invalid image reference")
 	}
-	if !strings.HasPrefix(image, "docker://") && !isExternalRegistry(image) {
-		image = "docker://docker.io/" + image
+
+	var lastOutput string
+	var lastErr error
+	for _, ref := range c.pullCandidates(image) {
+		cmd := exec.Command(c.BinaryPath, "pull", ref, name)
+		output, err := cmd.CombinedOutput()
+		if err == nil {
+			return string(output), nil
+		}
+		lastOutput = string(output)
+		lastErr = fmt.Errorf("dockroot pull %s: %w, output: %s", ref, err, string(output))
 	}
-	cmd := exec.Command(c.BinaryPath, "pull", image, name)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return string(output), fmt.Errorf("dockroot pull: %w, output: %s", err, string(output))
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no pull candidates for image %q", image)
 	}
-	return string(output), nil
+	return lastOutput, lastErr
 }
 
 func isExternalRegistry(image string) bool {
@@ -92,6 +101,35 @@ func isExternalRegistry(image string) bool {
 	}
 	firstSegment := ref[:slashIdx]
 	return strings.Contains(firstSegment, ".") || strings.Contains(firstSegment, ":")
+}
+
+// pullCandidates 生成拉取镜像时的候选 docker:// 地址。
+// 显式带仓库地址的镜像只尝试自身；不带仓库地址的镜像依次尝试
+// dockroot.json 中配置的国内镜像源，最后回退到 Docker Hub。
+func (c *Client) pullCandidates(image string) []string {
+	bare := strings.TrimPrefix(image, "docker://")
+	if isExternalRegistry(bare) {
+		return []string{image}
+	}
+	var refs []string
+	for _, m := range c.Mirrors {
+		host := mirrorHost(m)
+		if host == "" {
+			continue
+		}
+		refs = append(refs, fmt.Sprintf("docker://%s/%s", host, bare))
+	}
+	refs = append(refs, "docker://docker.io/"+bare)
+	return refs
+}
+
+// mirrorHost 从镜像源配置（如 https://docker.1ms.run）中提取 registry 主机名。
+func mirrorHost(mirror string) string {
+	host := strings.TrimSpace(mirror)
+	host = strings.TrimPrefix(host, "https://")
+	host = strings.TrimPrefix(host, "http://")
+	host = strings.Trim(host, "/")
+	return host
 }
 
 func (c *Client) Run(name string, detach bool, envs, volumes []string) (string, error) {

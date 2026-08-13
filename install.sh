@@ -70,7 +70,7 @@ get_latest_version() {
 
 VERSION=$(get_latest_version)
 if [ -z "$VERSION" ]; then
-    VERSION="6.3.0"
+    VERSION="6.4.0"
     log_warn "Failed to detect latest version, fallback to v${VERSION}"
 else
     log_info "Latest version detected: v${VERSION}"
@@ -213,12 +213,12 @@ install_from_release() {
         cat > "${INSTALL_DIR}/dockroot.json" <<'DREOF'
 {
   "registry-mirrors": [
+    "https://docker.1ms.run",
+    "https://docker.m.daocloud.io",
     "https://registry.istoreos.com",
-    "https://docker1.linkease.com:60005",
     "https://kooldocker.openpop.cn",
     "https://kooldocker.gvpu.cn",
-    "https://docker.1ms.run",
-    "https://docker.m.daocloud.io"
+    "https://docker1.linkease.com:60005"
   ],
   "data-root": "DATA_ROOT_PLACEHOLDER",
   "useKspeeder": true
@@ -331,13 +331,13 @@ setup_environment() {
     if [ ! -f "${INSTALL_DIR}/dockroot.json" ] && [ -f "${INSTALL_DIR}/DockRoot" ]; then
         cat > "${INSTALL_DIR}/dockroot.json" <<DREOF
 {
-  "registry-mirrors": [
-    "https://registry.istoreos.com",
-    "https://docker1.linkease.com:60005",
-    "https://kooldocker.openpop.cn",
-    "https://kooldocker.gvpu.cn",
-    "https://docker.1ms.run",
-    "https://docker.m.daocloud.io"
+    "registry-mirrors": [
+      "https://docker.1ms.run",
+      "https://docker.m.daocloud.io",
+      "https://registry.istoreos.com",
+      "https://kooldocker.openpop.cn",
+      "https://kooldocker.gvpu.cn",
+      "https://docker1.linkease.com:60005"
   ],
   "data-root": "${DATA_DIR}/containers",
   "useKspeeder": true

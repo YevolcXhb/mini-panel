@@ -85,28 +85,6 @@ func (opts *pullOptions) run(args []string, stdout io.Writer) (retErr error) {
 		return fmt.Errorf("Invalid image format: %s", args[0])
 	}
 
-	var imageURL string
-	if strings.HasPrefix(args[0], "docker://") {
-		imageURL = "docker://" + imageName
-	} else {
-		i := strings.Index(imageName, "/")
-		if i > 0 && strings.Contains(imageName, ".") {
-			imageURL = "docker://" + imageName
-		} else {
-			imageURL = fmt.Sprintf("docker://registry.linkease.net:5443/%s", imageName)
-		}
-	}
-
-	// 确保 imageURL 最后一个路径段包含 tag
-	lastSlash := strings.LastIndex(imageURL, "/")
-	lastPart := imageURL[lastSlash+1:]
-	if !strings.Contains(lastPart, ":") {
-		if imageTag == "" {
-			imageTag = "latest"
-		}
-		imageURL = imageURL + ":" + imageTag
-	}
-
 	binaryDir, err := getBinaryDir()
 	if err != nil {
 		return err
@@ -127,18 +105,12 @@ func (opts *pullOptions) run(args []string, stdout io.Writer) (retErr error) {
 		}
 	}
 
-	var client *http.Client
-	if strings.Contains(imageURL, "registry.linkease.net:5443") {
-		client = &http.Client{}
-		err = checkAndRunKspeeder(
-			filepath.Join(binaryDir, "kspeeder"),
-			filepath.Join(info.DataRoot, "cache"),
-			client,
-		)
-		if err != nil {
-			return err
-		}
+	sourceURLs := buildPullSources(args[0], imageName, imageTag, info.Mirrors)
+	if len(sourceURLs) == 0 {
+		return fmt.Errorf("Invalid image format: %s", args[0])
 	}
+
+	var client *http.Client
 
 	ruriPath := filepath.Join(binaryDir, "ruri")
 	if !checkIsRuriDownload(ruriPath) {
@@ -184,17 +156,10 @@ func (opts *pullOptions) run(args []string, stdout io.Writer) (retErr error) {
 		}
 	}()
 
-	imageNames := []string{
-		imageURL,
-		fmt.Sprintf("oci:%s/images:%s", destDir, imageTag)}
-
-	srcRef, err := alltransports.ParseImageName(imageNames[0])
+	destName := fmt.Sprintf("oci:%s/images:%s", destDir, imageTag)
+	destRef, err := alltransports.ParseImageName(destName)
 	if err != nil {
-		return fmt.Errorf("Invalid source name %s: %v", imageNames[0], err)
-	}
-	destRef, err := alltransports.ParseImageName(imageNames[1])
-	if err != nil {
-		return fmt.Errorf("Invalid destination name %s: %v", imageNames[1], err)
+		return fmt.Errorf("Invalid destination name %s: %v", destName, err)
 	}
 
 	sourceCtx, err := opts.srcImage.newSystemContext()
@@ -211,43 +176,111 @@ func (opts *pullOptions) run(args []string, stdout io.Writer) (retErr error) {
 
 	opts.destImage.warnAboutIneffectiveOptions(destRef.Transport())
 
-	err = retry.IfNecessary(ctx, func() error {
-		manifestBytes, err := copy.Image(ctx, policyContext, destRef, srcRef, &copy.Options{
-			ReportWriter:         stdout,
-			SourceCtx:            sourceCtx,
-			DestinationCtx:       destinationCtx,
-			MaxParallelDownloads: 2,
-		})
-		if err != nil {
-			return err
+	var lastErr error
+	for _, imageURL := range sourceURLs {
+		if strings.Contains(imageURL, "registry.linkease.net:5443") {
+			if client == nil {
+				client = &http.Client{}
+			}
+			if err := checkAndRunKspeeder(
+				filepath.Join(binaryDir, "kspeeder"),
+				filepath.Join(info.DataRoot, "cache"),
+				client,
+			); err != nil {
+				fmt.Printf("Skipping %s: %v\n", imageURL, err)
+				lastErr = err
+				continue
+			}
 		}
-		if opts.digestFile != "" {
-			manifestDigest, err := manifest.Digest(manifestBytes)
+
+		srcRef, err := alltransports.ParseImageName(imageURL)
+		if err != nil {
+			fmt.Printf("Skipping %s: invalid source: %v\n", imageURL, err)
+			lastErr = err
+			continue
+		}
+		err = retry.IfNecessary(ctx, func() error {
+			manifestBytes, err := copy.Image(ctx, policyContext, destRef, srcRef, &copy.Options{
+				ReportWriter:         stdout,
+				SourceCtx:            sourceCtx,
+				DestinationCtx:       destinationCtx,
+				MaxParallelDownloads: 2,
+			})
 			if err != nil {
 				return err
 			}
-			if err = os.WriteFile(opts.digestFile, []byte(manifestDigest.String()), 0644); err != nil {
-				return fmt.Errorf("Failed to write digest to file %q: %w", opts.digestFile, err)
+			if opts.digestFile != "" {
+				manifestDigest, err := manifest.Digest(manifestBytes)
+				if err != nil {
+					return err
+				}
+				if err = os.WriteFile(opts.digestFile, []byte(manifestDigest.String()), 0644); err != nil {
+					return fmt.Errorf("Failed to write digest to file %q: %w", opts.digestFile, err)
+				}
 			}
+			return nil
+		}, opts.retryOpts)
+		if err != nil {
+			fmt.Printf("Pull from %s failed: %v\n", imageURL, err)
+			lastErr = err
+			continue
 		}
-		return nil
-	}, opts.retryOpts)
-	if err != nil {
+
+		err = unpack(fmt.Sprintf("%s/images", destDir), imageTag, destDir)
+		os.RemoveAll(filepath.Join(destDir, "images"))
+		destAbsDir, err2 := filepath.Abs(destDir)
+		if err == nil && err2 == nil {
+			imageName := imageURL
+			ss := strings.Split(imageURL, "/")
+			if len(ss) > 2 {
+				imageName = strings.Join(ss[len(ss)-2:], "/")
+			}
+			err = writeRuri(ruriPath, destAbsDir, imageName, "", nil, nil)
+		}
 		return err
 	}
-	err = unpack(fmt.Sprintf("%s/images", destDir), imageTag, destDir)
-	os.RemoveAll(filepath.Join(destDir, "images"))
-	destAbsDir, err2 := filepath.Abs(destDir)
-	if err == nil && err2 == nil {
-		imageName := imageURL
-		ss := strings.Split(imageURL, "/")
-		if len(ss) > 2 {
-			imageName = strings.Join(ss[len(ss)-2:], "/")
-		}
-		err = writeRuri(ruriPath, destAbsDir, imageName, "", nil, nil)
-	}
+	return fmt.Errorf("all image sources failed: %v", lastErr)
+}
 
-	return err
+// explicitRegistry 判断镜像名是否显式携带仓库地址（主机名含 . 或端口）。
+func explicitRegistry(ref string) bool {
+	ref = strings.TrimPrefix(ref, "docker://")
+	i := strings.Index(ref, "/")
+	if i <= 0 {
+		return false
+	}
+	first := ref[:i]
+	return strings.Contains(first, ".") || strings.Contains(first, ":")
+}
+
+// mirrorHost 从镜像源配置（如 https://docker.1ms.run）中提取 registry 主机名。
+func mirrorHost(mirror string) string {
+	host := strings.TrimSpace(mirror)
+	host = strings.TrimPrefix(host, "https://")
+	host = strings.TrimPrefix(host, "http://")
+	return strings.Trim(host, "/")
+}
+
+// buildPullSources 生成候选的 docker:// 源地址。
+// 显式带仓库地址的镜像只尝试自身；不带仓库地址的镜像依次尝试
+// dockroot.json 中配置的镜像源，最后回退到 Docker Hub。
+func buildPullSources(ref, name, tag string, mirrors []string) []string {
+	if tag == "" {
+		tag = "latest"
+	}
+	if explicitRegistry(ref) {
+		return []string{fmt.Sprintf("docker://%s:%s", name, tag)}
+	}
+	var sources []string
+	for _, m := range mirrors {
+		host := mirrorHost(m)
+		if host == "" {
+			continue
+		}
+		sources = append(sources, fmt.Sprintf("docker://%s/%s:%s", host, name, tag))
+	}
+	sources = append(sources, fmt.Sprintf("docker://docker.io/%s:%s", name, tag))
+	return sources
 }
 
 func CleanString(s string) string {
