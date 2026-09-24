@@ -513,8 +513,11 @@ onUnmounted(() => {
 
 <style scoped>
 .settings-page {
-  max-width: 1100px;
-  margin: 0 auto;
+  /* removed max-width for full span */
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
 }
 
 .settings-header {
@@ -536,8 +539,9 @@ onUnmounted(() => {
   background: var(--card);
   border-radius: 10px;
   padding: 16px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--bdr-light);
   min-height: 600px;
+  flex: 1;
 }
 
 .settings-tabs :deep(.el-tabs__header) {
@@ -573,7 +577,7 @@ onUnmounted(() => {
 
 .form-card {
   background: var(--bg);
-  border: 1px solid var(--border);
+  border: 1px solid var(--bdr-light);
   border-radius: 8px;
   padding: 20px 24px;
 }

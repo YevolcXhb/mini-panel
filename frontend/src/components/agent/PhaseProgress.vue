@@ -1,33 +1,28 @@
 <template>
-  <div class="phase-progress" v-if="currentPhase">
+  <div class="phase-progress-pill" v-if="currentPhase">
     <div
-      v-for="p in phases"
+      v-for="(p, idx) in phases"
       :key="p.key"
-      class="phase-card"
+      class="phase-node"
       :class="phaseStatus(p.key)"
     >
-      <div class="phase-icon">
-        <span v-if="phaseStatus(p.key) === 'done'">✅</span>
-        <span v-else-if="phaseStatus(p.key) === 'active'" class="pulse">{{ p.icon }}</span>
-        <span v-else class="dim">{{ p.icon }}</span>
+      <div class="node-indicator">
+        <span v-if="phaseStatus(p.key) === 'done'" class="done-check">✓</span>
+        <span v-else-if="phaseStatus(p.key) === 'active'" class="active-dot"></span>
+        <span v-else class="pending-dot"></span>
       </div>
-      <div class="phase-info">
-        <div class="phase-name">{{ p.label }}</div>
-        <div class="phase-step" v-if="phaseStatus(p.key) === 'active' && maxSteps > 0">
-          步骤 {{ stepNumber }}/{{ maxSteps }}
-        </div>
-        <div class="phase-step" v-else-if="phaseStatus(p.key) === 'done'">
-          已完成
-        </div>
+      <div class="node-meta">
+        <span class="node-title">{{ p.label }}</span>
+        <span class="node-sub" v-if="phaseStatus(p.key) === 'active' && maxSteps > 0">
+          {{ stepNumber }}/{{ maxSteps }}
+        </span>
       </div>
-      <div class="phase-arrow" v-if="p.key !== phases[phases.length - 1].key">→</div>
+      <div class="connector-line" v-if="idx < phases.length - 1"></div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-
 const props = defineProps<{
   currentPhase: string
   completedPhases: string[]
@@ -36,12 +31,10 @@ const props = defineProps<{
 }>()
 
 const phases = [
-  { key: 'planning', label: '规划', icon: '📝' },
-  { key: 'coding', label: '执行', icon: '🔧' },
-  { key: 'reviewing', label: '审查', icon: '✅' }
+  { key: 'planning', label: '规划方案' },
+  { key: 'coding', label: '调度执行' },
+  { key: 'reviewing', label: '审查交付' }
 ]
-
-const order = computed(() => phases.map(p => p.key))
 
 function phaseStatus(key: string): 'pending' | 'active' | 'done' {
   if (props.completedPhases.includes(key)) return 'done'
@@ -51,76 +44,105 @@ function phaseStatus(key: string): 'pending' | 'active' | 'done' {
 </script>
 
 <style scoped>
-.phase-progress {
-  display: flex;
+.phase-progress-pill {
+  display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 10px 16px;
   background: var(--card);
   border: 1px solid var(--bdr);
-  border-radius: 10px;
-  margin-bottom: 12px;
+  border-radius: 20px;
+  padding: 6px 16px;
+  gap: 12px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
 }
 
-.phase-card {
+.phase-node {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px;
-  border-radius: 8px;
-  transition: all 0.3s;
-}
-
-.phase-card.active {
-  background: var(--acc-bg);
-  border: 1px solid var(--acc);
-}
-
-.phase-card.done {
-  opacity: 0.6;
-}
-
-.phase-card.pending {
-  opacity: 0.4;
-}
-
-.phase-icon {
-  font-size: 18px;
-}
-
-.pulse {
-  animation: pulse 1.5s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.6; transform: scale(1.15); }
-}
-
-.phase-name {
   font-size: 13px;
-  font-weight: 600;
-  color: var(--txt);
+  color: var(--dim);
+  transition: all 0.25s ease;
 }
 
-.phase-card.active .phase-name {
+.phase-node.active {
+  color: var(--txt);
+  font-weight: 600;
+}
+
+.phase-node.done {
+  color: var(--txt2);
+}
+
+.node-indicator {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg2);
+  border: 1px solid var(--bdr);
+}
+
+.phase-node.active .node-indicator {
+  border-color: var(--acc);
+  background: var(--acc-bg);
+}
+
+.phase-node.done .node-indicator {
+  border-color: var(--grn);
+  background: rgba(52, 211, 153, 0.15);
+}
+
+.done-check {
+  font-size: 11px;
+  color: var(--grn);
+  font-weight: bold;
+}
+
+.active-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--acc);
+  animation: pulse-gemini 1.4s infinite;
+}
+
+@keyframes pulse-gemini {
+  0% { transform: scale(0.8); opacity: 0.7; }
+  50% { transform: scale(1.2); opacity: 1; }
+  100% { transform: scale(0.8); opacity: 0.7; }
+}
+
+.pending-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dim);
+}
+
+.node-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.node-sub {
+  font-size: 11px;
+  background: var(--bg2);
+  padding: 1px 5px;
+  border-radius: 8px;
   color: var(--acc);
 }
 
-.phase-step {
-  font-size: 11px;
-  color: var(--txt2);
-  margin-top: 2px;
+.connector-line {
+  width: 18px;
+  height: 2px;
+  background: var(--bdr);
+  margin-left: 4px;
 }
 
-.dim {
-  filter: grayscale(1);
-  opacity: 0.5;
-}
-
-.phase-arrow {
-  color: var(--txt2);
-  font-size: 14px;
-  margin: 0 4px;
+.phase-node.done .connector-line {
+  background: var(--grn);
 }
 </style>

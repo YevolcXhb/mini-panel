@@ -117,6 +117,29 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []LLMMessage, 
 		}
 		toolMap := map[int]*toolAccum{}
 
+		// flushToolCalls 将累积的工具调用按 index 顺序全部发送
+		flushToolCalls := func() {
+			maxIdx := -1
+			for idx := range toolMap {
+				if idx > maxIdx {
+					maxIdx = idx
+				}
+			}
+			for i := 0; i <= maxIdx; i++ {
+				if accum, ok := toolMap[i]; ok {
+					out <- StreamDelta{
+						Type:           "tool_call",
+						ToolCallIndex:  i,
+						ToolCallID:     accum.ID,
+						ToolCallType:   accum.Type,
+						FunctionName:   accum.Name,
+						ArgumentsDelta: accum.Arguments,
+					}
+					delete(toolMap, i)
+				}
+			}
+		}
+
 		decoder := bufio.NewReader(resp.Body)
 		for {
 			select {
@@ -130,6 +153,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []LLMMessage, 
 			line, err := decoder.ReadString('\n')
 			if err != nil {
 				if err == io.EOF {
+					flushToolCalls()
 					out <- StreamDelta{Type: "done"}
 					return
 				}
@@ -142,6 +166,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []LLMMessage, 
 			}
 			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 			if data == "[DONE]" {
+				flushToolCalls()
 				out <- StreamDelta{Type: "done"}
 				return
 			}
@@ -203,25 +228,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []LLMMessage, 
 
 			// 流结束（finish_reason 非空）时，发送累积的工具调用和 usage
 			if choice.FinishReason != "" {
-				// 按 index 顺序发送工具调用
-				maxIdx := -1
-				for idx := range toolMap {
-					if idx > maxIdx {
-						maxIdx = idx
-					}
-				}
-				for i := 0; i <= maxIdx; i++ {
-					if accum, ok := toolMap[i]; ok {
-						out <- StreamDelta{
-							Type:           "tool_call",
-							ToolCallIndex:  i,
-							ToolCallID:     accum.ID,
-							ToolCallType:   accum.Type,
-							FunctionName:   accum.Name,
-							ArgumentsDelta: accum.Arguments,
-						}
-					}
-				}
+				flushToolCalls()
 				if chunk.Usage != nil {
 					out <- StreamDelta{Type: "usage", Usage: chunk.Usage}
 				}

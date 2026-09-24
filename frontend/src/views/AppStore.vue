@@ -1,39 +1,45 @@
 <template>
-  <div>
-    <h2 class="page-title">🛒 应用商店</h2>
+  <div class="app-store-container">
+    <div class="page-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 24px;">
+      <h2 class="page-title" style="margin-bottom: 0;">🛒 应用商店</h2>
+    </div>
 
-    <el-tabs v-model="activeTab">
-      <el-tab-pane label="应用列表" name="apps">
-        <div style="margin-bottom:16px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <el-input v-model="searchQuery" placeholder="搜索应用" style="width:240px" clearable @keyup.enter="doSearch">
-            <template #append><el-button @click="doSearch"><el-icon><Search /></el-icon></el-button></template>
-          </el-input>
-          <el-select v-model="selectedCategory" placeholder="分类" style="width:140px" clearable @change="loadApps">
-            <el-option label="全部" value="all" />
-            <el-option label="Web" value="web" />
-            <el-option label="数据库" value="database" />
-            <el-option label="工具" value="tool" />
-            <el-option label="其他" value="other" />
-          </el-select>
+    <el-card class="store-main-card" shadow="never">
+      <el-tabs v-model="activeTab" class="custom-tabs">
+        <el-tab-pane label="应用列表" name="apps">
+        <div style="margin-bottom:24px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;">
+          <div style="display:flex;gap:12px;align-items:center;">
+            <el-input v-model="searchQuery" placeholder="搜索应用..." style="width:280px" clearable @keyup.enter="doSearch">
+              <template #prefix><el-icon><Search /></el-icon></template>
+            </el-input>
+            <el-select v-model="selectedCategory" placeholder="全部分类" style="width:140px" clearable @change="loadApps">
+              <el-option label="全部" value="all" />
+              <el-option label="Web" value="web" />
+              <el-option label="数据库" value="database" />
+              <el-option label="工具" value="tool" />
+              <el-option label="其他" value="other" />
+            </el-select>
+          </div>
           <el-button type="primary" @click="showSync = true">🔄 同步应用</el-button>
         </div>
-        <div class="info-grid" v-if="apps.length">
-          <div class="info-card" v-for="app in apps" :key="app.id" style="display:flex;flex-direction:column;gap:10px">
-            <div style="display:flex;align-items:center;gap:10px">
-              <img v-if="app.icon" :src="appApi.icon(app.key)" :alt="app.name" @error="($event.target as HTMLElement).style.display='none'" style="width:32px;height:32px;border-radius:6px;object-fit:cover" />
-              <el-icon v-else size="32" color="#4f8cff"><Box /></el-icon>
-              <div style="flex:1">
-                <div style="font-weight:600;font-size:15px">{{ app.name }}</div>
-                <div style="font-size:12px;color:var(--dim)">{{ app.short_desc || app.description }}</div>
+        <div class="app-grid" v-if="apps.length">
+          <div class="app-card" v-for="app in apps" :key="app.id">
+            <div class="app-card-header">
+              <img v-if="app.icon" :src="appApi.icon(app.key)" :alt="app.name" @error="($event.target as HTMLElement).style.display='none'" class="app-icon" />
+              <div v-else class="app-icon-placeholder">
+                <el-icon size="28" color="var(--acc)"><Box /></el-icon>
+              </div>
+              <div class="app-title-area">
+                <div class="app-name">{{ app.name }}</div>
+                <div class="app-tags">
+                  <span class="tag-soft">{{ app.category || 'other' }}</span>
+                </div>
               </div>
             </div>
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-              <span class="tag-on">{{ app.category || 'other' }}</span>
-              <span class="tag-off">{{ app.type || 'container' }}</span>
-            </div>
-            <div style="display:flex;gap:8px">
-              <el-button type="primary" size="small" @click="openInstall(app)">安装</el-button>
-              <el-button size="small" @click="openDetail(app)">详情</el-button>
+            <div class="app-desc">{{ app.short_desc || app.description }}</div>
+            <div class="app-card-footer">
+              <el-button size="small" @click="openDetail(app)" class="detail-btn">详情</el-button>
+              <el-button type="primary" size="small" @click="openInstall(app)" class="install-btn">安装</el-button>
             </div>
           </div>
         </div>
@@ -106,6 +112,7 @@
         </div>
       </el-tab-pane>
     </el-tabs>
+    </el-card>
 
     <el-dialog v-model="showInstall" title="安装应用" width="480px">
       <el-form :model="installForm" label-width="100px">
@@ -569,5 +576,104 @@ function reconcileTasks() {
 }
 .bg-task-item:last-child {
   border-bottom: none;
+}
+
+/* App Store Specific Styles */
+.app-store-container {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+.store-main-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.app-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 20px;
+}
+.app-card {
+  background: var(--card);
+  border: 1px solid var(--bdr-light);
+  border-radius: var(--r-lg);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+  position: relative;
+  overflow: hidden;
+}
+.app-card:hover {
+  border-color: var(--gemini-pill-bdr);
+  box-shadow: var(--shadow);
+  transform: translateY(-2px);
+}
+.app-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+.app-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  object-fit: cover;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+.app-icon-placeholder {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: var(--acc-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.app-title-area {
+  flex: 1;
+  min-width: 0;
+}
+.app-name {
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--txt);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 6px;
+}
+.app-tags {
+  display: flex;
+  gap: 6px;
+}
+.tag-soft {
+  background: var(--acc-bg);
+  color: var(--acc);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+.app-desc {
+  font-size: 13px;
+  color: var(--dim);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  flex: 1;
+}
+.app-card-footer {
+  display: flex;
+  gap: 10px;
+  margin-top: auto;
+}
+.app-card-footer .el-button {
+  flex: 1;
 }
 </style>

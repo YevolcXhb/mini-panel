@@ -91,7 +91,18 @@ func NewProvider(providerType, baseURL, apiKey, model string, temperature float3
 	switch providerType {
 	case "anthropic":
 		return NewAnthropicProvider(baseURL, apiKey, model, temperature, maxTokens), nil
+	case "deepseek":
+		if baseURL == "" {
+			baseURL = "https://api.deepseek.com/v1"
+		}
+		if model == "" {
+			model = "deepseek-chat"
+		}
+		return NewOpenAIProvider(baseURL, apiKey, model, temperature, maxTokens), nil
 	case "ollama":
+		if baseURL == "" {
+			baseURL = "http://localhost:11434/v1"
+		}
 		return NewOpenAIProvider(baseURL, apiKey, model, temperature, maxTokens), nil
 	default:
 		return NewOpenAIProvider(baseURL, apiKey, model, temperature, maxTokens), nil

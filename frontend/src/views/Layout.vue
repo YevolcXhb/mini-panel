@@ -2,8 +2,8 @@
   <div class="main-app" :class="{ collapsed: sidebarCollapsed }">
     <aside class="sidebar">
       <div class="sidebar-header">
-        <span class="sidebar-logo" style="margin-left:-2px">🍔</span>
-        <span class="sidebar-title">MiniPanel</span>
+        <span class="sidebar-logo">🍔</span>
+        <span class="sidebar-title" style="background: var(--gemini-gradient-text); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">MiniPanel</span>
       </div>
       <nav class="sidebar-nav">
         <router-link
@@ -144,7 +144,7 @@ function logout() {
   color: var(--dim);
   text-decoration: none;
   font-size: 13px;
-  border-radius: var(--r);
+  border-radius: 20px;
   transition: all 0.12s;
   cursor: pointer;
   font-weight: 500;
@@ -194,6 +194,8 @@ function logout() {
 }
 .content {
   flex: 1;
+  display: flex;
+  flex-direction: column;
   padding: 24px 28px;
   overflow-y: auto;
   overflow-x: hidden;

@@ -92,25 +92,25 @@ const REVIEWER_SYSTEM_PROMPT = `你是 MiniPanel 运维审查员。验证执行�
 // 空集合表示允许所有工具
 var PhaseToolNames = map[OrchestratorPhase]map[string]bool{
 	PhasePlanning: {
-		"get_system_info":    true,
-		"list_processes":     true,
-		"dashboard_overview": true,
-		"container_list":     true,
-		"website_list":       true,
-		"database_list":      true,
-		"firewall_list":      true,
-		"file_list":          true,
-		"file_read":          true,
-		"web_search":         true,
-		"web_fetch":          true,
-		"resolve_lazy_ref":  true,
+		"get_system_info":     true,
+		"list_processes":      true,
+		"list_containers":     true,
+		"list_websites":       true,
+		"list_databases":      true,
+		"list_firewall_rules": true,
+		"list_backups":        true,
+		"list_files":          true,
+		"read_file":           true,
+		"web_search":          true,
+		"web_fetch":           true,
+		"resolve_lazy_ref":    true,
 	},
 	PhaseCoding: {}, // 空集合表示允许所有工具
 	PhaseReviewing: {
-		"execute_command":   true,
-		"file_read":         true,
-		"file_list":         true,
-		"resolve_lazy_ref":  true,
+		"execute_command":  true,
+		"read_file":        true,
+		"list_files":       true,
+		"resolve_lazy_ref": true,
 	},
 }
 

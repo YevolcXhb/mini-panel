@@ -3,7 +3,7 @@
     <div class="login-bg"></div>
     <div class="login-card">
       <div class="login-logo">🍔</div>
-      <h1 class="login-title">MiniPanel</h1>
+      <h1 class="login-title gemini-gradient-text" style="background: var(--gemini-gradient-text); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">MiniPanel</h1>
       <p class="login-subtitle">服务器管理面板</p>
       <form @submit.prevent="handleLogin" autocomplete="off">
         <div class="input-group">
