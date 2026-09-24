@@ -1,1 +1,6 @@
-{ "version": "7.0.0", "url": "https://github.com/YevolcXhb/mini-panel/releases/latest", "release_notes": "Mini Panel v7.0.0 - UI layout refactor and Gemini theme update", "install_sha256": "dcf0f37e34fa2808311e8e887e3f09a74f2bcd325f9421a45e718328de904691" }
+{
+  "version": "7.0.0",
+  "url": "https://github.com/YevolcXhb/mini-panel/releases/latest",
+  "release_notes": "Mini Panel v7.0.0",
+  "install_sha256": "dcf0f37e34fa2808311e8e887e3f09a74f2bcd325f9421a45e718328de904691"
+}
