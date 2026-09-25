@@ -22,8 +22,16 @@ func NewRouter() *gin.Engine {
 	if _, err := os.Stat("static/index.html"); err == nil {
 		r.Static("/assets", "static/assets")
 		r.StaticFile("/favicon.ico", "static/favicon.ico")
-		r.StaticFile("/", "static/index.html")
+		r.GET("/", func(c *gin.Context) {
+			c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
+			c.Header("Pragma", "no-cache")
+			c.Header("Expires", "0")
+			c.File("static/index.html")
+		})
 		r.NoRoute(func(c *gin.Context) {
+			c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
+			c.Header("Pragma", "no-cache")
+			c.Header("Expires", "0")
 			c.File("static/index.html")
 		})
 	}
