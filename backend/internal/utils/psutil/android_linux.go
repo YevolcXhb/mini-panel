@@ -40,7 +40,8 @@ func getDiskPartitions() ([]disk.PartitionStat, string, error) {
 }
 
 // androidHostRoot 返回可访问的 Android 宿主机根目录（带短时缓存）。
-// magiskd 进程优先，其次为 init（/proc/1/root）。
+// 不依赖任何固定 PID：候选路径必须通过 isAndroidRoot 校验（存在 /system/bin/init
+// 或 /system/build.prop）才会被采用。
 func androidHostRoot() string {
 	hostRootMu.Lock()
 	defer hostRootMu.Unlock()
@@ -54,23 +55,56 @@ func androidHostRoot() string {
 }
 
 func detectAndroidHostRoot() string {
-	if !looksLikeAndroidChroot() {
-		return ""
-	}
+	// magiskd 是文档推荐的逃逸入口，先试它。
 	if pid := findProcessPID("magiskd"); pid > 0 {
 		root := fmt.Sprintf("/proc/%d/root", pid)
 		if isAndroidRoot(root) {
 			return root
 		}
 	}
+	// /proc/1/root 只在它确实指向 Android 根时才采用：容器（dockroot 等）里
+	// pid 1 是容器自己的 systemd，其 root 不含 /system/bin/init，会被校验拒绝。
 	if isAndroidRoot("/proc/1/root") {
 		return "/proc/1/root"
+	}
+	if !looksLikeAndroidChroot() {
+		return ""
+	}
+	// 兜底：扫描全部 /proc/*/root，适用于 magiskd 不可见、pid 1 被容器占用的情形。
+	if roots := scanAndroidRoots(); len(roots) > 0 {
+		return roots[0]
 	}
 	return ""
 }
 
+// scanAndroidRoots 扫描 /proc/*/root，返回所有指向 Android 根目录的逃逸路径。
+// 容器或独立 PID 命名空间下 magiskd/init 可能不可见或指向错误对象，
+// 因此这里按内容特征（/system/bin/init、/system/build.prop）而不是 PID 来识别。
+func scanAndroidRoots() []string {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil
+	}
+	var roots []string
+	for _, e := range entries {
+		name := e.Name()
+		if name == "" || name[0] < '0' || name[0] > '9' {
+			continue
+		}
+		root := "/proc/" + name + "/root"
+		if isAndroidRoot(root) {
+			roots = append(roots, root)
+		}
+	}
+	return roots
+}
+
 func looksLikeAndroidChroot() bool {
 	if _, err := os.Stat("/system/build.prop"); err == nil {
+		return true
+	}
+	// chroot 容器（如 Ubuntu chroot 模块）会注入这些变量，即使容器内看不到 /system
+	if os.Getenv("ANDROID_ROOT") != "" || os.Getenv("TMOE_CHROOT") != "" {
 		return true
 	}
 	if data, err := os.ReadFile("/proc/version"); err == nil {
@@ -85,11 +119,14 @@ func looksLikeAndroidChroot() bool {
 	return false
 }
 
+// isAndroidRoot 判断 root 是否为 Android 宿主机根目录。
+// 用 /system/bin/init 或 /system/build.prop 作特征：容器 rootfs（Ubuntu 等）
+// 即使有 /system 目录也不会有 init 与 build.prop。
 func isAndroidRoot(root string) bool {
-	if _, err := os.Stat(filepath.Join(root, "system")); err == nil {
+	if _, err := os.Stat(filepath.Join(root, "system/build.prop")); err == nil {
 		return true
 	}
-	if _, err := os.Stat(filepath.Join(root, "system/build.prop")); err == nil {
+	if _, err := os.Stat(filepath.Join(root, "system/bin/init")); err == nil {
 		return true
 	}
 	return false
@@ -126,25 +163,62 @@ func findProcessPID(name string) int {
 }
 
 // readHostPartitions 读取宿主机挂载表。
-// 优先读取跳板进程（magiskd/init）自身的 /proc/<pid>/mountinfo，
-// 保证拿到的是宿主机完整挂载命名空间，而不是面板进程受限后的视角；
-// 失败时退回通过逃逸路径读取 /proc/self/mountinfo，最后退回 /proc/self/mounts。
+// 依次尝试多个来源（逃逸根下的 /proc/<pid>/mountinfo、<root>/proc/self/mountinfo、
+// <root>/proc/mounts，以及本进程可见的 /proc/1/mountinfo、/proc/self/mountinfo），
+// 取条目最多的那一份。任何单一来源都可能是残缺的：例如面板进程处于独立挂载命名
+// 空间时 /proc/self/mountinfo 只有若干虚拟挂载项，直接采用会导致磁盘详情为空。
 func readHostPartitions(root string) ([]disk.PartitionStat, error) {
-	if pid := pidFromHostRoot(root); pid > 0 {
-		if data, err := os.ReadFile(fmt.Sprintf("/proc/%d/mountinfo", pid)); err == nil {
-			if partitions, perr := parseMountinfo(data, root); perr == nil && len(partitions) > 0 {
-				return partitions, nil
-			}
+	type source struct {
+		path   string
+		parser func([]byte, string) ([]disk.PartitionStat, error)
+	}
+	var sources []source
+	if root != "" {
+		if pid := pidFromHostRoot(root); pid > 0 {
+			sources = append(sources,
+				source{fmt.Sprintf("/proc/%d/mountinfo", pid), parseMountinfo},
+				source{fmt.Sprintf("/proc/%d/mounts", pid), parseMountsStrict},
+			)
+		}
+		sources = append(sources,
+			source{filepath.Join(root, "proc/self/mountinfo"), parseMountinfo},
+			source{filepath.Join(root, "proc/mounts"), parseMountsStrict},
+		)
+	}
+	sources = append(sources,
+		source{"/proc/1/mountinfo", parseMountinfo},
+		source{"/proc/self/mountinfo", parseMountinfo},
+	)
+
+	var best []disk.PartitionStat
+	var lastErr error
+	for _, src := range sources {
+		data, err := os.ReadFile(src.path)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		partitions, err := src.parser(data, root)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if len(partitions) > len(best) {
+			best = partitions
 		}
 	}
-	data, err := os.ReadFile(filepath.Join(root, "proc/self/mountinfo"))
-	if err == nil {
-		return parseMountinfo(data, root)
+	if len(best) == 0 {
+		if lastErr == nil {
+			lastErr = fmt.Errorf("no readable mount table for root %q", root)
+		}
+		return nil, lastErr
 	}
-	data, err = os.ReadFile(filepath.Join(root, "proc/self/mounts"))
-	if err != nil {
-		return nil, err
-	}
+	return best, nil
+}
+
+// parseMountsStrict 解析 /proc/mounts 格式；与 parseMounts 相比会丢弃 opt 字段落
+// 在 fstype 前缀上的注释行（/proc/mounts 无注释，此处仅为签名统一）。
+func parseMountsStrict(data []byte, _ string) ([]disk.PartitionStat, error) {
 	return parseMounts(data)
 }
 

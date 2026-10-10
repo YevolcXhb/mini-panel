@@ -171,6 +171,10 @@ func GetAllDiskInfo() ([]DiskInfo, error) {
 		if err != nil {
 			continue
 		}
+		if usage.Total == 0 {
+			// 容量为 0 的伪分区（selinuxfs、binderfs、functionfs 等）对用户没有意义
+			continue
+		}
 		result = append(result, DiskInfo{
 			Path:        p.Mountpoint,
 			Total:       usage.Total,
@@ -226,7 +230,8 @@ func isVirtualFSType(fsType string) bool {
 	case "tmpfs", "devtmpfs", "devfs", "proc", "sysfs", "cgroup", "cgroup2",
 		"devpts", "ramfs", "shm", "mqueue", "debugfs", "tracefs", "securityfs",
 		"pstore", "hugetlbfs", "autofs", "binfmt_misc", "configfs", "fusectl",
-		"nsfs", "overlay", "squashfs", "sockfs", "pipefs", "bpf", "rpc_pipefs":
+		"nsfs", "overlay", "squashfs", "sockfs", "pipefs", "bpf", "rpc_pipefs",
+		"selinuxfs", "binder", "binderfs", "functionfs", "usb-ffs", "efivarfs":
 		return true
 	}
 	return false
@@ -254,8 +259,15 @@ func preferMountpoint(a, b string) bool {
 
 func GetNetInfo() ([]NetInfo, error) {
 	ioCounters, err := net.IOCounters(true)
-	if err != nil {
-		return nil, err
+	if err != nil || len(ioCounters) == 0 {
+		// 容器内独立网络命名空间时本进程的 /proc/net/dev 可能不存在或为空，
+		// 退回读取 Android 宿主机逃逸根下的 /proc/net/dev。
+		if fallback, ferr := readHostNetDev(); ferr == nil && len(fallback) > 0 {
+			return fallback, nil
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 	var result []NetInfo
 	for _, io := range ioCounters {
@@ -268,6 +280,69 @@ func GetNetInfo() ([]NetInfo, error) {
 		})
 	}
 	return result, nil
+}
+
+// readHostNetDev 直接从 /proc/net/dev 解析网络计数。
+// gopsutil 的 net.IOCounters 读取的是本进程所在网络命名空间的 /proc/net/dev；
+// 面板运行在独立网络命名空间（容器）中时该视图可能是空的，此处改读 Android
+// 宿主机逃逸根下的 /proc/net/dev。
+//
+// /proc/net/dev 格式（前两行为表头）：
+//
+//	Inter-|   Receive                                                |  Transmit
+//	 face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets ...
+//	  wlan0: 1983640 12345 0 0 0 0 0 0 3902770 23456 0 0 0 0 0 0
+func readHostNetDev() ([]NetInfo, error) {
+	candidates := []string{"/proc/net/dev"}
+	if root := androidHostRoot(); root != "" {
+		candidates = append([]string{filepath.Join(root, "proc/net/dev")}, candidates...)
+	}
+	var lastErr error
+	for _, path := range candidates {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		result := parseNetDev(data)
+		if len(result) > 0 {
+			return result, nil
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("proc/net/dev unavailable")
+	}
+	return nil, lastErr
+}
+
+func parseNetDev(data []byte) []NetInfo {
+	var result []NetInfo
+	for _, line := range strings.Split(string(data), "\n") {
+		idx := strings.Index(line, ":")
+		if idx <= 0 {
+			continue // 表头行
+		}
+		name := strings.TrimSpace(line[:idx])
+		if name == "" {
+			continue
+		}
+		fields := strings.Fields(line[idx+1:])
+		if len(fields) < 16 {
+			continue
+		}
+		rxBytes, _ := strconv.ParseUint(fields[0], 10, 64)
+		rxPackets, _ := strconv.ParseUint(fields[1], 10, 64)
+		txBytes, _ := strconv.ParseUint(fields[8], 10, 64)
+		txPackets, _ := strconv.ParseUint(fields[9], 10, 64)
+		result = append(result, NetInfo{
+			Name:        name,
+			BytesSent:   txBytes,
+			BytesRecv:   rxBytes,
+			PacketsSent: txPackets,
+			PacketsRecv: rxPackets,
+		})
+	}
+	return result
 }
 
 func GetLoadAvg() (*load.AvgStat, error) {

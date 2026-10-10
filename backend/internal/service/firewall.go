@@ -28,16 +28,17 @@ func NewFirewallService() *FirewallService {
 }
 
 // isAndroidEnv 检测是否在 Android chroot/容器环境中运行。
-// 通过检查 /proc/1/root/system/bin/iptables 是否存在来判断。
-// /proc/1/root/ 指向 Android init 进程的根目录，只有 root 权限可读。
+// 不依赖固定 PID：/proc/1/root 在容器里可能指向容器自身的 systemd，
+// 因此改为按内容特征判断能否访问到 Android 根目录，并保留 Magisk 模块
+// 与 iptables 包装脚本作为旁证。
 func isAndroidEnv() bool {
 	if global.IsAndroidChroot {
 		return true
 	}
-	if _, err := os.Stat("/proc/1/root/system/bin/iptables"); err == nil {
+	if findAndroidProcessPID("magiskd") > 0 {
 		return true
 	}
-	if findAndroidProcessPID("magiskd") > 0 {
+	if len(androidRootCandidates()) > 0 {
 		return true
 	}
 	if _, err := os.Stat("/opt/minipanel/bin/iptables"); err == nil {
@@ -125,14 +126,61 @@ func findAndroidProcessPID(name string) int {
 	return 0
 }
 
-// androidRootCandidates 返回可访问 Android 根目录的候选路径：
-// magiskd 进程优先（文档推荐的逃逸入口），其次为 init（/proc/1/root）
+// androidRootCandidates 返回可访问 Android 根目录的候选路径。
+// 候选必须通过内容校验（存在 system/bin/init 或 system/build.prop）才会返回：
+// 面板可能运行在独立 PID 命名空间的容器里，此时 /proc/1/root 是容器自己的
+// systemd 根目录，硬编码采用它会导致防火墙找不到 Android iptables。
 func androidRootCandidates() []string {
 	var roots []string
-	if pid := findAndroidProcessPID("magiskd"); pid > 0 {
-		roots = append(roots, fmt.Sprintf("/proc/%d/root", pid))
+	seen := make(map[string]bool)
+	add := func(root string) {
+		if root == "" || seen[root] || !isAndroidRootDir(root) {
+			return
+		}
+		seen[root] = true
+		roots = append(roots, root)
 	}
-	roots = append(roots, "/proc/1/root")
+	if pid := findAndroidProcessPID("magiskd"); pid > 0 {
+		add(fmt.Sprintf("/proc/%d/root", pid))
+	}
+	add("/proc/1/root")
+	// 兜底：按内容特征扫描全部 /proc/*/root（容器场景下 magiskd/init 可能不可见）
+	if len(roots) == 0 {
+		for _, root := range scanAndroidRootPaths() {
+			add(root)
+		}
+	}
+	return roots
+}
+
+// isAndroidRootDir 判断 root 是否为 Android 宿主机根目录。
+// 容器 rootfs 即使存在 /system 目录也不会有 init 与 build.prop。
+func isAndroidRootDir(root string) bool {
+	for _, marker := range []string{"system/bin/init", "system/build.prop"} {
+		if _, err := os.Stat(filepath.Join(root, marker)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// scanAndroidRootPaths 扫描 /proc/*/root，返回指向 Android 根目录的逃逸路径
+func scanAndroidRootPaths() []string {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil
+	}
+	var roots []string
+	for _, e := range entries {
+		name := e.Name()
+		if name == "" || name[0] < '0' || name[0] > '9' {
+			continue
+		}
+		root := "/proc/" + name + "/root"
+		if isAndroidRootDir(root) {
+			roots = append(roots, root)
+		}
+	}
 	return roots
 }
 
