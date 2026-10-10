@@ -172,6 +172,7 @@ func (s *UpdateService) compareVersions(info *UpdateInfo) {
 
 // compareSemver 比较两个 semver 版本号字符串。
 // 返回 -1/0/1：a<b / a==b / a>b
+// 自带 "v" 前缀与空白容错，调用方无需预先 TrimPrefix。
 func compareSemver(a, b string) int {
 	pa := parseSemver(a)
 	pb := parseSemver(b)
@@ -186,9 +187,10 @@ func compareSemver(a, b string) int {
 	return 0
 }
 
-// parseSemver 解析 "4.6.5" → [4,6,5]；非法部分按 0 处理
+// parseSemver 解析 "v4.6.5" / "4.6.5" → [4,6,5]；非法部分按 0 处理
 func parseSemver(s string) [3]int {
 	var v [3]int
+	s = strings.TrimPrefix(strings.TrimSpace(s), "v")
 	parts := strings.Split(s, ".")
 	for i := 0; i < 3 && i < len(parts); i++ {
 		n := 0
@@ -235,6 +237,21 @@ func (s *UpdateService) ApplyUpdate() (*ApplyResult, error) {
 	installScriptURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/main/install.sh", githubRepo)
 	global.LOG.Infof("[UpdateService] 下载 install.sh: %s", installScriptURL)
 
+	// 解析目标版本并校验，避免 install.sh 自行探测失败后回退到旧版本、
+	// 用旧安装包覆盖当前安装（历史上导致过静默降级）。
+	info, checkErr := s.CheckUpdate()
+	if checkErr != nil {
+		return nil, fmt.Errorf("更新前无法确认目标版本，已中止: %w", checkErr)
+	}
+	if !info.HasUpdate {
+		return nil, fmt.Errorf("当前版本 v%s 已是最新（v%s），无需更新", info.CurrentVersion, info.LatestVersion)
+	}
+	if compareSemver(info.LatestVersion, info.CurrentVersion) <= 0 {
+		return nil, fmt.Errorf("目标版本 v%s 不高于当前版本 v%s，已拒绝降级", info.LatestVersion, info.CurrentVersion)
+	}
+	targetVersion := info.LatestVersion
+	global.LOG.Infof("[UpdateService] 目标版本: v%s (当前 v%s, 来源 %s)", targetVersion, info.CurrentVersion, info.Source)
+
 	scriptPath := filepath.Join(os.TempDir(), "minipanel-install.sh")
 	if err := downloadFile(installScriptURL, scriptPath); err != nil {
 		return nil, fmt.Errorf("下载 install.sh 失败: %w", err)
@@ -275,8 +292,13 @@ func (s *UpdateService) ApplyUpdate() (*ApplyResult, error) {
 	cmd.Stderr = logFile
 	// 脱离父进程，避免更新过程中重启 minipanel 把更新进程也杀掉
 	setSysProcAttr(cmd)
-	// 继承环境变量，并设置更新模式标志
-	cmd.Env = append(os.Environ(), "MINIPANEL_UPDATE=1")
+	// 继承环境变量，并设置更新模式标志与目标版本；
+	// MINIPANEL_VERSION 让 install.sh 跳过不可靠的自动探测，直接使用后端校验过的版本。
+	cmd.Env = append(os.Environ(),
+		"MINIPANEL_UPDATE=1",
+		"MINIPANEL_VERSION="+targetVersion,
+		"MINIPANEL_DIR="+runningInstallDir(),
+	)
 
 	if err := cmd.Start(); err != nil {
 		logFile.Close()
@@ -307,6 +329,24 @@ func (s *UpdateService) ApplyUpdate() (*ApplyResult, error) {
 		LogPath: logPath,
 		PID:     pid,
 	}, nil
+}
+
+// runningInstallDir 返回当前正在运行的面板安装目录。
+// install.sh 默认装到 /opt/minipanel，但部署时可能被 MINIPANEL_DIR 覆盖，
+// 若不一致更新就会装到别处、旧进程继续跑旧版本，因此这里显式传递。
+func runningInstallDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "/opt/minipanel"
+	}
+	if resolved, rerr := filepath.EvalSymlinks(exe); rerr == nil {
+		exe = resolved
+	}
+	dir := filepath.Dir(exe)
+	if dir == "" || dir == "." || dir == "/" {
+		return "/opt/minipanel"
+	}
+	return dir
 }
 
 // expectedInstallSHA256 从仓库 version.json 获取 install.sh 的期望 SHA256。

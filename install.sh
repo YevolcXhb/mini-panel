@@ -57,7 +57,18 @@ log_err() {
 }
 
 # Auto-detect latest release version
+#
+# 探测顺序：
+#   1) MINIPANEL_VERSION（面板后端触发更新时传入，最可靠，且与后端展示的版本一致）
+#   2) GitHub Releases API
+#   3) version.json（raw.githubusercontent.com，不占用 API 匿名速率限制）
+# 三个来源都拿不到时返回空字符串，由调用方中止安装 —— 绝不回退到某个写死的旧版本。
 get_latest_version() {
+    if [ -n "${MINIPANEL_VERSION:-}" ]; then
+        echo "${MINIPANEL_VERSION#v}"
+        return 0
+    fi
+
     local api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
     local ver=""
     if command -v curl &>/dev/null; then
@@ -65,15 +76,61 @@ get_latest_version() {
     elif command -v wget &>/dev/null; then
         ver=$(wget -qO- "$api_url" 2>/dev/null | grep '"tag_name":' | head -n 1 | sed -E 's/.*"v?([^"]+)".*/\1/')
     fi
+
+    if [ -z "$ver" ]; then
+        # GitHub API 匿名调用有速率限制（共享出口 IP 时极易 403），
+        # version.json 走 raw.githubusercontent.com，不受该限制。
+        local vj_url="https://raw.githubusercontent.com/${GITHUB_REPO}/main/version.json"
+        local vj=""
+        # 注意：这里是裸赋值而非管道，本脚本顶部是 set -e，
+        # 必须加 || true，否则 curl 失败会直接终止安装而不是继续降级。
+        if command -v curl &>/dev/null; then
+            vj=$(curl -fsSL "$vj_url" 2>/dev/null) || vj=""
+        elif command -v wget &>/dev/null; then
+            vj=$(wget -qO- "$vj_url" 2>/dev/null) || vj=""
+        fi
+        if [ -n "$vj" ]; then
+            ver=$(printf '%s\n' "$vj" | grep '"version"' | head -n 1 | sed -E 's/.*"v?([^"]+)".*/\1/')
+        fi
+    fi
     echo "$ver"
+}
+
+# 读取已安装二进制自报的版本号；读不到则输出空字符串
+installed_version() {
+    local bin="${INSTALL_DIR}/minipanel"
+    if [ ! -x "$bin" ]; then
+        echo ""
+        return 0
+    fi
+    "$bin" -v 2>/dev/null | sed -nE 's/^Mini Panel ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | head -n 1
+}
+
+# 版本比较：$1 大于 $2 时返回 0，否则返回 1
+semver_gt() {
+    if [ "$1" = "$2" ]; then
+        return 1
+    fi
+    [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]
 }
 
 VERSION=$(get_latest_version)
 if [ -z "$VERSION" ]; then
-    VERSION="7.0.5"
-    log_warn "Failed to detect latest version, fallback to v${VERSION}"
-else
-    log_info "Latest version detected: v${VERSION}"
+    log_err "无法获取最新版本号：GitHub API 与 version.json 均不可达。"
+    log_info "为安全起见已中止，安装目录未被修改。"
+    log_info "如需继续，可手动指定版本后重试，例如："
+    log_info "  MINIPANEL_VERSION=7.1.1 bash install.sh"
+    exit 1
+fi
+log_info "Latest version detected: v${VERSION}"
+
+# 更新模式下拒绝降级或同版本覆盖，避免用旧包覆盖当前安装
+if [ "${MINIPANEL_UPDATE:-}" = "1" ]; then
+    _installed=$(installed_version)
+    if [ -n "$_installed" ] && ! semver_gt "$VERSION" "$_installed"; then
+        log_err "目标版本 v${VERSION} 不高于当前已安装版本 v${_installed}，已拒绝覆盖。"
+        exit 1
+    fi
 fi
 
 print_banner() {

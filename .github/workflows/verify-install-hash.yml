@@ -1,0 +1,47 @@
+name: Verify install.sh hash
+
+# version.json 里记录的 install_sha256 是更新流程的硬校验：
+# 面板下载 install.sh 后会比对它，不一致就直接中止更新。
+# 而 release.yml 只在打 tag 时刷新该字段 —— 因此任何直接改 install.sh
+# 的提交都会让 main 上的 version.json 过期，导致所有人的更新功能失效。
+# 这个工作流在每次改动这两个文件时立即暴露这种漂移。
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "install.sh"
+      - "version.json"
+  pull_request:
+    paths:
+      - "install.sh"
+      - "version.json"
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compare sha256(install.sh) with version.json
+        run: |
+          set -e
+          ACTUAL=$(sha256sum install.sh | awk '{print $1}')
+          EXPECTED=$(python3 -c "import json;print(json.load(open('version.json'))['install_sha256'].strip())")
+
+          echo "install.sh sha256: ${ACTUAL}"
+          echo "version.json     : ${EXPECTED}"
+
+          if [ "${ACTUAL}" != "${EXPECTED}" ]; then
+            echo "::error::version.json 的 install_sha256 与 install.sh 不匹配。"
+            echo "::error::这会让面板更新在 SHA256 校验处直接失败。"
+            echo ""
+            echo "修复方式（二选一）："
+            echo "  1) 把 version.json 的 install_sha256 改为上面打印的 install.sh sha256 值"
+            echo "  2) 打 tag 触发 release.yml 自动刷新（会同时发布新版本）"
+            exit 1
+          fi
+
+          echo "OK: install.sh 与 version.json 的 SHA256 一致。"
