@@ -45,24 +45,8 @@
 ### 一键部署（推荐）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YevolcXhb/mini-panel/main/install.sh | bash
+curl -fsSL "https://gh-proxy.com/https://raw.githubusercontent.com/YevolcXhb/mini-panel/main/install.sh" -o /tmp/install.sh && bash /tmp/install.sh
 ```
-
-自动检测并下载对应平台的预编译二进制。
-
-> **网络问题**：如果上述命令无响应（`raw.githubusercontent.com` 被墙），可使用代理：
-> ```bash
-> curl -fsSL -x http://127.0.0.1:7890 https://raw.githubusercontent.com/YevolcXhb/mini-panel/main/install.sh | bash
-> ```
-> 或者手动下载最新 Release 包并解压运行：
-> ```bash
-> VERSION=$(curl -s https://api.github.com/repos/YevolcXhb/mini-panel/releases/latest | grep tag_name | cut -d '"' -f 4 | sed 's/v//')
-> wget "https://github.com/YevolcXhb/mini-panel/releases/download/v${VERSION}/minipanel-${VERSION}-linux-arm64.tar.gz"
-> tar -xzf minipanel-${VERSION}-linux-arm64.tar.gz
-> cd minipanel
-> cp config.yaml.example config.yaml
-> ./minipanel
-> ```
 
 ### 从源码构建
 
