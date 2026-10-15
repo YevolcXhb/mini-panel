@@ -237,8 +237,11 @@ install_from_release() {
         log_err "Failed to download release from all mirrors."
         log_info "You can try with a proxy:"
         log_info "  export HTTPS_PROXY=http://127.0.0.1:7890"
-        log_info "  curl -fsSL https://raw.githubusercontent.com/YevolcXhb/mini-panel/main/install.sh | bash"
+        log_info "Or re-run the installer via a mirror:"
+        log_info "  curl -fsSL \"https://gh-proxy.com/https://raw.githubusercontent.com/YevolcXhb/mini-panel/main/install.sh\" -o /tmp/install.sh && bash /tmp/install.sh"
+        log_info "  curl -fsSL \"https://ghproxy.cn/https://raw.githubusercontent.com/YevolcXhb/mini-panel/main/install.sh\" -o /tmp/install.sh && bash /tmp/install.sh"
         log_info "Or manually download from: https://github.com/YevolcXhb/mini-panel/releases"
+        log_info "  (the release tarball already bundles install.sh — extract and run it locally)"
         rm -rf "${tmp_dir}"
         exit 1
     fi

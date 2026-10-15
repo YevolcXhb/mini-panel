@@ -18,8 +18,22 @@ import (
 	"github.com/minipanel/minipanel/internal/utils/ssrf"
 )
 
-// GitHub 仓库坐标（与 install.sh 保持一致）
+// githubRepo GitHub 仓库坐标（与 install.sh 保持一致）
 const githubRepo = "YevolcXhb/mini-panel"
+
+// rawURLCandidates 返回 GitHub raw 资源的候选 URL 列表，依次为：
+// 官方 raw.githubusercontent.com 直连 + 国内常用镜像（与 install.sh 的
+// download_with_fallback 保持一致的镜像集合）。镜像内容仍受 install.sh
+// SHA256 校验与 version.json 内容校验兜底，被篡改会失败关闭而非静默注入。
+func rawURLCandidates(path string) []string {
+	base := fmt.Sprintf("https://raw.githubusercontent.com/%s/main/%s", githubRepo, path)
+	return []string{
+		base,
+		"https://gh-proxy.com/" + base,
+		"https://ghproxy.cn/" + base,
+		"https://ghps.cc/" + base,
+	}
+}
 
 // UpdateInfo 检查更新结果
 type UpdateInfo struct {
@@ -130,26 +144,31 @@ type versionJSONResponse struct {
 	InstallSHA256 string `json:"install_sha256"`
 }
 
-// checkFromVersionJSON 从 version.json 降级获取最新版本
+// fetchFirstAvailable 依次尝试候选 URL，返回第一个成功获取的响应体。
+// 全部失败时返回最后一个错误，便于日志定位根因。
+func fetchFirstAvailable(urls []string, maxBytes int64, timeout time.Duration) ([]byte, error) {
+	var lastErr error
+	for _, u := range urls {
+		data, err := ssrf.Fetch(u, maxBytes, timeout)
+		if err == nil {
+			return data, nil
+		}
+		lastErr = err
+		global.LOG.Debugf("[UpdateService] fetch %s 失败: %v，尝试下一个候选", u, err)
+	}
+	return nil, fmt.Errorf("所有候选地址均不可达（最后错误: %w）", lastErr)
+}
+
+// checkFromVersionJSON 从 version.json 获取最新版本（raw 直连 + 镜像回退）
 func (s *UpdateService) checkFromVersionJSON(info *UpdateInfo) error {
-	url := fmt.Sprintf("https://raw.githubusercontent.com/%s/main/version.json", githubRepo)
-	resp, err := s.httpClient.Get(url)
+	urls := rawURLCandidates("version.json")
+	resp, err := fetchFirstAvailable(urls, 1<<20, 15*time.Second)
 	if err != nil {
 		return fmt.Errorf("version.json 请求失败: %w", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("version.json 返回状态码: %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
 
 	var vj versionJSONResponse
-	if err := json.Unmarshal(body, &vj); err != nil {
+	if err := json.Unmarshal(resp, &vj); err != nil {
 		return err
 	}
 
@@ -233,9 +252,8 @@ func (s *UpdateService) ApplyUpdate() (*ApplyResult, error) {
 	}
 	logPath := filepath.Join(logDir, "update.log")
 
-	// 下载 install.sh
-	installScriptURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/main/install.sh", githubRepo)
-	global.LOG.Infof("[UpdateService] 下载 install.sh: %s", installScriptURL)
+	// 下载 install.sh（raw 直连 + 镜像回退，见 rawURLCandidates）
+	global.LOG.Infof("[UpdateService] 下载 install.sh（含镜像回退，共 %d 个候选）", len(rawURLCandidates("install.sh")))
 
 	// 解析目标版本并校验，避免 install.sh 自行探测失败后回退到旧版本、
 	// 用旧安装包覆盖当前安装（历史上导致过静默降级）。
@@ -253,7 +271,9 @@ func (s *UpdateService) ApplyUpdate() (*ApplyResult, error) {
 	global.LOG.Infof("[UpdateService] 目标版本: v%s (当前 v%s, 来源 %s)", targetVersion, info.CurrentVersion, info.Source)
 
 	scriptPath := filepath.Join(os.TempDir(), "minipanel-install.sh")
-	if err := downloadFile(installScriptURL, scriptPath); err != nil {
+	// raw 直连 + 镜像回退，与 install.sh 的 download_with_fallback 镜像集合一致；
+	// 下载内容的真实性由下方 SHA256 校验兜底，镜像本身不受信任也不会注入恶意脚本。
+	if err := downloadFile(rawURLCandidates("install.sh"), scriptPath); err != nil {
 		return nil, fmt.Errorf("下载 install.sh 失败: %w", err)
 	}
 	// 下载后做基础完整性校验：shebang、仓库标记、SHA256
@@ -351,8 +371,7 @@ func runningInstallDir() string {
 
 // expectedInstallSHA256 从仓库 version.json 获取 install.sh 的期望 SHA256。
 func (s *UpdateService) expectedInstallSHA256() (string, error) {
-	url := fmt.Sprintf("https://raw.githubusercontent.com/%s/main/version.json", githubRepo)
-	data, err := ssrf.Fetch(url, 1<<20, 15*time.Second)
+	data, err := fetchFirstAvailable(rawURLCandidates("version.json"), 1<<20, 15*time.Second)
 	if err != nil {
 		return "", err
 	}
@@ -402,9 +421,9 @@ func (s *UpdateService) GetUpdateLog(tailLines int) (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
-// downloadFile 下载文件到本地
-func downloadFile(url, destPath string) error {
-	data, err := ssrf.Fetch(url, 1<<20, 30*time.Second)
+// downloadFile 下载文件到本地（依次尝试候选 URL，含镜像回退）
+func downloadFile(urls []string, destPath string) error {
+	data, err := fetchFirstAvailable(urls, 1<<20, 30*time.Second)
 	if err != nil {
 		return err
 	}

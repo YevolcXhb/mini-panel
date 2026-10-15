@@ -44,9 +44,38 @@
 
 ### 一键部署（推荐）
 
+> 国内用户若直连 GitHub 失败，请依次尝试下方镜像命令（镜像可用性随时间变化，哪个能用就用哪个）。
+
 ```bash
+# 主推：gh-proxy.com 镜像
 curl -fsSL "https://gh-proxy.com/https://raw.githubusercontent.com/YevolcXhb/mini-panel/main/install.sh" -o /tmp/install.sh && bash /tmp/install.sh
 ```
+
+```bash
+# 备选1：ghproxy.cn 镜像
+curl -fsSL "https://ghproxy.cn/https://raw.githubusercontent.com/YevolcXhb/mini-panel/main/install.sh" -o /tmp/install.sh && bash /tmp/install.sh
+```
+
+```bash
+# 备选2：ghps.cc 镜像
+curl -fsSL "https://ghps.cc/https://raw.githubusercontent.com/YevolcXhb/mini-panel/main/install.sh" -o /tmp/install.sh && bash /tmp/install.sh
+```
+
+```bash
+# 备选3：手动下载（镜像全挂时的兜底）
+# 浏览器打开 https://github.com/YevolcXhb/mini-panel/releases 下载对应架构的
+# minipanel-<版本>-linux-<架构>.tar.gz，解压后执行包内自带的 install.sh 即可
+# （release 包内已包含 install.sh，见 scripts/release.sh:36 和 .github/workflows/release.yml:126）
+```
+
+<details>
+<summary>网络畅通环境（GitHub 直连）</summary>
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/YevolcXhb/mini-panel/main/install.sh" | bash
+```
+
+</details>
 
 ### 从源码构建
 

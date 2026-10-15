@@ -1,6 +1,9 @@
 package service
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestCompareSemver(t *testing.T) {
 	cases := []struct {
@@ -24,8 +27,7 @@ func TestCompareSemver(t *testing.T) {
 	}
 }
 
-// TestParseSemverNonNumeric 保证带后缀的版本号（如 7.1.0-beta）按数字前缀解析，
-// 不会 panic 也不会把整体当成 0。
+// TestParseSemverNonNumeric ensures suffixed versions (e.g. 7.1.0-beta) parse by numeric prefix; no panic, not all-zero.
 func TestParseSemverNonNumeric(t *testing.T) {
 	if got := parseSemver("7.1.0-beta"); got != [3]int{7, 1, 0} {
 		t.Errorf("parseSemver(7.1.0-beta) = %v, want [7 1 0]", got)
@@ -35,15 +37,44 @@ func TestParseSemverNonNumeric(t *testing.T) {
 	}
 }
 
-// TestRunningInstallDir 返回的是可执行文件所在目录；测试二进制目录非空即可，
-// 关键是绝不返回空串（否则 install.sh 会退回默认 /opt/minipanel）。
+// TestRunningInstallDir returns the executable's directory; must never be empty, or install.sh would fall back to /opt/minipanel.
 func TestRunningInstallDir(t *testing.T) {
 	dir := runningInstallDir()
 	if dir == "" {
 		t.Fatal("runningInstallDir() returned empty string")
 	}
 	if dir == "/opt/minipanel" {
-		// 只有在 os.Executable 失败时才会走这个回退；测试进程下不应发生
+		// only reached when os.Executable fails; should not happen in tests
 		t.Logf("runningInstallDir() fell back to %q (os.Executable unavailable)", dir)
+	}
+}
+
+// TestRawURLCandidates 锁定候选 URL 的结构：官方 raw 直连必须在首位，
+// 后面依次是 install.sh download_with_fallback 同款的三个国内镜像。
+// 顺序是行为契约——首位直连保证海外/正常网络零镜像依赖，镜像只做兜底。
+func TestRawURLCandidates(t *testing.T) {
+	got := rawURLCandidates("install.sh")
+	wantPrefixes := []string{
+		"https://raw.githubusercontent.com/",
+		"https://gh-proxy.com/",
+		"https://ghproxy.cn/",
+		"https://ghps.cc/",
+	}
+	if len(got) != len(wantPrefixes) {
+		t.Fatalf("got %d candidates, want %d: %v", len(got), len(wantPrefixes), got)
+	}
+	for i, prefix := range wantPrefixes {
+		if !strings.HasPrefix(got[i], prefix) {
+			t.Errorf("candidate[%d] = %q, want prefix %q", i, got[i], prefix)
+		}
+	}
+	if !strings.HasSuffix(got[0], "/YevolcXhb/mini-panel/main/install.sh") {
+		t.Errorf("official URL wrong: %q", got[0])
+	}
+	// 镜像 URL 必须是 "https://mirror/" + 完整官方 URL 的拼接格式
+	for _, i := range []int{1, 2, 3} {
+		if !strings.HasPrefix(got[i], wantPrefixes[i]+wantPrefixes[0]) {
+			t.Errorf("mirror candidate[%d] should embed full official URL: %q", i, got[i])
+		}
 	}
 }
