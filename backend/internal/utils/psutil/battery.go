@@ -241,13 +241,39 @@ type systemPower struct {
 func readSystemPower(dir string, info *BatteryInfo, microUnit bool) (systemPower, bool) {
 	usbDir := siblingSupplyDir(dir, "usb")
 
-	// 1) 优先读 usb 输入侧功率
+	// 1) usb 输入侧：优先用 V × I 自算，power_now 只作交叉校验。
+	//
+	// 为什么不信 usb/power_now：本机实测它有多级缓存，刷新不规律，
+	// 会出现 5.2V × 62.5mA 却报 13mW 这种明显不自洽的值（应为 325mW）。
+	// 而 voltage_now × current_now 在同一时刻是自洽的：
+	//   空闲 5.19V × 35mA ≈ 0.18W
+	//   满载 5.08V × 380mA ≈ 1.93W
+	// 所以 V×I 是主路径，power_now 仅在被 V×I 判为无效时兜底。
+	//
+	// 单位必须按 usb 自己的 voltage_now 判断，不能沿用 battery 的 ——
+	// 两者是不同口径（本机 battery 报 mV 而 usb 报 µV）。
+	//
+	// 另外要区分两个测量点，不能混淆：
+	//   usb/voltage_now     = 适配器进线电压（约 5.2V，经过充电 IC 之前）
+	//   battery/voltage_now = 电芯电压（约 4.28V，充电 IC 降压之后）
+	// 算整机从适配器取电要用前者。
 	var usbWatts float64
-	var hasUSB bool
+	hasUSB := false
+	usbSrc := PowerSourceVI
 	if usbDir != "" {
-		if v, ok := readPowerDebounced(usbDir, microUnit); ok && v.watts > 0 {
+		usbMicro := powerUnitIsMicro(usbDir)
+		usbSource := PowerSourceVI
+		if w, ok := usbVI(usbDir, usbMicro); ok && w > 0 {
+			usbWatts = w
+			hasUSB = true
+		} else if v, ok := readPowerDebounced(usbDir, usbMicro); ok && v.watts > 0 {
+			// V×I 拿不到（电流长期为 0）时才退回 power_now
 			usbWatts = v.watts
 			hasUSB = true
+			usbSource = PowerSourceDriver
+		}
+		if hasUSB {
+			usbSrc = usbSource
 		}
 	}
 
@@ -259,14 +285,17 @@ func readSystemPower(dir string, info *BatteryInfo, microUnit bool) (systemPower
 			batteryDischarge = math.Abs(info.VoltageV * info.CurrentMA / 1000)
 		}
 		total := usbWatts
-		detail := "USB 输入侧"
+		detail := "USB 输入侧（V×I）"
+		if usbSrc == PowerSourceDriver {
+			detail = "USB 输入侧（驱动）"
+		}
 		if batteryDischarge > 0.001 {
 			total += batteryDischarge
 			detail = "USB 输入 + 电池放电"
 		}
 		return systemPower{
 			watts:  total,
-			source: PowerSourceDriver,
+			source: usbSrc,
 			sign:   PowerSignCharge,
 			detail: detail,
 		}, true
@@ -312,6 +341,48 @@ func readSystemPower(dir string, info *BatteryInfo, microUnit bool) (systemPower
 		}, true
 	}
 	return systemPower{}, false
+}
+
+// usbVI 用 usb 节点的 voltage_now × current_now 算输入功率（W）。
+//
+// 单位：内核规范是 µV / µA，相乘后除以 1e12 得 W；
+// 厂商降级成 mV / mA 时除以 1e6。microUnit 指示是否用微单位。
+//
+// 两个属性都必须先去抖再相乘。实测 usb/current_now 在 0 与数十 mA 之间跳，
+// 直接成对相乘会得到大量 0W 假读数（电流为 0 时乘积恒为 0）。
+// 因此分别取电压与电流的中位数，再相乘 —— 这样某一项偶发为 0 不会污染结果。
+func usbVI(usbDir string, microUnit bool) (float64, bool) {
+	const samples = 9
+
+	voltages := make([]float64, 0, samples)
+	currents := make([]float64, 0, samples)
+
+	for i := 0; i < samples; i++ {
+		if v, ok := readBatteryFloat(usbDir, "voltage_now"); ok && v > 0 {
+			voltages = append(voltages, v)
+		}
+		if c, ok := readBatteryFloat(usbDir, "current_now"); ok && c != 0 {
+			// 取绝对值：输入侧电流方向对"取了多少电"没有意义
+			currents = append(currents, math.Abs(c))
+		}
+	}
+	if len(voltages) == 0 || len(currents) == 0 {
+		return 0, false
+	}
+
+	sort.Float64s(voltages)
+	sort.Float64s(currents)
+	v := voltages[len(voltages)/2]
+	c := currents[len(currents)/2]
+
+	if c == 0 {
+		return 0, false
+	}
+
+	if microUnit {
+		return v * c / 1e12, true // µV × µA → W
+	}
+	return v * c / 1e6, true // mV × mA → W
 }
 
 // siblingSupplyDir 返回同级的另一个 power_supply 设备目录。
