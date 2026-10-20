@@ -25,7 +25,11 @@ type BatteryInfo struct {
 	Technology    string  `json:"technology"`      // 电池技术（Li-poly 等）
 	ChargeNowMAh  float64 `json:"charge_now_mah"`  // 当前电荷（mAh）
 	ChargeFullMAh float64 `json:"charge_full_mah"` // 满充电荷（mAh）
-	CycleCount    int     `json:"cycle_count"`     // 循环次数
+	// ChargeNowEstimated 为 true 表示 charge_now_mah 是按 capacity 百分比
+	// 推算出来的，而不是电量计的直接读数。仅在电量计不可信时置位
+	// （直供形态 charge_now=0，或读数超过满电容量）。
+	ChargeNowEstimated bool `json:"charge_now_estimated"`
+	CycleCount         int  `json:"cycle_count"` // 循环次数
 }
 
 // 功率来源常量

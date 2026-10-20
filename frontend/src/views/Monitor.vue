@@ -43,7 +43,9 @@
 	          <div class="battery-row"><span>{{ (battery.voltage_v || 0).toFixed(2) }} V</span><span>{{ Math.abs(battery.current_ma || 0).toFixed(1) }} mA</span></div>
 	          <div class="battery-row"><span>{{ (battery.temp_c || 0).toFixed(1) }} ℃</span><span v-if="battery.health">❤ {{ battery.health }}</span></div>
 	          <div v-if="battery.charge_full_mah > 0" class="battery-row">
-	            <span>{{ battery.charge_now_mah.toFixed(0) }} / {{ battery.charge_full_mah.toFixed(0) }} mAh</span>
+	            <span :title="chargeTitle">
+	              <span v-if="battery.charge_now_estimated" class="est-mark">≈</span>{{ battery.charge_now_mah.toFixed(0) }} / {{ battery.charge_full_mah.toFixed(0) }} mAh
+	            </span>
 	            <span v-if="battery.cycle_count > 0">{{ battery.cycle_count }} 循环</span>
 	          </div>
 	          <div class="progress-bar battery-bar">
@@ -155,6 +157,18 @@ const timeRange = ref(1440)
 	  const charging = (battery.value?.status || '').toLowerCase().includes('charging')
 	  if (charging) return '#81c995'
 	  return c > 50 ? '#00d26a' : c > 20 ? '#ffa726' : '#f28b82'
+	})
+
+	// 电量计读数不可信时（直供形态 charge_now=0，或读数超过满电容量），
+	// 后端会按 capacity 百分比推算剩余电量并置 charge_now_estimated。
+	// 这里给出说明，避免用户把推算值当成精确读数。
+	const chargeTitle = computed(() => {
+	  const b = battery.value
+	  if (!b) return ''
+	  if (b.charge_now_estimated) {
+	    return '电量计无有效读数（Type-C 直供时驱动不走充电流程），当前值按电量百分比推算'
+	  }
+	  return '电量计直接读数'
 	})
 
 	// 功耗来源标签：驱动直读 / V×I 计算 / 电量变化率估算
@@ -385,6 +399,8 @@ async function loadNetInfo() {
 	}
 	/* 方向标识：放电向下（橙）、充电向上（绿），避免只看数字分不清充放电 */
 	.power-arrow { font-size: 12px; font-weight: 700; color: #ffa726; }
+	/* 推算值标记：提示这不是电量计的直接读数 */
+	.est-mark { color: #9aa0a6; margin-right: 1px; font-weight: 600; }
 	.power-arrow.charge { color: #81c995; }
 	.power-tag.discharge { background: rgba(255, 167, 38, 0.15); color: #ffa726; }
 	.power-tag.charge { background: rgba(129, 201, 149, 0.15); color: #81c995; }

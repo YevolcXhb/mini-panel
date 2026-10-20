@@ -128,8 +128,9 @@ func GetBatteryInfo() *BatteryInfo {
 		}
 		// 部分机型只用 batt_rm / batt_fcc（单位 mAh），同样按量级归一。
 		// 注意 charge_now 在 MTK 驱动里常是「电量计剩余电荷」，与满电设计容量
-		// 口径不同（本机 5193/4000），因此当 charge_full 缺失或 charge_now
-		// 明显超出 charge_full 时，改用 batt_rm/batt_fcc 这一对同口径值。
+		// 口径不同（本机实测 5168~5218 之间跳，而 charge_full 恒为 4000），
+		// 因此当 charge_full 缺失或 charge_now 明显超出 charge_full 时，
+		// 改用 batt_rm/batt_fcc 这一对同口径值。
 		rm, hasRM := readBatteryFloat(dir, "batt_rm")
 		fcc, hasFCC := readBatteryFloat(dir, "batt_fcc")
 		rmMAh := normalizeChargeByMagnitude(rm)
@@ -140,6 +141,31 @@ func GetBatteryInfo() *BatteryInfo {
 		if needPair && hasRM && hasFCC && rmMAh > 0 && fccMAh > 0 {
 			info.ChargeNowMAh = rmMAh
 			info.ChargeFullMAh = fccMAh
+		}
+
+		// 电量计读数缺失时的兜底。
+		//
+		// Type-C 小板直供的形态下，驱动不走充电流程，电量计可能返回
+		// charge_now=0 或停在某个旧值不动。此时界面显示 "0 / 4000 mAh"
+		// 会让人误以为电池空了 —— 实际是「没有读数」。
+		//
+		// 用 capacity（百分比）乘以满电容量推算剩余电量，并标记为推算值，
+		// 前端可据此显示约等号。capacity 由 BMS 维护，比 charge_now 可靠。
+		if info.ChargeFullMAh > 0 {
+			switch {
+			case info.ChargeNowMAh <= 0:
+				// 完全没有读数：按百分比推算
+				if info.Capacity > 0 {
+					info.ChargeNowMAh = info.ChargeFullMAh * float64(info.Capacity) / 100
+					info.ChargeNowEstimated = true
+				}
+			case info.ChargeNowMAh > info.ChargeFullMAh:
+				// 读数超过满电容量（电量计口径偏大）：按百分比推算更可信
+				if info.Capacity > 0 {
+					info.ChargeNowMAh = info.ChargeFullMAh * float64(info.Capacity) / 100
+					info.ChargeNowEstimated = true
+				}
+			}
 		}
 		if info.ChargeFullMAh <= 0 && info.ChargeNowMAh > 0 {
 			info.ChargeFullMAh = info.ChargeNowMAh
