@@ -128,7 +128,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { usePolling } from '../composables/usePolling'
 import { use } from 'echarts/core'
 	import { CanvasRenderer } from 'echarts/renderers'
 	import { LineChart, GaugeChart } from 'echarts/charts'
@@ -145,8 +146,7 @@ const timeRange = ref(1440)
 	const realtimeMetrics = ref<any>(null)
 	const battery = ref<any>(null)
 	const thermal = ref<any[]>([])
-	let timer: any
-	let realtimeTimer: any
+	let realtimeLoading = false
 
 	const batteryColor = computed(() => {
 	  const c = battery.value?.capacity ?? 0
@@ -310,6 +310,10 @@ async function loadNetInfo() {
 	}
 
 	async function loadRealtime() {
+	  // 互斥：/monitor/realtime 单次要 1.8 秒，5 秒间隔下若上一次未完成就跳过，
+	  // 否则请求会越堆越多形成自我拥塞
+	  if (realtimeLoading) return
+	  realtimeLoading = true
 	  try {
 	    const res: any = await monitorApi.realtime()
 	    const m = res.data
@@ -317,8 +321,17 @@ async function loadNetInfo() {
 	    cpuGaugeOption.value = buildGauge(parseFloat((m?.cpu_percent || 0).toFixed(1)), '#00d26a')
 	    memGaugeOption.value = buildGauge(parseFloat((m?.mem_percent || 0).toFixed(1)), '#4f8cff')
 	    diskGaugeOption.value = buildGauge(parseFloat((m?.disk_percent || 0).toFixed(1)), '#ffa726')
-	  } catch (e) {}
+	  } catch (e) {
+	  } finally {
+	    realtimeLoading = false
+	  }
 	}
+
+	// keep-alive 兼容：切走页面即停轮询，切回来恢复
+	const slowPolling = usePolling(() => {
+	  loadData(); loadNetInfo(); loadBattery(); loadThermal()
+	}, 60000)
+	const realtimePolling = usePolling(loadRealtime, 10000)
 
 	onMounted(() => {
 	  loadData()
@@ -326,13 +339,8 @@ async function loadNetInfo() {
 	  loadRealtime()
 	  loadBattery()
 	  loadThermal()
-	  timer = setInterval(() => { loadData(); loadNetInfo(); loadBattery(); loadThermal() }, 60000)
-	  realtimeTimer = setInterval(loadRealtime, 5000)
-	})
-
-	onUnmounted(() => {
-	  if (timer) clearInterval(timer)
-	  if (realtimeTimer) clearInterval(realtimeTimer)
+	  slowPolling.start()
+	  realtimePolling.start()
 	})
 </script>
 

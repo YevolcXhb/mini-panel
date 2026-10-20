@@ -31,6 +31,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { processApi } from '../api'
+import { usePolling } from '../composables/usePolling'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 // 窄屏移除操作列 sticky 固定，避免覆盖进程名列
@@ -42,7 +43,6 @@ function onMqlChange(e: MediaQueryListEvent) { isWide.value = e.matches }
 const processes = ref<any[]>([])
 const loading = ref(false)
 const search = ref('')
-let timer: any
 
 const filteredProcesses = computed(() => {
   if (!search.value) return processes.value
@@ -77,13 +77,16 @@ async function killProcess(pid: number, force: boolean) {
   } catch (e) {}
 }
 
+// keep-alive 兼容：切走页面即停轮询，切回来恢复（见 composables/usePolling.ts）
+const polling = usePolling(() => loadProcesses(false), 10000)
+
 onMounted(() => {
   loadProcesses(true)
-  timer = setInterval(() => loadProcesses(false), 10000)
+  polling.start()
   if (mql) mql.addEventListener('change', onMqlChange)
 })
 onUnmounted(() => {
-  clearInterval(timer)
+  polling.stop()
   if (mql) mql.removeEventListener('change', onMqlChange)
 })
 </script>

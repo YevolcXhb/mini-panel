@@ -28,7 +28,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import { usePolling } from '../composables/usePolling'
 import { Refresh } from '@element-plus/icons-vue'
 import { logApi } from '../api'
 
@@ -43,7 +44,6 @@ const entries = ref<LogEntry[]>([])
 const selectedLevels = ref<string[]>(JSON.parse(localStorage.getItem('logLevels') || '["info","warning","error","fatal"]'))
 const loading = ref(false)
 const logContainer = ref<HTMLDivElement>()
-let timer: ReturnType<typeof setInterval> | null = null
 
 const filteredEntries = computed(() => {
   const set = new Set(selectedLevels.value.map(v => v.toLowerCase()))
@@ -66,13 +66,12 @@ async function fetchLogs() {
   }
 }
 
+// keep-alive 兼容：切走页面即停轮询，切回来恢复（见 composables/usePolling.ts）
+const polling = usePolling(fetchLogs, 3000)
+
 onMounted(() => {
   fetchLogs()
-  timer = setInterval(fetchLogs, 3000)
-})
-
-onUnmounted(() => {
-  if (timer) clearInterval(timer)
+  polling.start()
 })
 
 watch(selectedLevels, (v) => {

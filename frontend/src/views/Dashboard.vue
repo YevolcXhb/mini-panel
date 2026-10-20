@@ -111,12 +111,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { dashboardApi } from '../api'
+import { usePolling } from '../composables/usePolling'
 
 const info = ref<any>({})
 const monitor = ref<any>({})
-let timer: any
+let loading = false
+let hostMode = ''
 
 const cpuPct = computed(() => {
   const v = monitor.value.cpu_usage || 0
@@ -166,18 +168,33 @@ function pctColor(p: number) {
 }
 
 async function loadData() {
+  // 互斥：上一轮还没回来就跳过，避免慢请求堆积
+  // （/dashboard/monitor 单次可达 700ms，叠压会形成自我拥塞）
+  if (loading) return
+  loading = true
   try {
     const res: any = await dashboardApi.getInfo()
     info.value = res.data || {}
-    const settingsRes: any = await (await import('../api')).settingApi.get()
-    const mode = settingsRes?.data?.load_host_mode || 'chroot'
-    const mon: any = await dashboardApi.getMonitor(mode)
+    // load_host_mode 很少变，只在首次拉取，避免每 5 秒重复请求 settings
+    if (!hostMode) {
+      const settingsRes: any = await (await import('../api')).settingApi.get()
+      hostMode = settingsRes?.data?.load_host_mode || 'chroot'
+    }
+    const mon: any = await dashboardApi.getMonitor(hostMode)
     monitor.value = mon.data || {}
-  } catch (e) {}
+  } catch (e) {
+  } finally {
+    loading = false
+  }
 }
 
-onMounted(() => { loadData(); timer = setInterval(loadData, 5000) })
-onUnmounted(() => clearInterval(timer))
+// keep-alive 兼容：页面切走时停轮询，切回来恢复（见 composables/usePolling.ts）
+const polling = usePolling(loadData, 5000)
+
+onMounted(() => {
+  loadData()
+  polling.start()
+})
 </script>
 
 <style scoped>
