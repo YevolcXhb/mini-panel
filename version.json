@@ -1,6 +1,6 @@
 {
-  "version": "7.2.1",
+  "version": "7.2.2",
   "url": "https://github.com/YevolcXhb/mini-panel/releases/latest",
-  "release_notes": "Mini Panel v7.2.1",
-  "install_sha256": "dd0bf61f25f6ddddf7b2ab1c5d8948a8dcfc102e0a9ee5cb46749d61b9162efa"
+  "release_notes": "Mini Panel v7.2.2：修复 CHROOT 真实根下温度传感器全部丢失（sysfs 符号链接枚举 bug），电池电压/电流/容量单位自适应 mV/mA/mAh，真机实测 14 个有效传感器读取正常",
+  "install_sha256": "88e6f755f2e92344bc498c85883be7726b0c49700532a51d3a50494abbd92160"
 }
