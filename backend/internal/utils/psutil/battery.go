@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // BatteryInfo 定义见 battery_info.go（无 build tag，跨平台共享）。
@@ -97,15 +99,10 @@ func GetBatteryInfo() *BatteryInfo {
 		if v, ok := readBatteryFloat(dir, "current_now"); ok {
 			info.CurrentMA = normalizeCurrent(v)
 		}
-		// 优先使用驱动原生 power_now；为空/0 时回退 V×I
-		// （该平台无 power_now 与 powercap，功耗只能由 V×I 计算，
-		//   current_now 在满电/空闲态为 0 属物理正常）
-		if p, ok := readBatteryFloat(dir, "power_now"); ok && p > 0 {
-			info.PowerW = p / 1e6
-		}
-		if info.PowerW == 0 && info.VoltageV > 0 && info.CurrentMA != 0 {
-			info.PowerW = math.Abs(info.VoltageV * info.CurrentMA / 1000)
-		}
+		// 外接电源在线状态：usb / ac / charger 任一 online=1 即视为接着充电器。
+		// 满电（status=Full）时 BMS 会断开充电回路，current_now 物理上就是 0，
+		// 这时候算不出功耗是正常的，需要在 UI 上如实说明而不是显示 0.00 W。
+		info.Charging = externalPowerOnline()
 		// temp: 0.1℃
 		if v, ok := readBatteryFloat(dir, "temp"); ok {
 			info.TempC = v / 10
@@ -122,6 +119,7 @@ func GetBatteryInfo() *BatteryInfo {
 		// 明显超出 charge_full 时，改用 batt_rm/batt_fcc 这一对同口径值。
 		rm, hasRM := readBatteryFloat(dir, "batt_rm")
 		fcc, hasFCC := readBatteryFloat(dir, "batt_fcc")
+		rawChargeMAh := info.ChargeNowMAh // 估算功耗必须用原始电量计读数
 		needPair := !hasFCC || info.ChargeFullMAh == 0 ||
 			(info.ChargeNowMAh > 0 && info.ChargeNowMAh > info.ChargeFullMAh*1.2)
 		if needPair && hasRM && hasFCC && rm > 0 && fcc > 0 {
@@ -134,9 +132,152 @@ func GetBatteryInfo() *BatteryInfo {
 		if v, ok := readBatteryFloat(dir, "cycle_count"); ok && v >= 0 {
 			info.CycleCount = int(v)
 		}
+
+		// 功耗三级取值：驱动功率节点 → V×I → mAh 变化率估算。
+		// 先试 power_now / power_avg 这类驱动直接暴露的功率属性。
+		info.PowerSource = PowerSourceNone
+		if p, ok := readBatteryFloat(dir, "power_now"); ok && p > 0 {
+			info.PowerW = normalizePowerMicro(p) // 规范为 µW
+			info.PowerSource = PowerSourceDriver
+		}
+		if info.PowerSource == PowerSourceNone {
+			if p, ok := readBatteryFloat(dir, "power_avg"); ok && p > 0 {
+				info.PowerW = normalizePowerMicro(p)
+				info.PowerSource = PowerSourceDriver
+			}
+		}
+		// V × I：驱动报的电流必须达到噪声门限才算真实电流。
+		// 本机满电时 current_now 会在 0 / ±2mA 之间抖动，2mA 折合 0.009W，
+		// 低于 5mA 一律视为电量计噪声，不当成有效功耗。
+		if info.PowerSource == PowerSourceNone && info.VoltageV > 0 && math.Abs(info.CurrentMA) >= currentNoiseFloorMA {
+			info.PowerW = math.Abs(info.VoltageV * info.CurrentMA / 1000)
+			info.PowerSource = PowerSourceVI
+		}
+		// 兜底估算：仅当电池确实在放电（未接外部电源）时才尝试。
+		// 满电/充电中 BMS 会断开或切换回路，charge_now 的跳变不代表放电，
+		// 这时给出估算值就是编造数据，宁可返回 none。
+		if info.PowerSource == PowerSourceNone && info.VoltageV > 0 && !info.Charging {
+			if w, ok := estimatePowerFromCharge(rawChargeMAh, info.VoltageV); ok {
+				info.PowerW = w
+				info.PowerSource = PowerSourceEstimate
+			}
+		}
 		return info
 	}
 	return info
+}
+
+// currentNoiseFloorMA 是电流噪声门限。低于这个值的 current_now 视为
+// 电量计抖动（本机实测满电时会出现 ±2mA），不参与功耗计算。
+const currentNoiseFloorMA = 5.0
+
+// externalPowerOnline 检查 usb / ac / charger 任一节点 online==1。
+// 这些节点与电池并列在 power_supply 下，路径同样要兼容 chroot 逃逸根。
+func externalPowerOnline() bool {
+	bases := []string{"/sys/class/power_supply"}
+	if root := androidHostRoot(); root != "" {
+		bases = append([]string{filepath.Join(root, "sys/class/power_supply")}, bases...)
+	}
+	for _, base := range bases {
+		for _, name := range []string{"usb", "ac", "charger", "dc"} {
+			if v, err := os.ReadFile(filepath.Join(base, name, "online")); err == nil {
+				if strings.TrimSpace(string(v)) == "1" {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// estimateTracker 保存电量计历史采样，用于估算功耗。
+//
+// 关键约束：MTK 的 charge_now 是整数 mAh，满电静置时会因校准在
+// 5206/5181 这类值之间**跳变**，直接用相邻两次差值除以间隔会算出
+// 十几瓦的假功率。因此估算必须满足三个条件才给值：
+//  1. 采样窗口足够长（≥60 秒），让量化误差 1mAh 摊薄到可接受的水平；
+//  2. 窗口内电量单调同向变化（连续下降或连续上升），跳变被排除；
+//  3. 算出的电流落在整机合理区间（20~8000mA），过大过小都丢弃。
+type estimateTracker struct {
+	mu      sync.Mutex
+	samples []estimateSample // 最近的采样点（时间升序）
+}
+
+type estimateSample struct {
+	atUnix int64
+	mAh    float64
+}
+
+const (
+	estimateWindowSec  = 60   // 采样窗口
+	estimateMaxSamples = 64   // 环形上限
+	estimateMinCurrent = 20.0 // 低于此电流视为静置/噪声
+	estimateMaxCurrent = 8000.0
+)
+
+var chargeEstimate = &estimateTracker{}
+
+// estimatePowerFromCharge 用长时间窗口内的电荷变化估算功耗。
+//
+// 原理：ΔQ(mAh) / Δt(h) = 平均电流 I(mA)，P = V × I / 1000。
+// 窗口内所有相邻差值必须同号（全部非正或全部非负），
+// 否则说明电量在来回跳，属于校准噪声，拒绝估算。
+func estimatePowerFromCharge(chargeMAh, voltageV float64) (float64, bool) {
+	if chargeMAh <= 0 || voltageV <= 0 {
+		return 0, false
+	}
+	now := time.Now().Unix()
+	t := chargeEstimate
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// 追加采样并裁掉超出窗口的旧点
+	t.samples = append(t.samples, estimateSample{atUnix: now, mAh: chargeMAh})
+	for len(t.samples) > estimateMaxSamples {
+		t.samples = t.samples[1:]
+	}
+	cut := 0
+	for i, s := range t.samples {
+		if now-s.atUnix <= estimateWindowSec {
+			cut = i
+			break
+		}
+	}
+	t.samples = t.samples[cut:]
+
+	first := t.samples[0]
+	last := t.samples[len(t.samples)-1]
+	span := last.atUnix - first.atUnix
+	if span < estimateWindowSec/2 {
+		return 0, false // 窗口还没攒够时长
+	}
+	// 单调性检查：窗口内每一步变化方向必须一致
+	dir := 0
+	for i := 1; i < len(t.samples); i++ {
+		d := t.samples[i].mAh - t.samples[i-1].mAh
+		if d == 0 {
+			continue
+		}
+		s := 1
+		if d < 0 {
+			s = -1
+		}
+		if dir == 0 {
+			dir = s
+		} else if dir != s {
+			return 0, false // 电量来回跳，校准噪声
+		}
+	}
+	if dir == 0 {
+		return 0, false // 整窗无变化
+	}
+	deltaMAh := math.Abs(last.mAh - first.mAh)
+	currentMA := deltaMAh / (float64(span) / 3600.0)
+	if currentMA < estimateMinCurrent || currentMA > estimateMaxCurrent {
+		return 0, false
+	}
+	return math.Abs(voltageV * currentMA / 1000), true
 }
 
 // normalizeVoltage 把 voltage_now 归一化为伏特。
@@ -168,4 +309,14 @@ func normalizeCharge(v float64) float64 {
 		return v / 1e3 // µAh
 	}
 	return v // mAh
+}
+
+// normalizePowerMicro 把 power_now/power_avg 归一化为瓦特。
+// 内核规范是 µW，但部分厂商驱动直接给 mW（量级差异 1000 倍）：
+// 手机整机功耗在 0.1~20W 之间，>100000 视为 µW，其余按 mW。
+func normalizePowerMicro(v float64) float64 {
+	if v > 100000 {
+		return v / 1e6 // µW
+	}
+	return v / 1e3 // mW
 }

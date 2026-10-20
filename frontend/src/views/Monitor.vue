@@ -30,8 +30,11 @@
 	          <div class="battery-pct" :style="{ color: batteryColor }">{{ battery.capacity }}<span class="battery-pct-sign">%</span></div>
 	          <div class="battery-row">
 	            <span>{{ battery.status || '-' }}</span>
-	            <span>
-	              <template v-if="battery.power_w > 0">{{ battery.power_w.toFixed(2) }} W</template>
+	            <span class="power-cell" :title="powerHint">
+	              <template v-if="battery.power_source !== 'none' && battery.power_w > 0">
+	                {{ battery.power_w.toFixed(2) }} W
+	                <span class="power-tag">{{ powerTag }}</span>
+	              </template>
 	              <template v-else>— W</template>
 	            </span>
 	          </div>
@@ -44,6 +47,7 @@
 	          <div class="progress-bar battery-bar">
 	            <div class="progress-fill" :style="{ width: battery.capacity + '%', background: batteryColor }"></div>
 	          </div>
+	          <div v-if="battery.power_source === 'none'" class="power-note">{{ powerHint }}</div>
 	        </template>
 	        <div v-else class="battery-na">
 	          未检测到电池
@@ -149,6 +153,27 @@ const timeRange = ref(1440)
 	  const charging = (battery.value?.status || '').toLowerCase().includes('charging')
 	  if (charging) return '#81c995'
 	  return c > 50 ? '#00d26a' : c > 20 ? '#ffa726' : '#f28b82'
+	})
+
+	// 功耗来源标签：驱动直读 / V×I 计算 / 电量变化率估算
+	const powerTag = computed(() => {
+	  const s = battery.value?.power_source
+	  if (s === 'driver') return ''
+	  if (s === 'vi') return 'V×I'
+	  if (s === 'estimate') return '估算'
+	  return ''
+	})
+
+	// 读不到功耗时的原因说明。满电静置时 BMS 断开充电回路，
+	// current_now 物理上就是 0，这不是故障。
+	const powerHint = computed(() => {
+	  const b = battery.value
+	  if (!b) return ''
+	  const st = (b.status || '').toLowerCase()
+	  if (st === 'full') return '满电静置，充电回路已断开，无电流可测'
+	  if (st === 'not charging') return '未充电状态，电池无电流输出'
+	  if (b.charging) return '已接外部电源，等待电流采样'
+	  return '本轮采样无电荷变化，稍后自动刷新'
 	})
 
 	function tempColor(t: number) {
@@ -340,6 +365,16 @@ async function loadNetInfo() {
 	}
 	.battery-row span { white-space: nowrap; }
 	.battery-bar { margin-top: 10px; }
+	.power-cell { display: inline-flex; align-items: center; gap: 4px; }
+	.power-tag {
+	  font-size: 10px; padding: 0 4px; border-radius: 3px;
+	  background: rgba(79, 140, 255, 0.15); color: #7aa7ff;
+	  font-weight: 500; line-height: 15px;
+	}
+	.power-note {
+	  margin-top: 8px; font-size: 11px; color: #6b7280;
+	  line-height: 1.4; text-align: left;
+	}
 	.battery-na { color: #888; font-size: 13px; padding: 24px 0; }
 	.thermal-row { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; font-size: 13px; gap: 8px; }
 	.thermal-type { color: #9aa0a6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; font-family: 'SF Mono', Consolas, monospace; }
