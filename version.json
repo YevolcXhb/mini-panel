@@ -1,6 +1,6 @@
 {
-  "version": "7.4.0",
+  "version": "7.4.1",
   "url": "https://github.com/YevolcXhb/mini-panel/releases/latest",
-  "release_notes": "Mini Panel v7.4.0",
+  "release_notes": "Mini Panel v7.4.1 - battery: auto-select power source by supply mode (usb.power_now vs battery.power_now)",
   "install_sha256": "dd0bf61f25f6ddddf7b2ab1c5d8948a8dcfc102e0a9ee5cb46749d61b9162efa"
 }
