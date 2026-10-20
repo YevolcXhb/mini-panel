@@ -33,6 +33,23 @@
     <div class="meter-grid">
       <div class="meter-card">
         <div class="meter-header">
+          <span>整机功耗</span>
+          <span class="meter-pct power-value" :title="powerHint">
+            <template v-if="powerAvg > 0">
+              <span v-if="powerSign === 'charge'" class="pw-arrow up">↑</span>
+              <span v-else-if="powerSign === 'discharge'" class="pw-arrow down">↓</span>
+              <span v-if="powerIsAveraged" class="pw-approx">≈</span>{{ powerAvg.toFixed(2) }}<span class="pw-unit">W</span>
+            </template>
+            <template v-else>— W</template>
+          </span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill power" :style="{ width: powerBarPct + '%', background: powerColor }"></div>
+        </div>
+        <div class="meter-detail">{{ powerDetail }}</div>
+      </div>
+      <div class="meter-card">
+        <div class="meter-header">
           <span>CPU 占用</span>
           <span class="meter-pct" :style="{ color: pctColor(cpuPct) }">{{ cpuPct }}%</span>
         </div>
@@ -120,6 +137,65 @@ const monitor = ref<any>({})
 let loading = false
 let hostMode = ''
 
+// ─── 整机功耗 ───
+//
+// 数据来自 /monitor/battery，后端按供电形态自动选源：
+//   usb.online=1 → usb 节点 V×I（适配器进线侧，≈ 整机取电）
+//   usb.online=0 → battery 节点
+// usb/current_now 零值率约 50%，所以这里再做一次 3 点滑动平均稳住显示。
+const battery = ref<any>(null)
+const POWER_AVG_WINDOW = 3
+const powerHistory = ref<number[]>([])
+
+function pushPowerSample(w: number) {
+  if (!(w > 0)) return
+  const arr = powerHistory.value
+  arr.push(w)
+  if (arr.length > POWER_AVG_WINDOW) arr.shift()
+}
+
+const powerAvg = computed(() => {
+  const arr = powerHistory.value
+  if (arr.length === 0) return 0
+  return arr.reduce((a, b) => a + b, 0) / arr.length
+})
+const powerIsAveraged = computed(() => powerHistory.value.length > 1)
+const powerSign = computed(() => battery.value?.power_sign || '')
+
+// 进度条刻度：2W 视为满格（本机实测满载约 2.0W），超出则按比例钳到 100%
+const powerBarPct = computed(() => {
+  const w = powerAvg.value
+  if (!(w > 0)) return 0
+  return Math.min(Math.round((w / 2) * 100), 100)
+})
+const powerColor = computed(() => {
+  const w = powerAvg.value
+  if (w >= 1.5) return 'var(--org)'   // 接近满载
+  if (w >= 0.8) return 'var(--blue)'  // 中等负载
+  return 'var(--grn)'                 // 空闲
+})
+const powerDetail = computed(() => {
+  const b = battery.value
+  if (!b?.present) return '未检测到电池'
+  if (!(powerAvg.value > 0)) {
+    return b.power_mode === 'usb' ? '外接供电，无有效读数' : '电池供电，无有效读数'
+  }
+  const parts: string[] = []
+  if (b.power_detail) parts.push(b.power_detail)
+  if (b.power_mode === 'usb') parts.push('适配器进线侧')
+  return parts.join(' · ')
+})
+const powerHint = computed(() => {
+  const b = battery.value
+  if (!b) return ''
+  const parts: string[] = []
+  if (b.voltage_v) parts.push(`${b.voltage_v.toFixed(2)}V`)
+  if (b.current_ma !== undefined) parts.push(`${Math.abs(b.current_ma).toFixed(1)}mA`)
+  if (b.power_detail) parts.push(b.power_detail)
+  if (powerIsAveraged.value) parts.push(`最近 ${powerHistory.value.length} 次读数的平均值`)
+  return parts.join(' · ')
+})
+
 const cpuPct = computed(() => {
   const v = monitor.value.cpu_usage || 0
   return Math.min(Math.round(v), 100)
@@ -182,6 +258,14 @@ async function loadData() {
     }
     const mon: any = await dashboardApi.getMonitor(hostMode)
     monitor.value = mon.data || {}
+    // 整机功耗：单独取 battery 接口，失败不影响其它卡片
+    try {
+      const bat: any = await (await import('../api')).monitorApi.battery()
+      battery.value = bat?.data || null
+      if (battery.value?.power_source && battery.value.power_source !== 'none') {
+        pushPowerSample(Number(battery.value.power_w) || 0)
+      }
+    } catch (e) {}
   } catch (e) {
   } finally {
     loading = false
@@ -200,6 +284,26 @@ onMounted(() => {
 <style scoped>
 .page-title { margin-bottom: 20px; }
 .section-title { margin-top: 24px; }
+
+/* ── 整机功耗卡片 ── */
+.power-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+}
+.pw-unit {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--dim);
+  margin-left: 1px;
+}
+.pw-arrow { font-size: 12px; font-weight: 700; }
+.pw-arrow.up { color: var(--grn); }
+.pw-arrow.down { color: var(--org); }
+/* 做过滑动平均时用 ≈ 提示，避免把平滑值当成瞬时精确值 */
+.pw-approx { color: var(--dim); font-weight: 600; margin-right: 1px; }
+
 
 /* ── 表格容器 ──
    关键：不要给 .el-table 设 min-width。设了 min-width，el-table 根节点就会
