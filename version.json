@@ -1,6 +1,6 @@
 {
   "version": "7.2.3",
   "url": "https://github.com/YevolcXhb/mini-panel/releases/latest",
-  "release_notes": "Mini Panel v7.2.3：仪表盘新增硬件监控（电池电量/电压/电流/功耗/温度、14 路温度传感器），修复 Android chroot 下温度传感器全部丢失与电池单位错乱；移动端监控页网络接口改为卡片列表、图表与时间选择器自适应",
-  "install_sha256": "82b07a880bd131d4180315648ffed3c4b4da8105c4e872e27aad0777b3060ae9"
+  "release_notes": "Mini Panel v7.2.3",
+  "install_sha256": "dd0bf61f25f6ddddf7b2ab1c5d8948a8dcfc102e0a9ee5cb46749d61b9162efa"
 }
