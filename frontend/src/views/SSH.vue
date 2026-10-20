@@ -10,6 +10,14 @@
         <div style="margin-top: 12px">
           <el-button size="small" @click="reconnect">🔄 重新连接</el-button>
         </div>
+        <el-alert
+          type="success"
+          show-icon
+          :closable="false"
+          style="margin-top: 12px"
+          title="代理已自动注入"
+          :description="proxyBanner"
+        />
       </el-tab-pane>
     </el-tabs>
   </div>
@@ -23,6 +31,8 @@ import 'xterm/css/xterm.css'
 
 const activeTab = ref('terminal')
 const terminalRef = ref<HTMLElement>()
+const proxyHint = ref('')
+const proxyBanner = ref('终端会话启动时会自动继承面板「设置 → 网络」里的代理配置，curl / wget / git / apt 无需手动 export。')
 let term: Terminal
 let ws: WebSocket
 let fitAddon: FitAddon
@@ -59,6 +69,29 @@ function doFit() {
   sendResize()
 }
 
+// 读取面板当前代理配置，用于终端连接成功后的提示行。
+// 只在连接时拉一次：配置变更后重开终端即可生效。
+async function loadProxyHint() {
+  try {
+    const token = localStorage.getItem('token') || ''
+    const res = await fetch('/api/v1/terminal/proxy-env', {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    const text = (await res.text()).trim()
+    if (!text || text.startsWith('#') || text.startsWith('unset')) {
+      proxyHint.value = '未启用代理，终端直连'
+      proxyBanner.value = '当前未启用出站代理，终端为直连模式。在「设置 → 网络」开启代理后重开终端即可自动继承。'
+      return
+    }
+    const m = text.match(/https?_proxy='([^']+)'/)
+    const addr = m ? m[1] : ''
+    proxyHint.value = addr ? `已继承代理 ${addr}` : '已继承代理配置'
+    proxyBanner.value = `终端已自动继承代理 ${addr}，curl / wget / git / apt 将直接走代理。修改代理后执行 eval "$(proxy-on)" 或重连终端刷新。`
+  } catch {
+    proxyHint.value = ''
+  }
+}
+
 function initTerminal() {
   if (term) {
     term.dispose()
@@ -87,6 +120,8 @@ function initTerminal() {
   ws.onopen = () => {
     ws.send(JSON.stringify({ type: 'auth', token }))
     term.writeln('\x1b[32m[mini-panel terminal connected]\x1b[0m')
+    // 提示当前代理继承情况，避免用户以为 curl 没走代理是配置没生效
+    if (proxyHint.value) term.writeln(`\x1b[90m[${proxyHint.value}]\x1b[0m`)
     sendResize()
   }
 
@@ -121,8 +156,9 @@ function initTerminal() {
   })
 }
 
-function reconnect() {
+async function reconnect() {
   if (ws) ws.close()
+  await loadProxyHint()
   initTerminal()
 }
 
@@ -139,6 +175,7 @@ watch(activeTab, (v) => {
 })
 
 onMounted(() => {
+  loadProxyHint()
   if (activeTab.value === 'terminal') {
     initTerminal()
   }

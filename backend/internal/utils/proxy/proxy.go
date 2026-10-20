@@ -82,6 +82,13 @@ func (m *Manager) Apply(c *Config) error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
+	// 先登记配置再探测：探测失败只意味着出站 HTTP 不切换，
+	// 但终端环境变量仍应反映用户保存的配置。
+	m.SetConfig(c)
+	if !c.Enabled {
+		// 关闭代理时也要清掉记录的配置，否则终端仍会继承旧代理
+		lastConfig.Store(&Config{})
+	}
 	client := &http.Client{Timeout: 30 * time.Second}
 	if c.Enabled {
 		pu, err := c.ProxyURL()
@@ -146,4 +153,99 @@ func OutboundHTTPClient() *http.Client {
 // Current 读取当前配置（用于回显）
 func (m *Manager) Current() *http.Client {
 	return m.current.Load().(*http.Client)
+}
+
+// lastConfig 保存最近一次成功 Apply 的配置，供终端等需要环境变量的场景读取。
+// 与 HTTP 客户端分开存储：Client 只需 Transport，终端需要的是 host:port 原文。
+var lastConfig atomic.Value // *Config
+
+// SetConfig 记录当前生效配置（由 Apply 内部调用，也允许启动时直接回填）。
+func (m *Manager) SetConfig(c *Config) {
+	if c == nil {
+		return
+	}
+	cp := *c
+	lastConfig.Store(&cp)
+}
+
+// ActiveConfig 返回最近生效的代理配置，未配置时返回 nil。
+func ActiveConfig() *Config {
+	if v := lastConfig.Load(); v != nil {
+		return v.(*Config)
+	}
+	return nil
+}
+
+// IsEnabled 报告当前是否配置了可用的出站代理。
+func IsEnabled() bool {
+	c := ActiveConfig()
+	return c != nil && c.Enabled && strings.TrimSpace(c.Host) != ""
+}
+
+// EnvVars 生成代理相关的环境变量（小写 + 大写全套）。
+//
+// 为什么全给：curl/wget 认小写 http_proxy 也认大写，Go 程序（含本面板自身）
+// 认大写 HTTPS_PROXY，apt 认 Acquire:: 配置但也读环境变量，git 两套都读。
+// 只设一套会漏掉一半工具，所以 4 个变量全写，另加 ALL_PROXY 覆盖非 HTTP 场景。
+func (c *Config) EnvVars() map[string]string {
+	if c == nil || !c.Enabled || strings.TrimSpace(c.Host) == "" {
+		return nil
+	}
+	scheme := strings.ToLower(strings.TrimSpace(c.Type))
+	if scheme != "http" && scheme != "socks5" {
+		scheme = "http"
+	}
+	var hostport string
+	if c.Username != "" {
+		hostport = fmt.Sprintf("%s:%s@%s:%d",
+			url.QueryEscape(c.Username), url.QueryEscape(c.Password), c.Host, c.Port)
+	} else {
+		hostport = fmt.Sprintf("%s:%d", c.Host, c.Port)
+	}
+	p := fmt.Sprintf("%s://%s", scheme, hostport)
+
+	env := map[string]string{
+		"http_proxy":  p,
+		"https_proxy": p,
+		"HTTP_PROXY":  p,
+		"HTTPS_PROXY": p,
+		"all_proxy":   p,
+		"ALL_PROXY":   p,
+	}
+	if np := strings.TrimSpace(c.NoProxy); np != "" {
+		env["no_proxy"] = np
+		env["NO_PROXY"] = np
+	} else {
+		// 默认让本机地址直连：proxy-on 自身要回连 127.0.0.1 的面板接口，
+		// 若把 loopback 也送进代理，脚本永远拿不到配置。
+		env["no_proxy"] = defaultNoProxy
+		env["NO_PROXY"] = defaultNoProxy
+	}
+	return env
+}
+
+// defaultNoProxy 是未显式配置直连例外时使用的默认值。
+const defaultNoProxy = "localhost,127.0.0.1,::1"
+
+// ShellExports 生成可直接 source 的 shell 脚本片段（含 unset 兜底）。
+// 即便终端环境已注入，用户中途改配置后也能用 `eval "$(panel-proxy)"` 之类的方式刷新。
+func (c *Config) ShellExports() string {
+	env := c.EnvVars()
+	if len(env) == 0 {
+		keys := []string{"http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY", "no_proxy", "NO_PROXY"}
+		lines := make([]string, 0, len(keys))
+		for _, k := range keys {
+			lines = append(lines, "unset "+k)
+		}
+		return strings.Join(lines, "\n")
+	}
+	// 固定顺序，便于 diff 和阅读
+	order := []string{"http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY", "no_proxy", "NO_PROXY"}
+	lines := make([]string, 0, len(order))
+	for _, k := range order {
+		if v, ok := env[k]; ok {
+			lines = append(lines, fmt.Sprintf("export %s='%s'", k, strings.ReplaceAll(v, "'", `'\''`)))
+		}
+	}
+	return strings.Join(lines, "\n")
 }

@@ -61,7 +61,7 @@ func newPTYSession(id string, conn *websocket.Conn, shell string, ptmx *os.File)
 
 	cmd := exec.Command(shell)
 	cmd.Dir = getHomeDir()
-	cmd.Env = append(os.Environ(), "TERM=xterm")
+	cmd.Env = buildShellEnv()
 	cmd.Stdin = pts
 	cmd.Stdout = pts
 	cmd.Stderr = pts

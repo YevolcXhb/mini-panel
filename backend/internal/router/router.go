@@ -81,6 +81,7 @@ func NewRouter() *gin.Engine {
 		// WebSocket 浏览器握手无法携带 Authorization 头，
 		// 因此该路由不经过 AuthMiddleware，改为在 HandleWS 内通过首条消息鉴权并校验 /ssh 权限。
 		r.GET("/api/v1/terminal/ws", term.HandleWS)
+		apiV1.GET("/terminal/proxy-env", middleware.PermissionMiddleware("/ssh"), term.ProxyEnv)
 
 		proc := api.NewProcessAPI()
 		apiV1.GET("/processes", middleware.PermissionMiddleware("/processes"), proc.List)

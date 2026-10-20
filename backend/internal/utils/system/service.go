@@ -3,6 +3,7 @@ package system
 import (
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -171,48 +172,107 @@ func GetAllServices() map[string]ServiceStatus {
 	}
 }
 
+// InstallService 通过系统包管理器安装服务。
+//
+// 三个曾经踩过的坑在这里一并修掉：
+//  1. 不先 apt-get update 就 install，软件源索引过期时所有包都会 404 ——
+//     报错只有一句 "exit status 100"，看不出是索引问题。
+//  2. Stdout/Stderr 设为 nil 等于丢弃全部输出，失败时用户只拿到退出码。
+//  3. 非交互环境下 dpkg 会卡在配置对话框；chroot 里没有 tty，必须显式
+//     设 DEBIAN_FRONTEND=noninteractive。
 func InstallService(name string) error {
 	if runtime.GOOS != "linux" {
 		return fmt.Errorf("service installation is only supported on Linux")
 	}
 
-	var installCmd *exec.Cmd
+	var pkg string
 	switch name {
 	case "nginx":
-		if cmd.Which("apt-get") {
-			installCmd = exec.Command("apt-get", "install", "-y", "nginx")
-		} else if cmd.Which("yum") {
-			installCmd = exec.Command("yum", "install", "-y", "nginx")
-		} else if cmd.Which("dnf") {
-			installCmd = exec.Command("dnf", "install", "-y", "nginx")
-		}
+		pkg = "nginx"
 	case "mysql", "mariadb":
-		if cmd.Which("apt-get") {
-			installCmd = exec.Command("apt-get", "install", "-y", "mariadb-server")
-		} else if cmd.Which("yum") {
-			installCmd = exec.Command("yum", "install", "-y", "mariadb-server")
-		} else if cmd.Which("dnf") {
-			installCmd = exec.Command("dnf", "install", "-y", "mariadb-server")
-		}
+		pkg = "mariadb-server"
 	case "sqlite":
-		if cmd.Which("apt-get") {
-			installCmd = exec.Command("apt-get", "install", "-y", "sqlite3")
-		} else if cmd.Which("yum") {
-			installCmd = exec.Command("yum", "install", "-y", "sqlite")
-		} else if cmd.Which("dnf") {
-			installCmd = exec.Command("dnf", "install", "-y", "sqlite")
-		}
+		pkg = "sqlite3"
 	default:
 		return fmt.Errorf("unsupported service: %s", name)
 	}
 
-	if installCmd == nil {
-		return fmt.Errorf("unsupported package manager, please install %s manually", name)
+	// 选包管理器，同时拿到非交互环境所需的命令前缀。
+	var (
+		pm    string
+		extra map[string]string
+	)
+	switch {
+	case cmd.Which("apt-get"):
+		pm = "apt-get"
+		extra = map[string]string{"DEBIAN_FRONTEND": "noninteractive"}
+	case cmd.Which("dnf"):
+		pm = "dnf"
+	case cmd.Which("yum"):
+		pm = "yum"
+	case cmd.Which("apk"):
+		pm = "apk"
+	default:
+		return fmt.Errorf("unsupported package manager, please install %s manually", pkg)
 	}
 
-	installCmd.Stdout = nil
-	installCmd.Stderr = nil
-	return installCmd.Run()
+	// apt 系必须先刷新索引，否则过期索引直接 404。
+	if pm == "apt-get" {
+		update := exec.Command("apt-get", "update")
+		update.Env = mergeEnv(os.Environ(), extra)
+		if out, err := update.CombinedOutput(); err != nil {
+			return fmt.Errorf("apt-get update failed: %s", tailLines(string(out), 5))
+		}
+	}
+
+	var installCmd *exec.Cmd
+	switch pm {
+	case "apt-get":
+		installCmd = exec.Command("apt-get", "install", "-y", "--fix-missing", pkg)
+	case "apk":
+		installCmd = exec.Command("apk", "add", pkg)
+	default:
+		installCmd = exec.Command(pm, "install", "-y", pkg)
+	}
+	installCmd.Env = mergeEnv(os.Environ(), extra)
+
+	out, err := installCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("install %s failed: %s", pkg, tailLines(string(out), 8))
+	}
+	return nil
+}
+
+// mergeEnv 在给定的环境变量基础上叠加覆盖项。
+func mergeEnv(base []string, extra map[string]string) []string {
+	if len(extra) == 0 {
+		return base
+	}
+	out := make([]string, 0, len(base)+len(extra))
+	for _, kv := range base {
+		k := kv
+		if i := strings.IndexByte(kv, '='); i > 0 {
+			k = kv[:i]
+		}
+		if _, override := extra[k]; override {
+			continue
+		}
+		out = append(out, kv)
+	}
+	for k, v := range extra {
+		out = append(out, k+"="+v)
+	}
+	return out
+}
+
+// tailLines 取输出的最后 n 行。包管理器的报错在末尾，前面的下载过程
+// 塞进错误信息里没有价值。
+func tailLines(s string, n int) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.TrimSpace(strings.Join(lines, " | "))
 }
 
 func StartService(name string) error {

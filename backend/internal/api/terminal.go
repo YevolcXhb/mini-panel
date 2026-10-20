@@ -14,6 +14,7 @@ import (
 	"github.com/minipanel/minipanel/internal/global"
 	"github.com/minipanel/minipanel/internal/permission"
 	"github.com/minipanel/minipanel/internal/service"
+	"github.com/minipanel/minipanel/internal/utils/proxy"
 )
 
 var upgrader = websocket.Upgrader{
@@ -34,6 +35,22 @@ type TerminalAPI struct{}
 
 func NewTerminalAPI() *TerminalAPI {
 	return &TerminalAPI{}
+}
+
+// ProxyEnv 返回当前生效的代理导出的 shell 脚本。
+//
+// 用途：终端会话在创建时注入代理环境变量，中途在设置里改了代理不会影响
+// 已经打开的会话。用户在终端里执行
+//
+//	eval "$(proxy-on)"
+//
+// 就能把当前配置重新应用到这个 shell（以及它之后启动的子进程）。
+// 关闭代理时返回的是 unset 序列，同样可 eval。
+func (a *TerminalAPI) ProxyEnv(c *gin.Context) {
+	cfg := proxy.ActiveConfig()
+	c.Header("Content-Type", "text/plain; charset=utf-8")
+	c.Header("Cache-Control", "no-store")
+	c.String(http.StatusOK, cfg.ShellExports()+"\n")
 }
 
 func (a *TerminalAPI) HandleWS(c *gin.Context) {

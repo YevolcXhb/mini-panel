@@ -7,10 +7,15 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/gorilla/websocket"
+	"github.com/minipanel/minipanel/internal/global"
+	"github.com/minipanel/minipanel/internal/middleware"
+	"github.com/minipanel/minipanel/internal/utils/proxy"
 )
 
 type TerminalSession struct {
@@ -156,10 +161,123 @@ func getHomeDir() string {
 	return "/"
 }
 
+// proxyEnvKeys 是需要先清理再注入的代理变量名，避免面板进程残留的旧值叠加。
+var proxyEnvKeys = []string{
+	"http_proxy", "https_proxy", "all_proxy", "no_proxy",
+	"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+}
+
+func stripEnvKeys(env []string, keys ...string) []string {
+	drop := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		drop[k] = struct{}{}
+	}
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		name := kv
+		if i := strings.IndexByte(kv, '='); i > 0 {
+			name = kv[:i]
+		}
+		if _, bad := drop[name]; bad {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
+// buildShellEnv 组装终端子进程的环境变量。
+//
+// 代理是面板的核心增值点：用户在「设置 → 网络」配好代理后，Web 终端里的
+// curl / wget / git / apt / pip 应自动走代理，不必手动 export。
+// 只在会话创建时读取一次 —— 中途改配置需要重开终端，或按提示执行
+// `eval "$(proxy-on)"`，这样已经在跑的长任务不会被环境突变影响。
+func buildShellEnv() []string {
+	if proxy.IsEnabled() {
+		installProxyHelper()
+	}
+
+	env := stripEnvKeys(os.Environ(), proxyEnvKeys...)
+	env = append(env, "TERM=xterm-256color")
+
+	if cfg := proxy.ActiveConfig(); cfg != nil {
+		for k, v := range cfg.EnvVars() {
+			env = append(env, k+"="+v)
+		}
+	}
+
+	// 把面板地址与令牌交给 shell，proxy-on 才能回连面板拉取最新配置。
+	// 令牌用本进程的 jwt_secret 现场签发，只存在于该 shell 的环境里，不落盘。
+	env = append(env, "PANEL_URL=http://127.0.0.1:"+panelPort())
+	if tok := panelToken(); tok != "" {
+		env = append(env, "PANEL_TOKEN="+tok)
+	}
+	return env
+}
+
+// panelPort 返回面板监听端口，未配置时回落 8888。
+func panelPort() string {
+	if global.CONF.Port > 0 {
+		return strconv.Itoa(global.CONF.Port)
+	}
+	return "8888"
+}
+
+// panelToken 为终端会话签发一个内部令牌，供 proxy-on 回连面板接口。
+//
+// 用当前进程的 jwt_secret 现场签发，24 小时过期，权限仅够读代理配置。
+func panelToken() string {
+	tok, err := middleware.GenerateToken("__terminal__", "admin", 0, []string{"/ssh"})
+	if err != nil {
+		return ""
+	}
+	return tok
+}
+
+// proxy-on 的可执行文件搜索目录，按优先级排列。
+// 家目录通常不在 PATH 中，所以优先写进 /usr/local/bin。
+var proxyHelperDirs = []string{
+	"/usr/local/bin",
+	"/usr/bin",
+	"/bin",
+	filepath.Join(getHomeDir(), ".local", "bin"),
+}
+
+// installProxyHelper 在 PATH 内写一个 proxy-on 脚本。
+//
+// 脚本本身不缓存配置，而是每次运行时向面板拉最新值，因此面板里改了代理
+// 之后，终端里执行 `eval "$(proxy-on)"` 即可就地生效。
+func installProxyHelper() {
+	port := "8888"
+	if global.CONF.Port > 0 {
+		port = strconv.Itoa(global.CONF.Port)
+	}
+	script := "#!/bin/sh\n" +
+		"# 由 Mini Panel 生成：输出当前代理配置的 export 语句。\n" +
+		"# 用法：eval \"$(proxy-on)\"\n" +
+		"if [ -z \"$PANEL_TOKEN\" ]; then\n" +
+		"  echo '# 未设置 PANEL_TOKEN，无法读取面板代理配置' >&2\n" +
+		"  exit 0\n" +
+		"fi\n" +
+		"# 回连面板必须绕开代理，否则请求会被发往代理服务器而不是本机。\n" +
+		"curl --noproxy '*' -sf \"http://127.0.0.1:" + port + "/api/v1/terminal/proxy-env\" \\\n" +
+		"  -H \"Authorization: Bearer ${PANEL_TOKEN}\" 2>/dev/null || \\\n" +
+		"  echo '# 面板未响应'\n"
+
+	for _, dir := range proxyHelperDirs {
+		if _, err := os.Stat(dir); err != nil {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(dir, "proxy-on"), []byte(script), 0o755); err == nil {
+			return
+		}
+	}
+}
+
 func newExecSession(id string, conn *websocket.Conn, shell string) (*TerminalSession, error) {
 	cmd := exec.Command(shell)
 	cmd.Dir = getHomeDir()
-	cmd.Env = append(os.Environ(), "TERM=xterm")
+	cmd.Env = buildShellEnv()
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -234,7 +352,7 @@ func (s *TerminalSession) writeLoop() {
 			if err != nil {
 				break
 			}
-			if msgType == websocket.TextMessage && s.handleControlMessage(data) {
+			if msgType == websocket.TextMessage && s.looksLikeControl(data) {
 				continue
 			}
 			writer.Write(data)
@@ -265,7 +383,7 @@ func (s *TerminalSession) writeLoop() {
 		if err != nil {
 			break
 		}
-		if msgType == websocket.TextMessage && s.handleControlMessage(data) {
+		if msgType == websocket.TextMessage && s.looksLikeControl(data) {
 			continue
 		}
 		for i := 0; i < len(data); i++ {
@@ -323,17 +441,27 @@ func (s *TerminalSession) writeLoop() {
 	s.Close()
 }
 
-// handleControlMessage 处理前端发来的控制消息（目前只有终端尺寸调整 resize）
-func (s *TerminalSession) handleControlMessage(data []byte) bool {
+// looksLikeControl 判断一帧是否是前端控制消息（resize 等）。
+//
+// 比 handleControlMessage 更宽：任何带 type 字段的 JSON 对象整帧都算控制消息。
+// 原因是浏览器在 ws.onopen 里发出的 {"type":"auth",token:"..."} 会在服务端
+// 读取鉴权帧前残留于连接缓冲，若被当成键盘输入写进 PTY，终端里会出现一串
+// 乱码。真正的键盘输入是原始字节流，不会恰好构成这种 JSON 结构。
+func (s *TerminalSession) looksLikeControl(data []byte) bool {
+	if len(data) == 0 || len(data) > 1024 {
+		return false
+	}
 	var msg struct {
 		Type string `json:"type"`
 		Cols int    `json:"cols"`
 		Rows int    `json:"rows"`
 	}
-	if err := json.Unmarshal(data, &msg); err != nil || msg.Type != "resize" {
+	if err := json.Unmarshal(data, &msg); err != nil || msg.Type == "" {
 		return false
 	}
-	s.Resize(msg.Cols, msg.Rows)
+	if msg.Type == "resize" {
+		s.Resize(msg.Cols, msg.Rows)
+	}
 	return true
 }
 
