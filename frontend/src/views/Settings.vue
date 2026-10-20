@@ -101,6 +101,52 @@
         </div>
       </el-tab-pane>
 
+      <!-- 网络代理 -->
+      <el-tab-pane label="🌐 网络" name="proxy">
+        <div class="tab-content">
+          <div class="section-header">
+            <h3>出站代理</h3>
+            <p>面板访问外网（如 GitHub 更新检查）时使用的代理，保存后立即生效，无需重启</p>
+          </div>
+          <div class="form-card">
+            <el-form label-width="120px" label-position="right">
+              <el-form-item label="启用代理">
+                <el-switch v-model="proxyForm.enabled" />
+                <span class="form-hint">关闭后所有出站请求恢复直连</span>
+              </el-form-item>
+              <template v-if="proxyForm.enabled">
+                <el-form-item label="代理类型">
+                  <el-radio-group v-model="proxyForm.type">
+                    <el-radio label="http">HTTP</el-radio>
+                    <el-radio label="socks5">SOCKS5</el-radio>
+                  </el-radio-group>
+                </el-form-item>
+                <el-form-item label="代理主机">
+                  <el-input v-model="proxyForm.host" placeholder="例如 127.0.0.1" style="width: 320px" />
+                </el-form-item>
+                <el-form-item label="代理端口">
+                  <el-input-number v-model="proxyForm.port" :min="1" :max="65535" controls-position="right" style="width: 160px" />
+                </el-form-item>
+                <el-form-item label="用户名">
+                  <el-input v-model="proxyForm.username" placeholder="无认证可留空" style="width: 320px" autocomplete="off" />
+                </el-form-item>
+                <el-form-item label="密码">
+                  <el-input v-model="proxyForm.password" type="password" placeholder="已保存时显示占位符" show-password style="width: 320px" autocomplete="new-password" />
+                </el-form-item>
+                <el-form-item label="直连例外">
+                  <el-input v-model="proxyForm.no_proxy" placeholder="例如 localhost,127.0.0.1,*.lan" style="width: 320px" />
+                  <div class="form-tip">逗号分隔，支持通配符域名（*.lan）；这些地址不走代理</div>
+                </el-form-item>
+              </template>
+            </el-form>
+          </div>
+
+          <div class="action-bar">
+            <el-button type="primary" :loading="proxySaving" @click="saveProxy">💾 保存并生效</el-button>
+          </div>
+        </div>
+      </el-tab-pane>
+
       <!-- 关于与更新 -->
       <el-tab-pane label="📦 关于" name="about">
         <div class="tab-content">
@@ -324,11 +370,70 @@ const updateProgressStatus = computed(() => {
   return undefined
 })
 
+// ===== 代理配置 =====
+const proxyForm = ref({
+  enabled: false,
+  type: 'http',
+  host: '',
+  port: 7890,
+  username: '',
+  password: '',
+  no_proxy: ''
+})
+const proxySaving = ref(false)
+
+function parseProxyFromSettings() {
+  const raw = settings.value['proxy_config']
+  if (!raw) return
+  try {
+    const c = typeof raw === 'string' ? JSON.parse(raw) : raw
+    proxyForm.value = {
+      enabled: !!c.enabled,
+      type: c.type || 'http',
+      host: c.host || '',
+      port: Number(c.port) || 7890,
+      username: c.username || '',
+      // 后端回传 ****** 占位，保持占位以避免误清空
+      password: c.password || '',
+      no_proxy: c.no_proxy || ''
+    }
+  } catch (e) {}
+}
+
+async function saveProxy() {
+  if (proxyForm.value.enabled) {
+    if (!proxyForm.value.host) {
+      ElMessage.warning('请填写代理主机')
+      return
+    }
+    if (!proxyForm.value.port || proxyForm.value.port < 1 || proxyForm.value.port > 65535) {
+      ElMessage.warning('代理端口无效')
+      return
+    }
+  }
+  proxySaving.value = true
+  try {
+    const payload = { ...proxyForm.value }
+    if (!payload.username) payload.password = ''
+    const res: any = await settingApi.updateProxy(payload)
+    if (res.code === 200) {
+      ElMessage.success('代理配置已保存并立即生效')
+    } else {
+      ElMessage.error(res.message || '保存失败（代理连通性测试未通过？）')
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '保存失败')
+  } finally {
+    proxySaving.value = false
+  }
+}
+
 // ===== 设置加载 =====
 async function loadSettings() {
   try {
     const res: any = await settingApi.get()
     settings.value = res.data || {}
+    parseProxyFromSettings()
     if (settings.value.theme) {
       themeStore.setTheme(settings.value.theme)
     }

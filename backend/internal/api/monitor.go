@@ -1,4 +1,4 @@
-﻿package api
+package api
 
 import (
 	"net/http"
@@ -34,4 +34,13 @@ func (a *MonitorAPI) List(c *gin.Context) {
 			return
 		}
 		c.JSON(http.StatusOK, dto.Response{Code: 200, Data: metrics})
+	}
+
+	func (a *MonitorAPI) GetBattery(c *gin.Context) {
+		b, err := a.service.GetBattery()
+		if err != nil {
+			c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, dto.Response{Code: 200, Data: b})
 	}

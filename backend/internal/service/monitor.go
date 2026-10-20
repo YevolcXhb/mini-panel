@@ -83,6 +83,11 @@ func (s *MonitorService) Cleanup(days int) error {
 		return global.DB.Where("recorded_at < ?", cutoff).Delete(&model.MonitorHistory{}).Error
 	}
 
+	// GetBattery 获取电池硬件信息（Android /sys/class/power_supply）
+	func (s *MonitorService) GetBattery() (*psutil.BatteryInfo, error) {
+		return psutil.GetBatteryInfo(), nil
+	}
+
 	// RealtimeMetrics 实时指标
 	type RealtimeMetrics struct {
 		CPUPercent   float64 `json:"cpu_percent"`

@@ -1,6 +1,17 @@
 <template>
   <div class="main-app" :class="{ collapsed: sidebarCollapsed }">
-    <aside class="sidebar">
+    <!-- 移动端顶栏 -->
+    <div class="mobile-topbar">
+      <el-button class="btn-theme" @click="mobileSidebarOpen = true" circle size="small">
+        <el-icon size="16"><Menu /></el-icon>
+      </el-button>
+      <span class="mobile-title">MiniPanel</span>
+    </div>
+    <!-- 移动端抽屉遮罩 -->
+    <transition name="fade">
+      <div v-if="mobileSidebarOpen" class="mobile-mask" @click="mobileSidebarOpen = false"></div>
+    </transition>
+    <aside class="sidebar" :class="{ 'mobile-open': mobileSidebarOpen }">
       <div class="sidebar-header">
         <span class="sidebar-logo">🍔</span>
         <span class="sidebar-title" style="background: var(--gemini-gradient-text); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">MiniPanel</span>
@@ -14,7 +25,7 @@
           :class="{ active: $route.path === item.path }"
         >
           <el-icon class="nav-icon" size="18"><component :is="item.icon" /></el-icon>
-          <span class="nav-text">{{ item.label }}</span>
+          <span class="nav-text" @click="mobileSidebarOpen = false">{{ item.label }}</span>
         </router-link>
       </nav>
       <div class="sidebar-footer">
@@ -43,18 +54,24 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
+import { watch } from 'vue'
 import {
   Odometer, Folder, Monitor, Cpu, Box, Shop, Timer, Document, Setting,
-  SwitchButton, Sunny, Moon, User
+  SwitchButton, Sunny, Moon, User, Menu
 } from '@element-plus/icons-vue'
 import { useAuthStore, useThemeStore } from '../store'
 import { authApi } from '../api'
 
 const router = useRouter()
+const route = useRoute()
 const auth = useAuthStore()
 const themeStore = useThemeStore()
 const sidebarCollapsed = ref(false)
+const mobileSidebarOpen = ref(false)
+
+// 路由切换后自动收起移动端抽屉
+watch(() => route.path, () => { mobileSidebarOpen.value = false })
 
 const allMenus = [
   { path: '/dashboard', label: '仪表盘', icon: Odometer },
@@ -210,4 +227,68 @@ function logout() {
   .nav-icon { width: auto; }
   .content { padding: 16px; }
 }
+
+/* ═══ Mobile: 抽屉式侧边栏 ═══ */
+.mobile-topbar {
+  display: none;
+}
+.mobile-mask {
+  display: none;
+}
+@media (max-width: 768px) {
+  .main-app {
+    position: relative;
+    flex-direction: column;
+  }
+  .mobile-topbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    background: var(--sb);
+    border-bottom: 1px solid var(--bdr);
+    position: sticky;
+    top: 0;
+    z-index: 30;
+  }
+  .mobile-title {
+    font-weight: 700;
+    font-size: 16px;
+    background: var(--gemini-gradient-text);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  /* 隐藏常驻侧栏，改为抽屉 */
+  .sidebar {
+    position: fixed;
+    left: 0; top: 0; bottom: 0;
+    z-index: 50;
+    width: 220px !important;
+    min-width: 220px !important;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    box-shadow: var(--shadow-lg);
+  }
+  .sidebar.mobile-open {
+    transform: translateX(0);
+  }
+  .sidebar .sidebar-title, .sidebar .nav-text { display: inline; }
+  .sidebar .sidebar-header { justify-content: flex-start; padding: 18px 16px; }
+  .sidebar .nav-item { justify-content: flex-start; padding: 11px 16px; margin: 1px 8px; }
+  .sidebar .nav-icon { width: 22px; }
+  .mobile-mask {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    z-index: 40;
+  }
+  .content {
+    padding: 14px;
+    /* 移动浏览器地址栏收起/展开时保持可见 */
+    min-height: 0;
+  }
+}
+.fade-enter-active, .fade-leave-active { transition: opacity 0.2s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 </style>

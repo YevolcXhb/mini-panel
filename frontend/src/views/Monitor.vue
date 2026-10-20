@@ -24,6 +24,23 @@
 	          <div style="font-size: 20px; font-weight: 600; color: #00d26a">{{ formatBytes(realtimeMetrics?.net_sent_speed) }}/s</div>
 	        </div>
 	      </div>
+	      <div class="info-card gauge-card battery-card">
+	        <div class="info-label">🔋 电池状态</div>
+	        <template v-if="battery?.present">
+	          <div class="battery-pct" :style="{ color: batteryColor }">{{ battery.capacity }}<span class="battery-pct-sign">%</span></div>
+	          <div class="battery-row"><span>{{ battery.status || '-' }}</span><span>{{ battery.power_w > 0 ? battery.power_w.toFixed(2) + ' W' : '-' }}</span></div>
+	          <div class="battery-row"><span>{{ battery.voltage_v.toFixed(2) }} V</span><span>{{ Math.abs(battery.current_ma).toFixed(0) }} mA</span></div>
+	          <div class="battery-row"><span>{{ battery.temp_c.toFixed(1) }} ℃</span><span v-if="battery.health">❤ {{ battery.health }}</span></div>
+	          <div v-if="battery.charge_full_mah > 0" class="battery-row">
+	            <span>{{ battery.charge_now_mah.toFixed(0) }} / {{ battery.charge_full_mah.toFixed(0) }} mAh</span>
+	            <span v-if="battery.cycle_count > 0">{{ battery.cycle_count }} 循环</span>
+	          </div>
+	          <div class="progress-bar battery-bar">
+	            <div class="progress-fill" :style="{ width: battery.capacity + '%', background: batteryColor }"></div>
+	          </div>
+	        </template>
+	        <div v-else class="battery-na">未检测到电池</div>
+	      </div>
 	    </div>
 
 	    <div style="margin-bottom:16px;display:flex;gap:8px;align-items:center">
@@ -73,7 +90,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { use } from 'echarts/core'
 	import { CanvasRenderer } from 'echarts/renderers'
 	import { LineChart, GaugeChart } from 'echarts/charts'
@@ -88,8 +105,23 @@ const timeRange = ref(1440)
 	const history = ref<any[]>([])
 	const netInfo = ref<any[]>([])
 	const realtimeMetrics = ref<any>(null)
+	const battery = ref<any>(null)
 	let timer: any
 	let realtimeTimer: any
+
+	const batteryColor = computed(() => {
+	  const c = battery.value?.capacity ?? 0
+	  const charging = (battery.value?.status || '').toLowerCase().includes('charging')
+	  if (charging) return '#81c995'
+	  return c > 50 ? '#00d26a' : c > 20 ? '#ffa726' : '#f28b82'
+	})
+
+	async function loadBattery() {
+	  try {
+	    const res: any = await monitorApi.battery()
+	    battery.value = res.data
+	  } catch (e) {}
+	}
 
 function formatBytes(bytes?: number) {
   if (bytes === undefined || bytes === null) return '-'
@@ -193,7 +225,8 @@ async function loadNetInfo() {
 	  loadData()
 	  loadNetInfo()
 	  loadRealtime()
-	  timer = setInterval(() => { loadData(); loadNetInfo() }, 60000)
+	  loadBattery()
+	  timer = setInterval(() => { loadData(); loadNetInfo(); loadBattery() }, 60000)
 	  realtimeTimer = setInterval(loadRealtime, 5000)
 	})
 
@@ -215,10 +248,24 @@ async function loadNetInfo() {
 	    grid-template-columns: repeat(2, 1fr);
 	  }
 	}
+	@media (max-width: 480px) {
+	  .gauge-grid { grid-template-columns: 1fr; }
+	  .gauge-chart { height: 150px; }
+	}
 	.gauge-card {
 	  padding: 12px;
 	  text-align: center;
 	}
+	.battery-card { display: flex; flex-direction: column; justify-content: center; }
+	.battery-pct { font-size: 28px; font-weight: 700; line-height: 1.2; }
+	.battery-pct-sign { font-size: 14px; font-weight: 600; margin-left: 2px; }
+	.battery-row {
+	  display: flex; justify-content: space-between;
+	  font-size: 12px; color: #888; margin-top: 4px; gap: 8px;
+	}
+	.battery-row span { white-space: nowrap; }
+	.battery-bar { margin-top: 10px; }
+	.battery-na { color: #888; font-size: 13px; padding: 24px 0; }
 	.gauge-chart {
 	  width: 100%;
 	  height: 180px;

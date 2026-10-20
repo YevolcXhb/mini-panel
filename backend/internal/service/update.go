@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/minipanel/minipanel/internal/global"
+	"github.com/minipanel/minipanel/internal/utils/proxy"
 	"github.com/minipanel/minipanel/internal/utils/ssrf"
 )
 
@@ -68,6 +69,8 @@ func NewUpdateService() *UpdateService {
 
 // CheckUpdate 检查最新版本。优先调用 GitHub API，失败时降级到 version.json。
 func (s *UpdateService) CheckUpdate() (*UpdateInfo, error) {
+	// 每次检查都取当前生效的出站客户端——代理热加载后下一次检查立即走新代理
+	s.httpClient = proxy.OutboundHTTPClient()
 	current := strings.TrimPrefix(global.Version, "v")
 	info := &UpdateInfo{
 		CurrentVersion: current,

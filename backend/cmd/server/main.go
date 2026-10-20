@@ -399,6 +399,7 @@ func run() error {
 
 	settingService := service.NewSettingService()
 	_ = settingService.InitDefaults()
+	settingService.InitProxyConfig()
 	authService := service.NewAuthService()
 	_ = authService.InitAdmin("admin", "admin123")
 	appService := service.NewAppService()

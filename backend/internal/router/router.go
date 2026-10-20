@@ -127,6 +127,7 @@ func NewRouter() *gin.Engine {
 		settingGroup.GET("", setting.Get)
 		settingGroup.PUT("", setting.Update)
 		settingGroup.POST("/reset", setting.Reset)
+		settingGroup.PUT("/proxy", setting.UpdateProxyConfig)
 		settingGroup.POST("/clear-data", setting.ClearData)
 
 		update := api.NewUpdateAPI()
@@ -140,6 +141,7 @@ func NewRouter() *gin.Engine {
 		monitorGroup := apiV1.Group("/monitor", middleware.PermissionMiddleware("/monitor"))
 		monitorGroup.GET("/history", monitor.List)
 		monitorGroup.GET("/realtime", monitor.GetRealtime)
+		monitorGroup.GET("/battery", monitor.GetBattery)
 
 		apiV1.POST("/auth/change-password", auth.ChangePassword)
 

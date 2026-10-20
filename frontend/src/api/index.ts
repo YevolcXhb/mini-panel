@@ -166,7 +166,8 @@ export const settingApi = {
   get: () => api.get('/settings'),
   update: (data: any) => api.put('/settings', data),
   reset: () => api.post('/settings/reset'),
-  clearData: () => api.post('/settings/clear-data')
+  clearData: () => api.post('/settings/clear-data'),
+  updateProxy: (config: any) => api.put('/settings/proxy', config)
 }
 
 export const logApi = {
@@ -188,7 +189,8 @@ export const updateApi = {
 
 export const monitorApi = {
 	  history: (limit?: number) => api.get('/monitor/history', { params: { limit } }),
-	  realtime: () => api.get('/monitor/realtime')
+	  realtime: () => api.get('/monitor/realtime'),
+	  battery: () => api.get('/monitor/battery')
 	}
 
 export const websiteApi = {

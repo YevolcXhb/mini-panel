@@ -608,3 +608,66 @@ html, body, #app {
   .ct-acts { width: 100%; }
   .ct-acts .el-button { flex: 1; }
 }
+
+/* ═══════════════════════════════════════════════
+   Mobile Fixes — 修复移动端内容被裁切/不可见
+   ═══════════════════════════════════════════════ */
+
+/* 100vh 在移动浏览器会被地址栏遮蔽，改用 dvh + svh 回退 */
+html, body, #app {
+  height: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
+  overflow: hidden;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* 表格容器：桌面端可能未定义宽度规则，移动端统一开启横向滚动，
+   避免列被挤压后剩余列完全不可见 */
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.table-wrap .el-table {
+  min-width: 560px;
+}
+
+/* 固定像素宽度的对话框在小屏一律收缩为近全屏 */
+@media (max-width: 768px) {
+  .el-dialog {
+    width: calc(100vw - 24px) !important;
+    max-width: calc(100vw - 24px) !important;
+    margin: 8vh auto !important;
+  }
+  .el-dialog.is-align-center {
+    margin: auto !important;
+  }
+  .el-dialog__body {
+    padding: 16px !important;
+    max-height: 65vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .el-overlay-dialog {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  /* 抽屉全屏化 */
+  .el-drawer {
+    width: 100% !important;
+  }
+  /* 消息提示不遮挡顶部操作栏 */
+  .el-message {
+    max-width: calc(100vw - 32px);
+  }
+  /* 触控目标不小于 40px */
+  .el-button--small {
+    padding: 8px 14px !important;
+    min-height: 36px;
+  }
+  .el-input__wrapper, .el-textarea__inner {
+    font-size: 16px !important; /* 防 iOS 聚焦自动放大 */
+  }
+}

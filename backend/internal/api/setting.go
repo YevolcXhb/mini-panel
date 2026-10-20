@@ -103,6 +103,20 @@ func (a *SettingAPI) Update(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "updated"})
 }
 
+// UpdateProxyConfig 保存代理配置并热加载（立即生效）。Body 即代理配置 JSON 对象。
+func (a *SettingAPI) UpdateProxyConfig(c *gin.Context) {
+	body, err := c.GetRawData()
+	if err != nil {
+		c.JSON(http.StatusOK, dto.Response{Code: 400, Message: "读取请求体失败"})
+		return
+	}
+	if err := a.service.UpdateProxyConfig(string(body)); err != nil {
+		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, dto.Response{Code: 200, Message: "代理配置已保存并生效"})
+}
+
 func (a *SettingAPI) Reset(c *gin.Context) {
 	if err := a.service.InitDefaults(); err != nil {
 		c.JSON(http.StatusOK, dto.Response{Code: 500, Message: err.Error()})

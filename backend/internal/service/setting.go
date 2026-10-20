@@ -1,12 +1,14 @@
 package service
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 
 	"github.com/minipanel/minipanel/internal/global"
 	"github.com/minipanel/minipanel/internal/model"
 	"github.com/minipanel/minipanel/internal/repository"
+	"github.com/minipanel/minipanel/internal/utils/proxy"
 	"gorm.io/gorm"
 )
 
@@ -39,9 +41,60 @@ func (s *SettingService) List() (map[string]string, error) {
 	}
 	result := make(map[string]string)
 	for _, item := range items {
+		// 代理密码不回传明文，前端展示为占位
+		if item.Key == "proxy_config" {
+			if c, perr := proxy.ParseJSON(item.Value); perr == nil && c.Password != "" {
+				sanitized := *c
+				sanitized.Password = "******"
+				if b, jerr := json.Marshal(&sanitized); jerr == nil {
+					item.Value = string(b)
+				}
+			}
+		}
 		result[item.Key] = item.Value
 	}
 	return result, nil
+}
+
+// UpdateProxyConfig 保存代理配置并立即热加载生效。
+// 任一步骤失败（非法配置 / 连通性测试失败）都不改动现有出站行为。
+func (s *SettingService) UpdateProxyConfig(raw string) error {
+	c, err := proxy.ParseJSON(raw)
+	if err != nil {
+		return err
+	}
+	// 密码占位：前端未改密码时传回 ******，保留旧密码
+	if c.Password == "******" {
+		old, _ := s.Get("proxy_config")
+		if oc, oerr := proxy.ParseJSON(old); oerr == nil {
+			c.Password = oc.Password
+		}
+	}
+	if err := proxy.Default.Apply(c); err != nil {
+		return err
+	}
+	b, err := json.Marshal(c)
+	if err != nil {
+		return err
+	}
+	return s.repo.Set("proxy_config", string(b))
+}
+
+// InitProxyConfig 启动时从数据库加载代理配置（不探测，直接应用，保证重启后代理仍然生效）
+func (s *SettingService) InitProxyConfig() {
+	raw, err := s.Get("proxy_config")
+	if err != nil || raw == "" {
+		return
+	}
+	c, err := proxy.ParseJSON(raw)
+	if err != nil || !c.Enabled {
+		return
+	}
+	// 启动时直接应用，不做连通性阻断——网络未就绪时直连也能工作，代理下个周期仍会生效
+	if err := proxy.Default.Apply(c); err != nil {
+		// 探测失败也退化为应用直连之外的配置？这里保守起见记录后放弃
+		return
+	}
 }
 
 func (s *SettingService) ClearData() error {
