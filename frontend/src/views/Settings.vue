@@ -307,7 +307,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated } from 'vue'
 import { useRouter } from 'vue-router'
 import { settingApi, authApiExt, versionApi, updateApi } from '../api'
 import { useAuthStore, useThemeStore } from '../store'
@@ -627,6 +627,22 @@ onMounted(() => {
 
   loadSettings()
   loadVersion()
+})
+
+// keep-alive 兼容：页面被缓存时只触发 onDeactivated，不触发 onUnmounted。
+// 升级过程中的两个定时器（2s 假进度 + 3s 日志轮询）必须在切走时停掉，
+// 否则会在后台持续打接口。
+//
+// 注意恢复：升级中切走再切回时 updateApplying 仍为 true，若不重启轮询，
+// 进度条会永久卡住。onActivated 里补一次恢复。
+onActivated(() => {
+  if (updateApplying.value && !updateLogTimer) {
+    startUpdateProgressPolling()
+  }
+})
+
+onDeactivated(() => {
+  stopUpdatePolling()
 })
 
 onUnmounted(() => {

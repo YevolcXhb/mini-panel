@@ -333,6 +333,8 @@ async function loadNetInfo() {
 	}, 60000)
 	const realtimePolling = usePolling(loadRealtime, 10000)
 
+	// 首次拉取由 onMounted 负责（usePolling 首轮激活只启动定时器，不会重复请求），
+	// 之后切回页面时由 usePolling 的 onActivated 补一次刷新。
 	onMounted(() => {
 	  loadData()
 	  loadNetInfo()

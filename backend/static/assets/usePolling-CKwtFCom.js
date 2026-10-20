@@ -1,1 +1,0 @@
-import{a6 as s,ah as r,ai as u,W as c}from"./index-bgROmcU5.js";function m(e,i,o={}){let t=null;const n=()=>{t!==null&&(clearInterval(t),t=null)},a=()=>{n(),o.immediate&&e(),t=setInterval(()=>{e()},i)},l=()=>t!==null;return s()&&(r(()=>a()),u(()=>n()),c(()=>n())),{start:a,stop:n,isRunning:l}}export{m as u};

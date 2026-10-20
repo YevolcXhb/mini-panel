@@ -51,7 +51,18 @@ export function usePolling(
 
   // 只有在组件上下文里才注册生命周期钩子（也方便单测直接调用 start/stop）
   if (getCurrentInstance()) {
-    onActivated(() => start())
+    // 关键：首次挂载时 mounted 与 activated 都会触发（已用真实 Vue 运行时验证）。
+    // 若这里无条件调用 fn()，页面 onMounted 里的初始拉取就会和它重复，
+    // 重接口（/dashboard/monitor 约 700ms）会被请求两次。
+    // 因此首轮激活只启动定时器，后续每次切回才补一次刷新。
+    let activatedOnce = false
+    onActivated(() => {
+      if (activatedOnce) {
+        void fn()
+      }
+      activatedOnce = true
+      start()
+    })
     onDeactivated(() => stop())
     onUnmounted(() => stop())
   }
