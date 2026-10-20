@@ -151,4 +151,90 @@ h2 {
   text-align: center;
   padding: 40px 0;
 }
+
+/* ── 移动端：工具栏换行 + 日志行改块级排布 ── */
+@media (max-width: 900px) {
+  .page {
+    padding: 0;
+    height: 100%;
+    min-width: 0;
+  }
+  h2 {
+    font-size: 17px;
+    white-space: nowrap;
+    flex-shrink: 0;
+    margin: 0 0 12px;
+  }
+  .toolbar {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    row-gap: 10px;
+    column-gap: 8px;
+    margin-bottom: 10px;
+  }
+  .toolbar :deep(.el-checkbox-group) {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .toolbar :deep(.el-checkbox) {
+    margin-right: 0 !important;
+    height: 26px;
+    font-size: 13px;
+  }
+  .toolbar > .el-button {
+    flex: 0 0 auto;
+    margin-left: 0 !important;
+  }
+  .log-container {
+    padding: 10px;
+    font-size: 12px;
+    line-height: 1.55;
+    border-radius: 6px;
+    min-height: 0;
+    overflow-x: hidden;
+  }
+  .log-line {
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    padding: 4px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  }
+  .log-line:last-child {
+    border-bottom: none;
+  }
+  .log-time {
+    display: inline;
+    margin-right: 6px;
+    font-size: 11px;
+  }
+  .log-level {
+    min-width: 46px;
+    margin-right: 6px;
+    font-size: 11px;
+  }
+  .log-msg {
+    display: inline;
+  }
+}
+
+@media (max-width: 480px) {
+  h2 {
+    font-size: 16px;
+  }
+  .log-container {
+    padding: 8px;
+    font-size: 11.5px;
+  }
+  .log-time {
+    display: block;
+    margin-right: 0;
+  }
+  .log-level {
+    min-width: 42px;
+  }
+}
 </style>

@@ -10,14 +10,14 @@
         </span>
       </div>
       <div class="file-actions">
-        <el-upload :show-file-list="false" :http-request="handleUpload" :multiple="true" style="display:inline-block">
+        <el-upload :show-file-list="false" :http-request="handleUpload" :multiple="true" class="upload-item">
           <el-button size="small">上传</el-button>
         </el-upload>
         <el-button size="small" type="primary" @click="showCreate = true">+ 新建文件</el-button>
         <el-button size="small" @click="showCreateDir = true">新建目录</el-button>
         <el-button size="small" @click="goBack">返回上级</el-button>
         <el-button size="small" @click="showRecycleBin = true; loadRecycleBin()">🗑 回收站</el-button>
-        <el-input v-model="searchQuery" placeholder="搜索文件名..." size="small" style="width:180px;margin-left:8px" clearable @input="onSearch" @clear="loadFiles" />
+        <el-input v-model="searchQuery" placeholder="搜索文件名..." size="small" class="search-input" clearable @input="onSearch" @clear="loadFiles" />
       </div>
     </div>
 
@@ -53,23 +53,25 @@
         <el-table-column label="修改时间" width="170">
           <template #default="{ row }">{{ new Date(row.mod_time * 1000).toLocaleString() }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="380" fixed="right">
+        <el-table-column label="操作" :width="isWide ? 380 : 260" :fixed="isWide ? 'right' : false">
           <template #default="{ row }">
-            <el-button size="small" v-if="!row.is_dir" @click.stop="previewFile(row)">预览</el-button>
-            <el-button size="small" v-if="!row.is_dir" @click.stop="editFile(row)">编辑</el-button>
-            <el-button size="small" v-if="!row.is_dir" @click.stop="downloadFile(row)">下载</el-button>
-            <el-button size="small" v-if="row.is_dir" @click.stop="downloadZip(row)">下载ZIP</el-button>
-            <el-button size="small" v-if="isArchive(row.name)" @click.stop="extractArchive(row)">解压</el-button>
-            <el-button size="small" @click.stop="renameFile(row)">重命名</el-button>
-            <el-button size="small" @click.stop="openChmod(row)">权限</el-button>
-            <el-button size="small" type="danger" @click.stop="deleteFile(row)">删除</el-button>
+            <div class="row-actions">
+              <el-button size="small" v-if="!row.is_dir" @click.stop="previewFile(row)">预览</el-button>
+              <el-button size="small" v-if="!row.is_dir" @click.stop="editFile(row)">编辑</el-button>
+              <el-button size="small" v-if="!row.is_dir" @click.stop="downloadFile(row)">下载</el-button>
+              <el-button size="small" v-if="row.is_dir" @click.stop="downloadZip(row)">下载ZIP</el-button>
+              <el-button size="small" v-if="isArchive(row.name)" @click.stop="extractArchive(row)">解压</el-button>
+              <el-button size="small" @click.stop="renameFile(row)">重命名</el-button>
+              <el-button size="small" @click.stop="openChmod(row)">权限</el-button>
+              <el-button size="small" type="danger" @click.stop="deleteFile(row)">删除</el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
     </div>
 
     <!-- 文件编辑 -->
-    <el-dialog v-model="showEditor" title="文件编辑" width="800px" class="editor-dialog">
+    <el-dialog v-model="showEditor" title="文件编辑" :width="isWide ? '800px' : '94vw'" class="editor-dialog">
       <el-input v-model="fileContent" type="textarea" :rows="22" class="editor-textarea" />
       <template #footer>
         <el-button @click="showEditor = false">取消</el-button>
@@ -78,7 +80,7 @@
     </el-dialog>
 
     <!-- 新建文件 -->
-    <el-dialog v-model="showCreate" title="新建文件" width="400px">
+    <el-dialog v-model="showCreate" title="新建文件" :width="isWide ? '400px' : '94vw'">
       <el-input v-model="newFileName" placeholder="文件名" />
       <template #footer>
         <el-button @click="showCreate = false">取消</el-button>
@@ -87,7 +89,7 @@
     </el-dialog>
 
     <!-- 新建目录 -->
-    <el-dialog v-model="showCreateDir" title="新建目录" width="400px">
+    <el-dialog v-model="showCreateDir" title="新建目录" :width="isWide ? '400px' : '94vw'">
       <el-input v-model="newDirName" placeholder="目录名" />
       <template #footer>
         <el-button @click="showCreateDir = false">取消</el-button>
@@ -96,12 +98,12 @@
     </el-dialog>
 
     <!-- 文件预览 -->
-    <el-dialog v-model="showPreview" :title="'预览 - ' + previewFileName" width="800px">
+    <el-dialog v-model="showPreview" :title="'预览 - ' + previewFileName" :width="isWide ? '800px' : '94vw'">
       <pre style="max-height: 500px; overflow: auto; background: #1a1a2e; color: #e0e0e0; padding: 16px; border-radius: 6px; font-size: 13px; white-space: pre-wrap; word-break: break-all">{{ previewContent }}</pre>
     </el-dialog>
 
     <!-- 重命名 -->
-    <el-dialog v-model="showRename" title="重命名" width="400px">
+    <el-dialog v-model="showRename" title="重命名" :width="isWide ? '400px' : '94vw'">
       <el-input v-model="renameNewName" :placeholder="'原名称: ' + renameOldName" />
       <template #footer>
         <el-button @click="showRename = false">取消</el-button>
@@ -110,7 +112,7 @@
     </el-dialog>
 
     <!-- 权限修改 -->
-    <el-dialog v-model="showChmod" title="修改权限" width="400px">
+    <el-dialog v-model="showChmod" title="修改权限" :width="isWide ? '400px' : '94vw'">
       <div style="margin-bottom: 12px; font-size: 13px; color: #888">文件: {{ chmodFileName }}</div>
       <el-input v-model="chmodMode" placeholder="644 (文件) / 755 (目录)" style="margin-bottom: 12px" />
       <el-checkbox v-model="chmodRecursive">应用到子目录</el-checkbox>
@@ -121,7 +123,7 @@
     </el-dialog>
 
     <!-- 压缩 -->
-    <el-dialog v-model="showCompress" title="压缩文件" width="400px">
+    <el-dialog v-model="showCompress" title="压缩文件" :width="isWide ? '400px' : '94vw'">
       <div style="margin-bottom: 8px; font-size: 13px; color: #888">已选 {{ compressPaths.length }} 项</div>
       <el-input v-model="compressOutput" placeholder="压缩包名称" style="margin-bottom: 12px" />
       <el-radio-group v-model="compressFormat" style="margin-bottom: 12px">
@@ -135,11 +137,12 @@
     </el-dialog>
 
     <!-- 回收站 -->
-    <el-dialog v-model="showRecycleBin" title="回收站" width="700px">
-      <div style="margin-bottom: 12px; display: flex; gap: 8px">
+    <el-dialog v-model="showRecycleBin" title="回收站" :width="isWide ? '700px' : '94vw'">
+      <div style="margin-bottom: 12px; display: flex; gap: 8px; flex-wrap: wrap">
         <el-button size="small" type="danger" @click="clearRecycleBin">清空回收站</el-button>
         <el-button size="small" @click="loadRecycleBin">刷新</el-button>
       </div>
+      <div class="table-wrap">
       <el-table :data="recycleItems" v-loading="recycleLoading" size="small">
         <el-table-column prop="name" label="名称" min-width="200" />
         <el-table-column label="大小" width="100">
@@ -148,21 +151,30 @@
         <el-table-column label="删除时间" width="170">
           <template #default="{ row }">{{ new Date(row.mod_time * 1000).toLocaleString() }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="160">
+        <el-table-column label="操作" width="190">
           <template #default="{ row }">
-            <el-button size="small" @click="restoreRecycle(row)">恢复</el-button>
-            <el-button size="small" type="danger" @click="permanentDelete(row)">彻底删除</el-button>
+            <div class="row-actions">
+              <el-button size="small" @click="restoreRecycle(row)">恢复</el-button>
+              <el-button size="small" type="danger" @click="permanentDelete(row)">彻底删除</el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
+      </div>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { fileApi } from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
+
+// 窄屏移除操作列 sticky 固定，避免覆盖文件名列
+const WIDE_MQ = '(min-width: 901px)'
+const isWide = ref(typeof window !== 'undefined' ? window.matchMedia(WIDE_MQ).matches : true)
+const mql = typeof window !== 'undefined' ? window.matchMedia(WIDE_MQ) : null
+function onMqlChange(e: MediaQueryListEvent) { isWide.value = e.matches }
 
 const currentPath = ref('/')
 const files = ref<any[]>([])
@@ -494,7 +506,14 @@ async function clearRecycleBin() {
   }
 }
 
-onMounted(loadFiles)
+onMounted(() => {
+  loadFiles()
+  if (mql) mql.addEventListener('change', onMqlChange)
+})
+
+onUnmounted(() => {
+  if (mql) mql.removeEventListener('change', onMqlChange)
+})
 </script>
 
 <style scoped>
@@ -506,7 +525,18 @@ onMounted(loadFiles)
   flex-wrap: wrap;
   gap: 8px;
 }
-.file-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.file-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; min-width: 0; }
+.upload-item { display: inline-block; }
+.search-input { width: 180px; margin-left: 8px; }
+.row-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  align-items: center;
+}
+.row-actions .el-button {
+  margin-left: 0 !important;
+}
 .breadcrumb {
   display: flex;
   gap: 2px;
@@ -533,5 +563,91 @@ onMounted(loadFiles)
   background: rgba(79, 140, 255, 0.08);
   border-radius: 6px;
   font-size: 13px;
+  flex-wrap: wrap;
+}
+
+/* ── 移动端：工具栏换行 + 表格横向滚动 ── */
+@media (max-width: 900px) {
+  .file-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .breadcrumb {
+    width: 100%;
+    font-size: 12px;
+    padding: 4px 0;
+    word-break: break-all;
+  }
+  /* 6 个按钮铺成 2 列网格，避免单个按钮拉满一行 */
+  .file-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    width: 100%;
+  }
+  .file-actions > .el-button,
+  .file-actions > .upload-item {
+    width: 100%;
+    margin-left: 0 !important;
+  }
+  .file-actions > .el-button :deep(span),
+  .upload-item :deep(.el-button) {
+    white-space: nowrap;
+  }
+  /* el-upload 默认 inline-flex 收缩到内容宽（38px），必须撑满 grid 单元，
+     否则里面 .el-button 的 width:100% 只能算出 38px，上传按钮比其他按钮小一圈 */
+  .upload-item :deep(.el-upload) {
+    display: block;
+    width: 100%;
+  }
+  .upload-item :deep(.el-button) {
+    width: 100%;
+    margin-left: 0 !important;
+  }
+  .file-actions .search-input {
+    grid-column: 1 / -1;
+    width: 100% !important;
+    margin-left: 0 !important;
+    order: 10;
+  }
+  .batch-bar {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .batch-bar .el-button {
+    margin-left: 0 !important;
+  }
+  .table-wrap {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .table-wrap :deep(.el-table) {
+    min-width: 900px;
+  }
+  .table-wrap :deep(.el-table .cell) {
+    white-space: nowrap;
+    word-break: keep-all;
+  }
+  .row-actions {
+    flex-wrap: nowrap;
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 480px) {
+  .file-actions {
+    gap: 6px;
+  }
+  .file-actions > .el-button {
+    padding: 7px 6px !important;
+    font-size: 12px;
+  }
+  .upload-item :deep(.el-button) {
+    padding: 7px 6px !important;
+    font-size: 12px;
+  }
 }
 </style>

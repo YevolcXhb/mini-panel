@@ -7,12 +7,12 @@
     <el-card class="store-main-card" shadow="never">
       <el-tabs v-model="activeTab" class="custom-tabs">
         <el-tab-pane label="应用列表" name="apps">
-        <div style="margin-bottom:24px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;">
-          <div style="display:flex;gap:12px;align-items:center;">
-            <el-input v-model="searchQuery" placeholder="搜索应用..." style="width:280px" clearable @keyup.enter="doSearch">
+        <div class="apps-toolbar">
+          <div class="apps-filters">
+            <el-input v-model="searchQuery" placeholder="搜索应用..." class="apps-search" clearable @keyup.enter="doSearch">
               <template #prefix><el-icon><Search /></el-icon></template>
             </el-input>
-            <el-select v-model="selectedCategory" placeholder="全部分类" style="width:140px" clearable @change="loadApps">
+            <el-select v-model="selectedCategory" placeholder="全部分类" class="apps-category" clearable @change="loadApps">
               <el-option label="全部" value="all" />
               <el-option label="Web" value="web" />
               <el-option label="数据库" value="database" />
@@ -68,9 +68,9 @@
       </el-tab-pane>
 
       <el-tab-pane label="应用源" name="sources">
-        <div style="margin-bottom:16px;display:flex;gap:8px;align-items:center">
-          <el-input v-model="newSource.name" placeholder="源名称" style="width:160px" />
-          <el-input v-model="newSource.url" placeholder="应用列表URL (JSON)" style="width:400px" />
+        <div class="source-toolbar">
+          <el-input v-model="newSource.name" placeholder="源名称" class="source-name" />
+          <el-input v-model="newSource.url" placeholder="应用列表URL (JSON)" class="source-url" />
           <el-button type="primary" @click="addSource">添加源</el-button>
         </div>
         <div class="table-wrap">
@@ -93,7 +93,7 @@
       </el-tab-pane>
 
       <el-tab-pane label="拉取镜像" name="pull">
-        <div class="info-card" style="max-width:600px">
+        <div class="info-card pull-card">
           <el-form label-width="100px">
             <el-form-item label="镜像地址">
               <el-input v-model="pullForm.image" placeholder="如 docker.1ms.run/openlistteam/openlist:latest-lite-aio" />
@@ -114,7 +114,7 @@
     </el-tabs>
     </el-card>
 
-    <el-dialog v-model="showInstall" title="安装应用" width="480px">
+    <el-dialog v-model="showInstall" title="安装应用" :width="isWide ? '480px' : '94vw'">
       <el-form :model="installForm" label-width="100px">
         <el-form-item label="应用"><span>{{ selectedApp?.name }}</span></el-form-item>
         <el-form-item label="版本">
@@ -141,7 +141,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="showDetail" title="应用详情" width="520px">
+    <el-dialog v-model="showDetail" title="应用详情" :width="isWide ? '520px' : '94vw'">
       <div v-if="detailApp">
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
           <img v-if="detailApp.icon" :src="appApi.icon(detailApp.key)" :alt="detailApp.name" @error="($event.target as HTMLElement).style.display='none'" style="width:40px;height:40px;border-radius:8px;object-fit:cover" />
@@ -171,7 +171,7 @@
       </div>
     </el-dialog>
 
-    <el-dialog v-model="showSync" title="同步应用" width="400px">
+    <el-dialog v-model="showSync" title="同步应用" :width="isWide ? '400px' : '94vw'">
       <p style="margin-bottom:12px">选择要同步的应用源：</p>
       <el-select v-model="syncSourceId" placeholder="选择源" style="width:100%">
         <el-option v-for="s in sources" :key="s.id" :label="s.name" :value="s.id" />
@@ -209,9 +209,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { appApi, containerApi } from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
+
+// 窄屏用 94vw 弹窗，避免固定像素宽度溢出屏幕
+const WIDE_MQ = '(min-width: 901px)'
+const isWide = ref(typeof window !== 'undefined' ? window.matchMedia(WIDE_MQ).matches : true)
+const mql = typeof window !== 'undefined' ? window.matchMedia(WIDE_MQ) : null
+function onMqlChange(e: MediaQueryListEvent) { isWide.value = e.matches }
 
 const activeTab = ref('apps')
 const apps = ref<any[]>([])
@@ -512,6 +518,11 @@ onMounted(async () => {
   await loadInstalled()
   await loadSources()
   reconcileTasks()
+  if (mql) mql.addEventListener('change', onMqlChange)
+})
+
+onUnmounted(() => {
+  if (mql) mql.removeEventListener('change', onMqlChange)
 })
 
 function reconcileTasks() {
@@ -675,5 +686,118 @@ function reconcileTasks() {
 }
 .app-card-footer .el-button {
   flex: 1;
+}
+
+/* ── 工具栏 ── */
+.apps-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.apps-filters {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.apps-search {
+  width: 280px;
+}
+.apps-category {
+  width: 140px;
+}
+.source-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.source-name {
+  width: 160px;
+}
+.source-url {
+  width: 400px;
+}
+.pull-card {
+  max-width: 600px;
+  width: 100%;
+}
+
+/* ── 移动端 ── */
+@media (max-width: 900px) {
+  .apps-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .apps-filters {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    width: 100%;
+  }
+  .apps-search,
+  .apps-category {
+    width: 100% !important;
+    max-width: 100%;
+  }
+  .apps-toolbar > .el-button {
+    width: 100%;
+    margin-left: 0 !important;
+  }
+  .source-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .source-name,
+  .source-url {
+    width: 100% !important;
+    max-width: 100%;
+  }
+  .source-toolbar > .el-button {
+    width: 100%;
+    margin-left: 0 !important;
+  }
+  .app-grid {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+  .app-card {
+    padding: 16px;
+  }
+  .pull-card {
+    max-width: 100%;
+  }
+  /* 已安装 / 应用源 表格：横向滚动，不压缩列宽 */
+  .table-wrap {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .table-wrap :deep(.el-table) {
+    min-width: 720px;
+  }
+  .bg-tasks {
+    width: calc(100vw - 24px);
+    right: 12px;
+    top: 76px;
+  }
+}
+
+@media (max-width: 480px) {
+  .app-card {
+    padding: 14px;
+  }
+  .bg-tasks {
+    width: calc(100vw - 16px);
+    right: 8px;
+    top: 70px;
+  }
 }
 </style>

@@ -5,7 +5,7 @@
       <p class="page-subtitle">管理面板配置、安全选项和系统信息</p>
     </div>
 
-    <el-tabs v-model="activeTab" class="settings-tabs" tab-position="left">
+    <el-tabs v-model="activeTab" class="settings-tabs" :tab-position="tabPosition">
       <!-- 常规设置 -->
       <el-tab-pane label="🎨 常规" name="general">
         <div class="tab-content">
@@ -320,6 +320,15 @@ const pwdForm = ref({ old_password: '', new_password: '' })
 const versionInfo = ref({ version: '-', build_time: '-', git_commit: '-' })
 const activeTab = ref('general')
 
+// 窄屏把左侧竖排 tab 改成顶部横排，否则 tab 占掉近半宽度、
+// 右侧内容区被压到 130px，单选框只能竖排显示。
+const isNarrow = ref(false)
+const tabPosition = computed(() => (isNarrow.value ? 'top' : 'left'))
+let narrowMq: MediaQueryList | null = null
+function syncNarrow(e?: MediaQueryListEvent) {
+  isNarrow.value = e ? e.matches : !!narrowMq?.matches
+}
+
 // ===== 更新相关状态 =====
 const updateChecking = ref(false)
 const updateApplying = ref(false)
@@ -607,11 +616,28 @@ function stopUpdatePolling() {
 }
 
 onMounted(() => {
+  // 监听窄屏断点，决定 tab 方向
+  narrowMq = window.matchMedia('(max-width: 900px)')
+  syncNarrow()
+  if (narrowMq.addEventListener) {
+    narrowMq.addEventListener('change', syncNarrow)
+  } else if ((narrowMq as any).addListener) {
+    (narrowMq as any).addListener(syncNarrow)
+  }
+
   loadSettings()
   loadVersion()
 })
 
 onUnmounted(() => {
+  if (narrowMq) {
+    if (narrowMq.removeEventListener) {
+      narrowMq.removeEventListener('change', syncNarrow)
+    } else if ((narrowMq as any).removeListener) {
+      (narrowMq as any).removeListener(syncNarrow)
+    }
+    narrowMq = null
+  }
   stopUpdatePolling()
 })
 </script>
@@ -658,6 +684,101 @@ onUnmounted(() => {
   line-height: 44px;
   font-size: 14px;
   padding: 0 16px;
+}
+
+/* ═══════════════════════════════════════════════
+   移动端：竖排 tab 改顶部横排
+   原 tab-position="left" 在 390px 屏上占 190px，
+   右侧只剩 130px，单选按钮被压成竖排。
+   ═══════════════════════════════════════════════ */
+@media (max-width: 900px) {
+  .settings-header {
+    margin-bottom: 16px;
+  }
+
+  .settings-header .page-title {
+    font-size: 19px;
+  }
+
+  .settings-tabs {
+    padding: 10px;
+    min-height: auto;
+  }
+
+  /* 顶部 tab 横向可滚动，不换行挤成两排 */
+  .settings-tabs :deep(.el-tabs__header) {
+    margin-right: 0;
+    margin-bottom: 12px;
+  }
+
+  .settings-tabs :deep(.el-tabs__nav-wrap) {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .settings-tabs :deep(.el-tabs__nav-scroll) {
+    overflow: visible;
+  }
+
+  .settings-tabs :deep(.el-tabs__nav) {
+    float: none;
+    display: flex;
+  }
+
+  .settings-tabs :deep(.el-tabs__item) {
+    height: 40px;
+    line-height: 40px;
+    font-size: 13px;
+    padding: 0 12px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  /* 隐藏左右箭头（横向滚动已足够，箭头会挤占宽度） */
+  .settings-tabs :deep(.el-tabs__nav-prev),
+  .settings-tabs :deep(.el-tabs__nav-next) {
+    display: none;
+  }
+
+  .tab-content {
+    padding: 4px 0 8px;
+  }
+
+  .form-card {
+    padding: 14px;
+  }
+
+  .section-header h3 {
+    font-size: 14px;
+  }
+
+  .action-bar {
+    margin-top: 16px;
+    padding: 12px 0;
+    flex-wrap: wrap;
+  }
+
+  .version-hero {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 16px;
+  }
+
+  .version-logo {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+@media (max-width: 480px) {
+  .settings-tabs {
+    padding: 8px;
+  }
+
+  .form-card {
+    padding: 12px;
+  }
 }
 
 .tab-content {

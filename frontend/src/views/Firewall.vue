@@ -8,7 +8,7 @@
 
     <el-alert v-if="!serviceStatus.installed" type="warning" show-icon :closable="false" style="margin-bottom: 16px">
       <template #title>
-        <div style="display: flex; align-items: center; justify-content: space-between; width: 100%">
+        <div class="alert-bar">
           <span>{{ serviceStatus.message || '防火墙功能不可用' }}</span>
           <el-button size="small" type="primary" @click="runDiagnose" :loading="diagnosing">一键诊断</el-button>
         </div>
@@ -31,8 +31,8 @@
     <template v-else>
       <!-- 状态卡片 -->
       <el-card style="margin-bottom: 16px">
-        <div style="display: flex; justify-content: space-between; align-items: center">
-          <div style="display: flex; align-items: center; gap: 12px">
+        <div class="svc-bar">
+          <div class="svc-bar-left">
             <el-tag :type="serviceStatus.running ? 'success' : 'danger'" size="large">
               {{ serviceStatus.running ? '运行中' : '已停止' }}
             </el-tag>
@@ -40,7 +40,7 @@
             <el-tag v-if="serviceStatus.ipv6_supported" type="success" size="small">IPv6 已支持</el-tag>
             <el-tag v-else type="info" size="small">IPv6 不可用</el-tag>
           </div>
-          <div style="display: flex; gap: 8px; flex-wrap: wrap">
+          <div class="svc-bar-right">
             <el-button size="small" type="primary" @click="startFirewall" v-if="!serviceStatus.running" :loading="actionLoading">启动</el-button>
             <el-button size="small" type="warning" @click="stopFirewall" v-if="serviceStatus.running" :loading="actionLoading">停止</el-button>
             <el-button size="small" @click="checkStatus">刷新</el-button>
@@ -73,80 +73,88 @@
       </el-alert>
 
       <!-- 面板规则表格 -->
-      <el-table :data="rules" style="width: 100%" v-loading="loading">
-        <el-table-column prop="name" label="名称" min-width="120" />
-        <el-table-column prop="type" label="类型" width="80">
-          <template #default="{ row }">
-            <el-tag :type="row.type === 'port' ? 'primary' : row.type === 'dnat' ? 'success' : 'warning'">{{ row.type === 'port' ? '端口' : row.type === 'dnat' ? '转发' : 'IP' }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="action" label="动作" width="80">
-          <template #default="{ row }">
-            <el-tag :type="row.action === 'allow' ? 'success' : 'danger'">{{ row.action === 'allow' ? '允许' : '拒绝' }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="protocol" label="协议" width="80" />
-        <el-table-column prop="port" label="端口" width="100" />
-        <el-table-column prop="ip" label="IP" width="120" />
-        <el-table-column prop="target_port" label="目标端口" width="100">
-          <template #default="{ row }">
-            <span v-if="row.type === 'dnat'">{{ row.target_port }}</span>
-            <span v-else style="color: #c0c4cc">-</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="direction" label="方向" width="80">
-          <template #default="{ row }">
-            {{ row.direction === 'in' ? '入站' : '出站' }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="enabled" label="状态" width="80">
-          <template #default="{ row }">
-            <el-tag v-if="row.enabled" type="success">启用</el-tag>
-            <el-tag v-else type="info">停用</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="180" fixed="right">
-          <template #default="{ row }">
-            <el-button size="small" @click="openDialog(row)">编辑</el-button>
-            <el-button size="small" type="danger" @click="handleDelete(row.id)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-
-      <!-- 回收站：已删除的面板规则 -->
-      <el-card style="margin-top: 16px">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px">
-          <span style="font-weight: 600">🗑️ 已删除规则（可恢复）</span>
-          <div style="display: flex; gap: 8px">
-            <el-button size="small" @click="loadDeletedRules" :loading="deletedLoading">刷新</el-button>
-            <el-button size="small" type="primary" @click="restoreAllDeleted" :disabled="!deletedRules.length">全部恢复</el-button>
-            <el-button size="small" type="danger" plain @click="clearDeletedRules" :disabled="!deletedRules.length">一键清空</el-button>
-          </div>
-        </div>
-        <el-table :data="deletedRules" size="small" v-loading="deletedLoading" empty-text="没有已删除的规则">
+      <div class="table-wrap">
+        <el-table :data="rules" style="width: 100%" v-loading="loading">
           <el-table-column prop="name" label="名称" min-width="120" />
           <el-table-column prop="type" label="类型" width="80">
             <template #default="{ row }">
-              <el-tag :type="row.type === 'port' ? 'primary' : row.type === 'dnat' ? 'success' : 'warning'" size="small">{{ row.type === 'port' ? '端口' : row.type === 'dnat' ? '转发' : 'IP' }}</el-tag>
+              <el-tag :type="row.type === 'port' ? 'primary' : row.type === 'dnat' ? 'success' : 'warning'">{{ row.type === 'port' ? '端口' : row.type === 'dnat' ? '转发' : 'IP' }}</el-tag>
             </template>
           </el-table-column>
           <el-table-column prop="action" label="动作" width="80">
             <template #default="{ row }">
-              <el-tag :type="row.action === 'allow' ? 'success' : 'danger'" size="small">{{ row.action === 'allow' ? '允许' : '拒绝' }}</el-tag>
+              <el-tag :type="row.action === 'allow' ? 'success' : 'danger'">{{ row.action === 'allow' ? '允许' : '拒绝' }}</el-tag>
             </template>
           </el-table-column>
           <el-table-column prop="protocol" label="协议" width="80" />
           <el-table-column prop="port" label="端口" width="100" />
           <el-table-column prop="ip" label="IP" width="120" />
-          <el-table-column prop="direction" label="方向" width="80">
-            <template #default="{ row }">{{ row.direction === 'in' ? '入站' : '出站' }}</template>
-          </el-table-column>
-          <el-table-column label="操作" width="90" fixed="right">
+          <el-table-column prop="target_port" label="目标端口" width="100">
             <template #default="{ row }">
-              <el-button size="small" type="primary" @click="restoreRule(row.id)">恢复</el-button>
+              <span v-if="row.type === 'dnat'">{{ row.target_port }}</span>
+              <span v-else style="color: #c0c4cc">-</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="direction" label="方向" width="80">
+            <template #default="{ row }">
+              {{ row.direction === 'in' ? '入站' : '出站' }}
+            </template>
+          </el-table-column>
+          <el-table-column prop="enabled" label="状态" width="80">
+            <template #default="{ row }">
+              <el-tag v-if="row.enabled" type="success">启用</el-tag>
+              <el-tag v-else type="info">停用</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" :width="isWide ? 180 : 140" :fixed="isWide ? 'right' : false">
+            <template #default="{ row }">
+              <div class="row-actions">
+                <el-button size="small" @click="openDialog(row)">编辑</el-button>
+                <el-button size="small" type="danger" @click="handleDelete(row.id)">删除</el-button>
+              </div>
             </template>
           </el-table-column>
         </el-table>
+      </div>
+
+      <!-- 回收站：已删除的面板规则 -->
+      <el-card style="margin-top: 16px">
+        <div class="trash-bar">
+          <span style="font-weight: 600">🗑️ 已删除规则（可恢复）</span>
+          <div class="trash-actions">
+            <el-button size="small" @click="loadDeletedRules" :loading="deletedLoading">刷新</el-button>
+            <el-button size="small" type="primary" @click="restoreAllDeleted" :disabled="!deletedRules.length">全部恢复</el-button>
+            <el-button size="small" type="danger" plain @click="clearDeletedRules" :disabled="!deletedRules.length">一键清空</el-button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <el-table :data="deletedRules" size="small" v-loading="deletedLoading" empty-text="没有已删除的规则">
+            <el-table-column prop="name" label="名称" min-width="120" />
+            <el-table-column prop="type" label="类型" width="80">
+              <template #default="{ row }">
+                <el-tag :type="row.type === 'port' ? 'primary' : row.type === 'dnat' ? 'success' : 'warning'" size="small">{{ row.type === 'port' ? '端口' : row.type === 'dnat' ? '转发' : 'IP' }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="action" label="动作" width="80">
+              <template #default="{ row }">
+                <el-tag :type="row.action === 'allow' ? 'success' : 'danger'" size="small">{{ row.action === 'allow' ? '允许' : '拒绝' }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="protocol" label="协议" width="80" />
+            <el-table-column prop="port" label="端口" width="100" />
+            <el-table-column prop="ip" label="IP" width="120" />
+            <el-table-column prop="direction" label="方向" width="80">
+              <template #default="{ row }">{{ row.direction === 'in' ? '入站' : '出站' }}</template>
+            </el-table-column>
+            <el-table-column label="操作" :width="isWide ? 90 : 96" :fixed="isWide ? 'right' : false">
+              <template #default="{ row }">
+                <div class="row-actions">
+                  <el-button size="small" type="primary" @click="restoreRule(row.id)">恢复</el-button>
+                </div>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
       </el-card>
     </template>
 
@@ -361,9 +369,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { firewallApi } from '../api'
+
+// 宽屏才启用 fixed 列：sticky 操作列在窄屏会横向覆盖其它列。
+// 初值同步读取，避免桌面端首帧先渲染成非固定列再跳变。
+const WIDE_MQ = '(min-width: 901px)'
+const isWide = ref(typeof window !== 'undefined' ? window.matchMedia(WIDE_MQ).matches : true)
+let mql: MediaQueryList | null = null
+function syncWide(e: MediaQueryListEvent) {
+  isWide.value = e.matches
+}
 
 const rules = ref<any[]>([])
 const loading = ref(false)
@@ -644,11 +661,17 @@ async function resetAllRules() {
 }
 
 onMounted(async () => {
+  mql = window.matchMedia(WIDE_MQ)
+  mql.addEventListener('change', syncWide)
   await checkStatus()
   if (serviceStatus.value.installed) {
     loadRules()
     loadDeletedRules()
   }
+})
+
+onUnmounted(() => {
+  mql?.removeEventListener('change', syncWide)
 })
 </script>
 
@@ -658,4 +681,59 @@ onMounted(async () => {
 .page-title { font-size: 1.5rem; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px; }
 .icon { font-size: 1.3rem; }
 .quick-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ── 服务状态条：窄屏换行 ── */
+.svc-bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.svc-bar-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-width: 0; }
+.svc-bar-right { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ── 回收站头部：标题与按钮组窄屏换行 ── */
+.trash-bar {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 10px; flex-wrap: wrap; margin-bottom: 10px;
+}
+.trash-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* 顶部告警条：文案与按钮窄屏换行 */
+.alert-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; flex-wrap: wrap; width: 100%;
+}
+
+/* ── 表格横向滚动容器 ──
+   不要给 .el-table 设 min-width：那会让表格根节点比容器宽、整表撑破视口。
+   横向滚动交给 el-table 内部的 .el-scrollbar__wrap。 */
+.table-wrap {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+.table-wrap :deep(.el-table) {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* 操作列按钮组：窄屏换行排列，不相互挤压 */
+.row-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.row-actions :deep(.el-button) { margin-left: 0; }
+
+@media (max-width: 900px) {
+  .quick-actions :deep(.el-button) { flex: 1 1 45%; margin-left: 0; }
+  .row-actions :deep(.el-button) { font-size: 12px; padding: 5px 8px; }
+}
+
+@media (max-width: 480px) {
+  .page-container { padding: 14px; }
+  .svc-bar { flex-direction: column; align-items: stretch; }
+  .svc-bar-right :deep(.el-button) { flex: 1 1 45%; margin-left: 0; }
+  .trash-bar { flex-direction: column; align-items: stretch; }
+  .trash-actions :deep(.el-button) { flex: 1 1 30%; margin-left: 0; }
+  .quick-actions :deep(.el-button) { flex: 1 1 100%; margin-left: 0; }
+  .row-actions :deep(.el-button) { flex: 1 1 45%; }
+}
 </style>

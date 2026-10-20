@@ -118,7 +118,10 @@ function logout() {
 .main-app {
   display: flex;
   height: 100vh;
+  /* 移动浏览器地址栏会遮挡 100vh，优先用动态视口高度 */
+  height: 100dvh;
   width: 100vw;
+  overflow: hidden;
 }
 .sidebar {
   width: var(--sb-width);
@@ -285,8 +288,19 @@ function logout() {
   }
   .content {
     padding: 14px;
+    padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
     /* 移动浏览器地址栏收起/展开时保持可见 */
     min-height: 0;
+    /* 顶部顶栏是 sticky，内容区独立滚动 */
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+@media (max-width: 480px) {
+  .content {
+    padding: 10px;
+    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
   }
 }
 .fade-enter-active, .fade-leave-active { transition: opacity 0.2s; }

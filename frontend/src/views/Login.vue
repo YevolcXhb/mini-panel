@@ -217,6 +217,15 @@ onMounted(() => {
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 
+/* 窄屏：400px 固定宽度会溢出 390px 视口，收成可用宽度 */
+@media (max-width: 480px) {
+  .login-card {
+    width: calc(100vw - 32px);
+    padding: 32px 22px 26px;
+    border-radius: 20px;
+  }
+}
+
 .login-logo {
   font-size: 52px;
   margin-bottom: 8px;

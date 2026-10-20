@@ -29,22 +29,24 @@
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="280" fixed="right">
+        <el-table-column label="操作" width="280" :fixed="isWide ? 'right' : false">
           <template #default="{ row }">
-            <el-button size="small" type="primary" @click="runNow(row)">立即执行</el-button>
-            <el-button size="small" @click="viewLog(row)">日志</el-button>
-            <el-button size="small" @click="editCronjob(row)">编辑</el-button>
-            <el-button size="small" type="danger" @click="deleteCronjob(row)">删除</el-button>
+            <div class="row-actions">
+              <el-button size="small" type="primary" @click="runNow(row)">立即执行</el-button>
+              <el-button size="small" @click="viewLog(row)">日志</el-button>
+              <el-button size="small" @click="editCronjob(row)">编辑</el-button>
+              <el-button size="small" type="danger" @click="deleteCronjob(row)">删除</el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
     </div>
 
-    <el-dialog v-model="showLog" title="执行日志" width="700px">
+    <el-dialog v-model="showLog" title="执行日志" width="700px" class="mp-dialog">
       <div style="background:#0d1117;border-radius:8px;padding:12px;max-height:400px;overflow:auto;font-family:monospace;font-size:13px;line-height:1.6;color:#c9d1d9;white-space:pre-wrap">{{ logContent || '暂无日志' }}</div>
     </el-dialog>
 
-    <el-dialog v-model="showCreate" :title="editing ? '编辑任务' : '新建任务'" width="600px">
+    <el-dialog v-model="showCreate" :title="editing ? '编辑任务' : '新建任务'" width="600px" class="mp-dialog">
       <el-form :model="form" label-width="90px" :rules="formRules" ref="formRef">
         <el-form-item label="名称" prop="name">
           <el-input v-model="form.name" placeholder="任务名称" />
@@ -86,9 +88,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { cronjobApi } from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
+
+// 窄屏移除操作列 sticky 固定，避免覆盖名称/命令列
+const WIDE_MQ = '(min-width: 901px)'
+const isWide = ref(typeof window !== 'undefined' ? window.matchMedia(WIDE_MQ).matches : true)
+const mql = typeof window !== 'undefined' ? window.matchMedia(WIDE_MQ) : null
+function onMqlChange(e: MediaQueryListEvent) { isWide.value = e.matches }
 
 const cronjobs = ref<any[]>([])
 const loading = ref(false)
@@ -189,5 +197,55 @@ async function deleteCronjob(row: any) {
   } catch (e) {}
 }
 
-onMounted(loadCronjobs)
+onMounted(() => {
+  loadCronjobs()
+  if (mql) mql.addEventListener('change', onMqlChange)
+})
+onUnmounted(() => {
+  if (mql) mql.removeEventListener('change', onMqlChange)
+})
 </script>
+
+<style scoped>
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.table-wrap :deep(.el-table) {
+  min-width: 980px;
+}
+.table-wrap :deep(.el-table .cell) {
+  white-space: nowrap;
+  word-break: keep-all;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.row-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  align-items: center;
+}
+.row-actions .el-button {
+  margin-left: 0 !important;
+}
+
+/* ── 移动端 ── */
+@media (max-width: 900px) {
+  .table-wrap {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .table-wrap :deep(.el-table) {
+    min-width: 980px;
+  }
+}
+
+@media (max-width: 480px) {
+  .table-wrap :deep(.el-table) {
+    min-width: 940px;
+  }
+}
+</style>

@@ -1,13 +1,21 @@
 <template>
   <div class="agent-container">
+    <!-- 移动端会话抽屉遮罩 -->
+    <div v-if="sessionsOpen" class="sessions-mask" @click="sessionsOpen = false"></div>
+
     <!-- 会话侧边栏 -->
-    <div class="sessions-sidebar">
+    <div class="sessions-sidebar" :class="{ 'mobile-open': sessionsOpen }">
       <div class="sidebar-header">
         <button class="new-chat-btn" @click="createNewSession">
           <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
           </svg>
           <span>新建对话</span>
+        </button>
+        <button class="sidebar-close-btn" title="关闭" @click="sessionsOpen = false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
         </button>
       </div>
 
@@ -38,6 +46,11 @@
       <!-- 极简高质感顶栏 -->
       <div class="gemini-header">
         <div class="header-left">
+          <button class="header-menu-btn" title="会话列表" @click="sessionsOpen = true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
           <div class="sparkle-logo">
             <svg viewBox="0 0 24 24" fill="url(#sparkle-grad)" class="gemini-sparkle-svg">
               <defs>
@@ -383,6 +396,7 @@ interface Session {
 
 const messagesRef = ref<HTMLDivElement>()
 const textareaRef = ref<HTMLTextAreaElement>()
+const sessionsOpen = ref(false)
 const inputMessage = ref('')
 const isInputFocused = ref(false)
 const streaming = ref(false)
@@ -611,6 +625,7 @@ async function createNewSession() {
       inputMessage.value = ''
       streamBuffer.value = ''
       currentStream.value = []
+      sessionsOpen.value = false
       scrollToBottom()
       adjustTextareaHeight()
     }
@@ -639,6 +654,7 @@ async function switchSession(sessionId: number) {
   pendingPlan.value = null
   resetOrchestrationState()
   currentSessionId.value = sessionId
+  sessionsOpen.value = false
   await loadSessionMessages(sessionId)
 }
 
@@ -1099,6 +1115,9 @@ function escapeHtml(str: string): string {
 .agent-container {
   display: flex;
   flex: 1;
+  /* 移动端侧栏抽屉以本容器为定位参照 */
+  position: relative;
+  min-height: 0;
   background: var(--card);
   border: 1px solid var(--bdr-light);
   border-radius: var(--r-lg);
@@ -2009,5 +2028,398 @@ function escapeHtml(str: string): string {
 .gemini-submit-btn {
   background: var(--acc);
   border-color: var(--acc);
+}
+
+/* ═══════════════════════════════════════════════
+   移动端适配
+   桌面端侧栏常驻；窄屏改抽屉，避免侧栏吃掉 2/3 宽度
+   ═══════════════════════════════════════════════ */
+
+/* 桌面端隐藏移动专用控件 */
+.sessions-mask,
+.sidebar-close-btn,
+.header-menu-btn {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .agent-container {
+    border-radius: var(--r-md, 10px);
+    /* 撑满父容器，避免内部滚动区高度算错 */
+    min-height: 0;
+  }
+
+  /* ── 侧栏改为滑出抽屉 ── */
+  .sessions-sidebar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 82vw;
+    max-width: 300px;
+    z-index: 60;
+    transform: translateX(-100%);
+    transition: transform 0.26s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.28);
+  }
+
+  .sessions-sidebar.mobile-open {
+    transform: translateX(0);
+  }
+
+  .sessions-mask {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 55;
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(2px);
+  }
+
+  .sidebar-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px;
+  }
+
+  .new-chat-btn {
+    flex: 1;
+    padding: 9px 12px;
+    font-size: 13px;
+  }
+
+  .sidebar-close-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    border: 1px solid var(--bdr);
+    background: transparent;
+    color: var(--txt2);
+    cursor: pointer;
+  }
+
+  .sidebar-close-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  /* 触屏没有 hover，删除按钮常显 */
+  .session-del-btn {
+    opacity: 1;
+  }
+
+  /* ── 顶栏 ── */
+  .gemini-header {
+    padding: 10px 12px;
+    gap: 8px;
+  }
+
+  .header-left {
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .header-menu-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    border: 1px solid var(--bdr);
+    background: transparent;
+    color: var(--txt2);
+    cursor: pointer;
+  }
+
+  .header-menu-btn svg {
+    width: 17px;
+    height: 17px;
+  }
+
+  .sparkle-logo {
+    flex-shrink: 0;
+  }
+
+  .gemini-sparkle-svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .header-meta {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .agent-brand {
+    font-size: 15px;
+    white-space: nowrap;
+  }
+
+  /* 模型标签在窄屏藏起来，把空间留给品牌与状态 */
+  .agent-model-tag {
+    display: none;
+  }
+
+  .mode-tag,
+  .live-status-pill {
+    flex-shrink: 0;
+    font-size: 11px;
+    padding: 2px 8px;
+  }
+
+  .live-status-pill {
+    max-width: 40vw;
+  }
+
+  .live-status-pill span:last-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .header-right {
+    gap: 4px;
+    flex-shrink: 0;
+  }
+
+  /* 顶栏只留图标，去掉文字避免挤压 */
+  .topbar-btn {
+    padding: 8px;
+    border-radius: 50%;
+  }
+
+  .topbar-btn .btn-text {
+    display: none;
+  }
+
+  .phase-progress-wrapper {
+    padding: 8px 12px 0;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* ── 消息区 ── */
+  .messages-area {
+    padding: 14px 12px;
+    gap: 16px;
+  }
+
+  .gemini-hero-state {
+    margin: 16px auto 0;
+  }
+
+  .hero-sparkle-bg {
+    margin-bottom: 18px;
+  }
+
+  .hero-svg {
+    width: 38px;
+    height: 38px;
+  }
+
+  .hero-greeting {
+    font-size: 21px;
+    padding: 0 8px;
+  }
+
+  .hero-subtext {
+    font-size: 13px;
+    padding: 0 8px;
+  }
+
+  /* 引导卡片单列，避免两列压成不可读 */
+  .hero-cards-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .hero-card {
+    padding: 13px 14px;
+    border-radius: 14px;
+  }
+
+  /* 用户气泡放宽到 88% */
+  .user-bubble {
+    max-width: 88%;
+    padding: 10px 14px;
+    border-radius: 16px;
+  }
+
+  .bubble-text {
+    font-size: 13.5px;
+  }
+
+  /* 助手消息头像缩到 26px，内容区留更多宽度 */
+  .assistant-container {
+    gap: 9px;
+  }
+
+  .gemini-avatar {
+    width: 26px;
+    height: 26px;
+  }
+
+  .avatar-svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .gemini-markdown {
+    font-size: 14px;
+    line-height: 1.65;
+  }
+
+  .gemini-markdown :deep(.gemini-h1) { font-size: 18px; }
+  .gemini-markdown :deep(.gemini-h2) { font-size: 16px; }
+  .gemini-markdown :deep(.gemini-h3) { font-size: 14.5px; }
+
+  .gemini-markdown :deep(pre) {
+    padding: 10px 11px;
+    font-size: 12px;
+    border-radius: 10px;
+  }
+
+  .gemini-markdown :deep(.gemini-inline-code) {
+    font-size: 12.5px;
+    word-break: break-all;
+  }
+
+  .tool-result-row {
+    margin-left: 0;
+  }
+
+  .tool-data {
+    max-height: 140px;
+    word-break: break-all;
+    white-space: pre-wrap;
+  }
+
+  /* 确认卡片取消左侧缩进，按钮铺满 */
+  .gemini-confirm-dialog {
+    margin-left: 0;
+    padding: 14px;
+    gap: 11px;
+    max-width: 100%;
+    border-radius: 14px;
+  }
+
+  .confirm-icon-box {
+    width: 30px;
+    height: 30px;
+  }
+
+  .confirm-icon-box svg {
+    width: 17px;
+    height: 17px;
+  }
+
+  .confirm-cmd-preview code {
+    font-size: 12px;
+    word-break: break-all;
+    white-space: pre-wrap;
+  }
+
+  .confirm-buttons {
+    gap: 8px;
+  }
+
+  .pill-btn {
+    flex: 1;
+    padding: 9px 12px;
+    min-height: 38px;
+  }
+
+  /* ── 底部输入胶囊 ── */
+  .floating-prompt-wrapper {
+    padding: 8px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .gemini-input-pill {
+    padding: 8px 10px 8px 14px;
+    border-radius: 22px;
+    gap: 8px;
+  }
+
+  /* 16px 是 iOS 触发自动缩放的分界，低于它会强制放大页面 */
+  .gemini-textarea {
+    font-size: 16px;
+    max-height: 110px;
+  }
+
+  .pill-actions {
+    gap: 6px;
+  }
+
+  .pill-send-btn,
+  .pill-stop-btn,
+  .pill-action-btn {
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+  }
+
+  .gemini-footer-tip {
+    font-size: 10px;
+    margin-top: 6px;
+    padding: 0 6px;
+    line-height: 1.4;
+  }
+}
+
+@media (max-width: 480px) {
+  .gemini-header {
+    padding: 9px 10px;
+  }
+
+  .agent-brand {
+    font-size: 14px;
+  }
+
+  .hero-greeting {
+    font-size: 19px;
+  }
+
+  .messages-area {
+    padding: 12px 10px;
+    gap: 14px;
+  }
+
+  .user-bubble {
+    max-width: 92%;
+  }
+
+  .floating-prompt-wrapper {
+    padding: 6px 10px calc(10px + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* 极窄屏隐藏底部免责提示，优先保证输入框可见 */
+  .gemini-footer-tip {
+    display: none;
+  }
+}
+
+/* 横屏矮屏：压缩头部与欢迎区，避免输入框被挤出视口 */
+@media (max-height: 500px) and (max-width: 900px) {
+  .gemini-hero-state {
+    margin-top: 0;
+  }
+
+  .hero-sparkle-bg,
+  .gemini-footer-tip {
+    display: none;
+  }
+
+  .messages-area {
+    padding: 10px 12px;
+    gap: 12px;
+  }
 }
 </style>

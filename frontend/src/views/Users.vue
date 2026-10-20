@@ -7,6 +7,7 @@
       <el-button type="primary" @click="openDialog()">添加用户</el-button>
     </div>
 
+    <div class="table-wrap">
     <el-table :data="users" style="width: 100%" v-loading="loading">
       <el-table-column prop="id" label="ID" width="60" />
       <el-table-column prop="username" label="用户名" />
@@ -35,23 +36,26 @@
       <el-table-column prop="created_at" label="创建时间" width="160">
         <template #default="scope">{{ formatTime(scope.row.created_at) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="280" fixed="right">
+      <el-table-column label="操作" width="280" :fixed="isWide ? 'right' : false">
         <template #default="scope">
-          <el-button size="small" @click="openResetDialog(scope.row)">重置密码</el-button>
-          <el-button size="small" @click="openDialog(scope.row)">编辑权限</el-button>
-          <el-popconfirm title="确定删除该用户?" @confirm="deleteUser(scope.row.id)">
-            <template #reference>
-              <el-button type="danger" size="small" :disabled="scope.row.id === currentUserId || (scope.row.role === 'admin' && adminCount <= 1)">删除</el-button>
-            </template>
-          </el-popconfirm>
+          <div class="row-actions">
+            <el-button size="small" @click="openResetDialog(scope.row)">重置密码</el-button>
+            <el-button size="small" @click="openDialog(scope.row)">编辑权限</el-button>
+            <el-popconfirm title="确定删除该用户?" @confirm="deleteUser(scope.row.id)">
+              <template #reference>
+                <el-button type="danger" size="small" :disabled="scope.row.id === currentUserId || (scope.row.role === 'admin' && adminCount <= 1)">删除</el-button>
+              </template>
+            </el-popconfirm>
+          </div>
         </template>
       </el-table-column>
     </el-table>
+    </div>
 
     <el-dialog
       v-model="dialogVisible"
       :title="isEdit ? '编辑用户 - 角色与权限' : '添加用户'"
-      width="720px"
+      :width="isWide ? '720px' : '94vw'"
       :close-on-click-modal="false"
     >
       <el-form :model="form" :rules="rules" ref="formRef" label-width="90px">
@@ -124,7 +128,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="resetDialogVisible" title="重置密码" width="400px">
+    <el-dialog v-model="resetDialogVisible" title="重置密码" :width="isWide ? '400px' : '94vw'">
       <el-form :model="resetForm" :rules="resetRules" ref="resetFormRef" label-width="80px">
         <el-form-item label="新密码" prop="password">
           <el-input v-model="resetForm.password" type="password" placeholder="新密码" />
@@ -139,7 +143,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { WarningFilled } from '@element-plus/icons-vue'
 import { userApi } from '../api'
@@ -148,6 +152,12 @@ import { useAuthStore } from '../store'
 const auth = useAuthStore()
 const users = ref<any[]>([])
 const loading = ref(false)
+
+// 窄屏移除操作列 sticky 固定，避免覆盖用户名列
+const WIDE_MQ = '(min-width: 901px)'
+const isWide = ref(typeof window !== 'undefined' ? window.matchMedia(WIDE_MQ).matches : true)
+const mql = typeof window !== 'undefined' ? window.matchMedia(WIDE_MQ) : null
+function onMqlChange(e: MediaQueryListEvent) { isWide.value = e.matches }
 const dialogVisible = ref(false)
 const resetDialogVisible = ref(false)
 const isEdit = ref(false)
@@ -360,10 +370,46 @@ async function deleteUser(id: number) {
 onMounted(() => {
   loadFeatures()
   loadUsers()
+  if (mql) mql.addEventListener('change', onMqlChange)
+})
+
+onUnmounted(() => {
+  if (mql) mql.removeEventListener('change', onMqlChange)
 })
 </script>
 
 <style scoped>
+.page-container {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.page-title {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.row-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  align-items: center;
+}
+.row-actions .el-button {
+  margin-left: 0 !important;
+}
 .perm-toolbar {
   display: flex;
   gap: 8px;
@@ -455,5 +501,55 @@ onMounted(() => {
   margin-left: 12px;
   color: var(--dim);
   font-size: 12px;
+}
+
+/* ── 移动端 ── */
+@media (max-width: 900px) {
+  .page-container {
+    padding: 0;
+  }
+  .page-header {
+    flex-direction: row;
+    flex-wrap: wrap;
+    row-gap: 10px;
+    margin-bottom: 12px;
+  }
+  .page-title {
+    font-size: 17px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .table-wrap {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .table-wrap :deep(.el-table) {
+    min-width: 820px;
+  }
+  .row-actions {
+    flex-wrap: nowrap;
+    white-space: nowrap;
+  }
+  .perm-toolbar {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .perm-tip {
+    margin-left: 0;
+    flex: 1 1 100%;
+  }
+  .perm-checkbox-group {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  .page-title {
+    font-size: 16px;
+  }
+  .perm-toolbar .el-button {
+    padding: 6px 10px !important;
+  }
 }
 </style>

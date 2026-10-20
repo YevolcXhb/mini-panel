@@ -223,4 +223,57 @@ onUnmounted(() => {
   min-width: 0;
   height: 100%;
 }
+
+/* ── 移动端：终端高度按视口重算，提示框不撑破 ── */
+@media (max-width: 900px) {
+  h2.page-title {
+    font-size: 17px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .terminal-wrap {
+    height: calc(100dvh - 250px);
+    min-height: 300px;
+    border-radius: 6px;
+  }
+  .term-output :deep(.xterm) {
+    padding: 4px 2px;
+  }
+  .term-output :deep(.xterm-viewport) {
+    overflow-x: hidden !important;
+  }
+  :deep(.el-alert) {
+    padding: 8px 10px !important;
+  }
+  :deep(.el-alert__title) {
+    font-size: 12.5px !important;
+    line-height: 1.45;
+    white-space: normal;
+    word-break: break-word;
+  }
+  :deep(.el-alert__description) {
+    font-size: 12px !important;
+    line-height: 1.5;
+    margin: 4px 0 0 !important;
+    word-break: break-word;
+  }
+  :deep(.el-tabs__header) {
+    margin-bottom: 10px;
+  }
+  :deep(.el-tabs__item) {
+    font-size: 13px;
+    height: 36px;
+    line-height: 36px;
+  }
+}
+
+@media (max-width: 480px) {
+  .terminal-wrap {
+    height: calc(100dvh - 235px);
+    min-height: 260px;
+  }
+  :deep(.el-alert__title) {
+    font-size: 12px !important;
+  }
+}
 </style>

@@ -8,7 +8,8 @@
     </div>
 
     <el-card class="section-card" shadow="never">
-      <template #header><span>备份任务</span></template>
+      <template #header><span class="card-head-title">备份任务</span></template>
+      <div class="table-wrap">
       <el-table :data="tasks" style="width: 100%" v-loading="loadingTasks">
         <el-table-column prop="name" label="名称" />
         <el-table-column prop="type" label="类型" width="100">
@@ -39,26 +40,29 @@
         <el-table-column label="上次执行时间" width="160">
           <template #default="scope">{{ formatTime(scope.row.updated_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="240" fixed="right">
+        <el-table-column label="操作" width="240" :fixed="isWide ? 'right' : false">
           <template #default="scope">
-            <el-button type="primary" size="small" :loading="runningId === scope.row.id" @click="runTask(scope.row.id)">立即执行</el-button>
-            <el-button size="small" @click="openTaskDialog(scope.row)">编辑</el-button>
-            <el-popconfirm title="确定删除?" @confirm="deleteTask(scope.row.id)">
-              <template #reference>
-                <el-button type="danger" size="small">删除</el-button>
-              </template>
-            </el-popconfirm>
+            <div class="row-actions">
+              <el-button type="primary" size="small" :loading="runningId === scope.row.id" @click="runTask(scope.row.id)">立即执行</el-button>
+              <el-button size="small" @click="openTaskDialog(scope.row)">编辑</el-button>
+              <el-popconfirm title="确定删除?" @confirm="deleteTask(scope.row.id)">
+                <template #reference>
+                  <el-button type="danger" size="small">删除</el-button>
+                </template>
+              </el-popconfirm>
+            </div>
           </template>
         </el-table-column>
       </el-table>
+      </div>
     </el-card>
 
     <el-card class="section-card" shadow="never" style="margin-top: 16px">
       <template #header>
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <span>备份记录</span>
-          <div style="display:flex;gap:8px">
-            <el-select v-model="filterTaskId" placeholder="全部任务" size="small" clearable @change="loadRecords" style="width: 200px">
+        <div class="card-head-row">
+          <span class="card-head-title">备份记录</span>
+          <div class="card-head-actions">
+            <el-select v-model="filterTaskId" placeholder="全部任务" size="small" clearable @change="loadRecords" class="record-filter">
               <el-option label="全部任务" :value="0" />
               <el-option v-for="t in tasks" :key="t.id" :label="t.name" :value="t.id" />
             </el-select>
@@ -66,6 +70,7 @@
           </div>
         </div>
       </template>
+      <div class="table-wrap">
       <el-table :data="records" style="width: 100%" v-loading="loadingRecords">
         <el-table-column prop="id" label="ID" width="60" />
         <el-table-column label="任务名称" width="120">
@@ -87,20 +92,23 @@
         <el-table-column prop="created_at" label="创建时间" width="160">
           <template #default="scope">{{ formatTime(scope.row.created_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="180" fixed="right">
+        <el-table-column label="操作" width="180" :fixed="isWide ? 'right' : false">
           <template #default="scope">
-            <el-button type="success" size="small" :disabled="scope.row.status !== 'success'" @click="restoreRecord(scope.row.id)">恢复</el-button>
-            <el-popconfirm title="确定删除记录和备份文件?" @confirm="deleteRecord(scope.row.id)">
-              <template #reference>
-                <el-button type="danger" size="small">删除</el-button>
-              </template>
-            </el-popconfirm>
+            <div class="row-actions">
+              <el-button type="success" size="small" :disabled="scope.row.status !== 'success'" @click="restoreRecord(scope.row.id)">恢复</el-button>
+              <el-popconfirm title="确定删除记录和备份文件?" @confirm="deleteRecord(scope.row.id)">
+                <template #reference>
+                  <el-button type="danger" size="small">删除</el-button>
+                </template>
+              </el-popconfirm>
+            </div>
           </template>
         </el-table-column>
       </el-table>
+      </div>
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑备份任务' : '添加备份任务'" width="550px">
+    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑备份任务' : '添加备份任务'" :width="isWide ? '550px' : '94vw'">
       <el-form :model="form" :rules="rules" ref="formRef" label-width="100px">
         <el-form-item label="任务名称" prop="name">
           <el-input v-model="form.name" placeholder="例如：网站每日备份" />
@@ -157,9 +165,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { backupApi, websiteApi, databaseApi } from '../api'
+
+// 窄屏移除操作列 sticky 固定，避免覆盖名称/路径列
+const WIDE_MQ = '(min-width: 901px)'
+const isWide = ref(typeof window !== 'undefined' ? window.matchMedia(WIDE_MQ).matches : true)
+const mql = typeof window !== 'undefined' ? window.matchMedia(WIDE_MQ) : null
+function onMqlChange(e: MediaQueryListEvent) { isWide.value = e.matches }
 
 const tasks = ref<any[]>([])
 const records = ref<any[]>([])
@@ -371,18 +385,28 @@ onMounted(() => {
   loadTasks()
   loadRecords()
   loadRefs()
+  if (mql) mql.addEventListener('change', onMqlChange)
+})
+
+onUnmounted(() => {
+  if (mql) mql.removeEventListener('change', onMqlChange)
 })
 </script>
 
 <style scoped>
 .page-container {
   padding: 20px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 .page-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 .page-title {
   font-size: 1.5rem;
@@ -391,11 +415,102 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .icon {
   font-size: 1.3rem;
 }
 .section-card {
   border-radius: 8px;
+}
+.card-head-title {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.card-head-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.card-head-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.record-filter {
+  width: 200px;
+}
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.row-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  align-items: center;
+}
+.row-actions .el-button {
+  margin-left: 0 !important;
+}
+
+/* ── 移动端 ── */
+@media (max-width: 900px) {
+  .page-container {
+    padding: 0;
+  }
+  .page-header {
+    margin-bottom: 14px;
+    row-gap: 10px;
+  }
+  .page-title {
+    font-size: 17px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .card-head-row {
+    row-gap: 8px;
+  }
+  .card-head-title {
+    white-space: nowrap;
+    flex-shrink: 0;
+    display: inline-block;
+  }
+  .card-head-actions {
+    flex: 1 1 100%;
+    width: 100%;
+    flex-wrap: nowrap;
+  }
+  .record-filter {
+    flex: 1 1 auto;
+    width: auto !important;
+    min-width: 0;
+  }
+  .table-wrap {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .table-wrap :deep(.el-table) {
+    min-width: 860px;
+  }
+  .row-actions {
+    flex-wrap: nowrap;
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 480px) {
+  .page-title {
+    font-size: 16px;
+  }
+  .card-head-actions .el-button {
+    padding: 6px 10px !important;
+  }
 }
 </style>

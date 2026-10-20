@@ -24,15 +24,15 @@
 
     <template v-else>
       <el-card style="margin-bottom: 16px">
-        <div style="display: flex; justify-content: space-between; align-items: center">
-          <div style="display: flex; align-items: center; gap: 12px">
+        <div class="svc-bar">
+          <div class="svc-bar-left">
             <el-tag :type="currentService.running ? 'success' : 'danger'" size="large">
               {{ currentService.running ? '运行中' : '已停止' }}
             </el-tag>
             <span v-if="currentService.version">{{ typeLabel }} v{{ currentService.version }}</span>
             <span v-if="activeType === 'sqlite'" style="color: #909399; font-size: 12px">嵌入式数据库，无需启动/停止服务</span>
           </div>
-          <div v-if="activeType !== 'sqlite'" style="display: flex; gap: 8px">
+          <div v-if="activeType !== 'sqlite'" class="svc-bar-right">
             <el-button size="small" type="primary" @click="startService" v-if="!currentService.running" :loading="actionLoading">启动</el-button>
             <el-button size="small" type="warning" @click="stopService" v-if="currentService.running" :loading="actionLoading">停止</el-button>
             <el-button size="small" @click="restartService" :loading="actionLoading">重启</el-button>
@@ -41,35 +41,39 @@
         </div>
       </el-card>
 
-      <div style="margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center">
+      <div class="list-toolbar">
         <el-button type="primary" @click="openDialog()">添加数据库实例</el-button>
       </div>
 
-      <el-table :data="databases" style="width: 100%" v-loading="loading">
-        <el-table-column prop="name" label="名称" min-width="120" />
-        <el-table-column prop="type" label="类型" width="100">
-          <template #default="{ row }">
-            <el-tag :type="getTypeTag(row.type)">{{ row.type }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="host" label="主机" min-width="120" />
-        <el-table-column prop="port" label="端口" width="80" />
-        <el-table-column prop="username" label="用户名" width="100" />
-        <el-table-column label="关联网站" width="120">
-          <template #default="{ row }">
-            <el-tag v-if="row.website_count > 0" size="small" type="warning">{{ row.website_count }} 个</el-tag>
-            <span v-else style="color: #c0c4cc">独立</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="280" fixed="right">
-          <template #default="{ row }">
-            <el-button size="small" @click="testConnection(row)">测试连接</el-button>
-            <el-button size="small" @click="openDbDialog(row)">数据库</el-button>
-            <el-button size="small" @click="openDialog(row)">编辑</el-button>
-            <el-button size="small" type="danger" @click="handleDelete(row.id)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+      <div class="table-wrap">
+        <el-table :data="databases" style="width: 100%" v-loading="loading">
+          <el-table-column prop="name" label="名称" min-width="120" />
+          <el-table-column prop="type" label="类型" width="100">
+            <template #default="{ row }">
+              <el-tag :type="getTypeTag(row.type)">{{ row.type }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="host" label="主机" min-width="120" />
+          <el-table-column prop="port" label="端口" width="80" />
+          <el-table-column prop="username" label="用户名" width="100" />
+          <el-table-column label="关联网站" width="120">
+            <template #default="{ row }">
+              <el-tag v-if="row.website_count > 0" size="small" type="warning">{{ row.website_count }} 个</el-tag>
+              <span v-else style="color: #c0c4cc">独立</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" :width="isWide ? 280 : 200" :fixed="isWide ? 'right' : false">
+            <template #default="{ row }">
+              <div class="row-actions">
+                <el-button size="small" @click="testConnection(row)">测试连接</el-button>
+                <el-button size="small" @click="openDbDialog(row)">数据库</el-button>
+                <el-button size="small" @click="openDialog(row)">编辑</el-button>
+                <el-button size="small" type="danger" @click="handleDelete(row.id)">删除</el-button>
+              </div>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
     </template>
 
     <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑数据库实例' : '添加数据库实例'" width="500px">
@@ -110,19 +114,21 @@
     </el-dialog>
 
     <el-dialog v-model="dbDialogVisible" :title="`数据库管理 - ${currentDbInstance?.name || ''}`" width="750px">
-	      <div style="margin-bottom: 16px; display: flex; gap: 8px">
+	      <div style="margin-bottom: 16px; display: flex; gap: 8px; flex-wrap: wrap">
 	        <el-button type="primary" size="small" @click="openCreateDbDialog">创建数据库</el-button>
 	        <el-button size="small" @click="openQueryDialog">SQL 查询</el-button>
 	        <el-button size="small" @click="loadDbs">刷新</el-button>
 	      </div>
 	      <el-table :data="dbList" v-loading="dbLoading" size="small">
 	        <el-table-column prop="name" label="数据库名" />
-	        <el-table-column label="操作" width="320">
+	        <el-table-column label="操作" :width="isWide ? 320 : 240">
 	          <template #default="{ row }">
-	            <el-button size="small" @click="openTableDialog(row.name)">查看表</el-button>
-	            <el-button size="small" @click="backupDb(row.name)">备份</el-button>
-	            <el-button size="small" @click="restoreDb(row.name)">恢复</el-button>
-	            <el-button size="small" type="danger" @click="dropDb(row.name)">删除</el-button>
+	            <div class="row-actions">
+	              <el-button size="small" @click="openTableDialog(row.name)">查看表</el-button>
+	              <el-button size="small" @click="backupDb(row.name)">备份</el-button>
+	              <el-button size="small" @click="restoreDb(row.name)">恢复</el-button>
+	              <el-button size="small" type="danger" @click="dropDb(row.name)">删除</el-button>
+	            </div>
 	          </template>
 	        </el-table-column>
 	      </el-table>
@@ -201,9 +207,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { databaseApi, systemApi } from '../api'
+
+// 宽屏才启用 fixed 列：sticky 列在窄屏会盖住其它列的内容。
+// 初值同步读取，避免桌面端首帧先渲染成非固定列再跳变。
+const WIDE_MQ = '(min-width: 901px)'
+const isWide = ref(typeof window !== 'undefined' ? window.matchMedia(WIDE_MQ).matches : true)
+let mql: MediaQueryList | null = null
+function syncWide(e: MediaQueryListEvent) {
+  isWide.value = e.matches
+}
 
 const databases = ref<any[]>([])
 const loading = ref(false)
@@ -576,10 +591,16 @@ async function dropDb(dbName: string) {
 	}
 
 	onMounted(async () => {
+  mql = window.matchMedia(WIDE_MQ)
+  mql.addEventListener('change', syncWide)
   await checkStatus()
   if (serviceStatus.value.mysql.installed || serviceStatus.value.sqlite.installed) {
     loadDatabases()
   }
+})
+
+onUnmounted(() => {
+  mql?.removeEventListener('change', syncWide)
 })
 </script>
 
@@ -603,5 +624,76 @@ async function dropDb(dbName: string) {
 }
 .icon {
   font-size: 1.3rem;
+}
+
+/* ── 服务状态条：窄屏换行，避免左右两块挤在一行导致溢出 ── */
+.svc-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.svc-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.svc-bar-right {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.list-toolbar {
+  margin-bottom: 16px;
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ── 表格横向滚动容器 ──
+   不要给 .el-table 设 min-width：那会让表格根节点比容器宽、整表撑破视口。
+   让 el-table 收缩到容器宽度，横向滚动交给 el-table 内部的
+   .el-scrollbar__wrap（列宽总和 > 容器宽时自动出现）。 */
+.table-wrap {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+.table-wrap :deep(.el-table) {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* 操作列按钮组：窄屏按行换行排列，不再互相挤压 */
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.row-actions :deep(.el-button) {
+  margin-left: 0;
+}
+
+@media (max-width: 900px) {
+  .list-toolbar :deep(.el-button) { flex: 1 1 auto; }
+  .row-actions :deep(.el-button) { font-size: 12px; padding: 5px 8px; }
+}
+
+@media (max-width: 480px) {
+  .page-container { padding: 14px; }
+  .svc-bar { flex-direction: column; align-items: stretch; }
+  .svc-bar-right :deep(.el-button) { flex: 1 1 45%; }
+  .row-actions :deep(.el-button) { flex: 1 1 45%; }
 }
 </style>

@@ -402,6 +402,20 @@ async function loadNetInfo() {
 	}
 	/* 网络接口：移动端用卡片，桌面端用表格 */
 	.mobile-card-list { display: none; }
+
+	/* 平板宽度（768–900）仍走表格，容器需能收缩；
+	   不给 el-table 设 min-width，否则整表会撑破视口，
+	   横向滚动交给 el-table 内部的 .el-scrollbar__wrap。 */
+	.table-wrap {
+	  width: 100%;
+	  max-width: 100%;
+	  min-width: 0;
+	  overflow-x: auto;
+	  overflow-y: hidden;
+	  -webkit-overflow-scrolling: touch;
+	  overscroll-behavior-x: contain;
+	}
+	.table-wrap :deep(.el-table) { width: 100%; min-width: 0; max-width: 100%; }
 	.net-mobile-card { padding: 12px; margin-bottom: 10px; }
 	.net-mobile-head {
 	  font-size: 14px; font-weight: 600; color: #e8eaed;

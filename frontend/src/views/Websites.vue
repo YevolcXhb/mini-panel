@@ -15,14 +15,14 @@
 
     <template v-else>
       <el-card style="margin-bottom: 16px">
-        <div style="display: flex; justify-content: space-between; align-items: center">
-          <div style="display: flex; align-items: center; gap: 12px">
+        <div class="svc-bar">
+          <div class="svc-bar-left">
             <el-tag :type="serviceStatus.running ? 'success' : 'danger'" size="large">
               {{ serviceStatus.running ? '运行中' : '已停止' }}
             </el-tag>
             <span v-if="serviceStatus.version">Nginx v{{ serviceStatus.version }}</span>
           </div>
-          <div style="display: flex; gap: 8px">
+          <div class="svc-bar-right">
             <el-button size="small" type="primary" @click="startService" v-if="!serviceStatus.running" :loading="actionLoading">启动</el-button>
             <el-button size="small" type="warning" @click="stopService" v-if="serviceStatus.running" :loading="actionLoading">停止</el-button>
             <el-button size="small" @click="restartService" :loading="actionLoading">重启</el-button>
@@ -32,11 +32,9 @@
         </div>
       </el-card>
 
-      <div style="margin-bottom:16px;display:flex;gap:8px;justify-content:space-between;align-items:center">
-        <div style="display:flex;gap:8px">
-          <el-button type="primary" @click="showAdd">添加网站</el-button>
-          <el-button @click="showLnmp = true; loadPhpVersions()">LNMP 管理</el-button>
-        </div>
+      <div class="list-toolbar">
+        <el-button type="primary" @click="showAdd">添加网站</el-button>
+        <el-button @click="showLnmp = true; loadPhpVersions()">LNMP 管理</el-button>
       </div>
 
       <div class="table-wrap">
@@ -76,12 +74,14 @@
               <span style="color: #909399; font-family: monospace">{{ row.root || '-' }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="280" fixed="right">
+          <el-table-column label="操作" :width="isWide ? 280 : 168" :fixed="isWide ? 'right' : false">
             <template #default="{ row }">
-              <el-button size="small" @click="editWebsite(row)">编辑</el-button>
-              <el-button size="small" @click="toggleWebsite(row)">{{ row.enabled ? '停用' : '启用' }}</el-button>
-              <el-button size="small" @click="showLogs(row)">日志</el-button>
-              <el-button size="small" type="danger" @click="deleteWebsite(row)">删除</el-button>
+              <div class="row-actions">
+                <el-button size="small" @click="editWebsite(row)">编辑</el-button>
+                <el-button size="small" @click="toggleWebsite(row)">{{ row.enabled ? '停用' : '启用' }}</el-button>
+                <el-button size="small" @click="showLogs(row)">日志</el-button>
+                <el-button size="small" type="danger" @click="deleteWebsite(row)">删除</el-button>
+              </div>
             </template>
           </el-table-column>
         </el-table>
@@ -332,26 +332,28 @@
                   <span v-else style="color: #c0c4cc">-</span>
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="320">
+              <el-table-column label="操作" :width="isWide ? 320 : 260">
                 <template #default="{ row }">
-                  <template v-if="!row.installed">
-                    <el-button size="small" type="primary" @click="installPhpVersion(row.version)">安装</el-button>
-                  </template>
-                  <template v-else>
-                    <el-button size="small" type="success" v-if="!row.running" @click="startPhpFpm(row.version)">启动</el-button>
-                    <el-button size="small" type="warning" v-if="row.running" @click="stopPhpFpm(row.version)">停止</el-button>
-                    <el-button size="small" @click="restartPhpFpm(row.version)">重启</el-button>
-                    <el-button size="small" @click="showPhpExt(row.version)">扩展</el-button>
-                    <el-button size="small" @click="showPhpConfig(row.version)">配置</el-button>
-                    <el-button size="small" type="danger" @click="removePhpVersion(row.version)">卸载</el-button>
-                  </template>
+                  <div class="row-actions">
+                    <template v-if="!row.installed">
+                      <el-button size="small" type="primary" @click="installPhpVersion(row.version)">安装</el-button>
+                    </template>
+                    <template v-else>
+                      <el-button size="small" type="success" v-if="!row.running" @click="startPhpFpm(row.version)">启动</el-button>
+                      <el-button size="small" type="warning" v-if="row.running" @click="stopPhpFpm(row.version)">停止</el-button>
+                      <el-button size="small" @click="restartPhpFpm(row.version)">重启</el-button>
+                      <el-button size="small" @click="showPhpExt(row.version)">扩展</el-button>
+                      <el-button size="small" @click="showPhpConfig(row.version)">配置</el-button>
+                      <el-button size="small" type="danger" @click="removePhpVersion(row.version)">卸载</el-button>
+                    </template>
+                  </div>
                 </template>
               </el-table-column>
             </el-table>
           </el-tab-pane>
 
           <el-tab-pane v-if="selectedPhpVersion" label="扩展管理" name="extensions">
-            <div style="margin-bottom: 12px; display: flex; gap: 8px; align-items: center">
+            <div style="margin-bottom: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
               <span style="font-weight: 600">PHP {{ selectedPhpVersion }}</span>
               <el-input v-model="newExtName" placeholder="扩展名 (如 redis, imagick)" size="small" style="width: 200px" />
               <el-button size="small" type="primary" @click="installExt">安装扩展</el-button>
@@ -373,7 +375,7 @@
           </el-tab-pane>
 
           <el-tab-pane v-if="selectedPhpVersion" label="PHP 配置" name="config">
-            <div style="margin-bottom: 12px; display: flex; gap: 8px; align-items: center">
+            <div style="margin-bottom: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
               <span style="font-weight: 600">PHP {{ selectedPhpVersion }} php.ini</span>
               <el-button size="small" type="primary" @click="savePhpConfig">保存配置</el-button>
               <el-button size="small" @click="loadPhpConfig">刷新</el-button>
@@ -457,7 +459,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading, CircleCheck, CircleClose, Check, Close } from '@element-plus/icons-vue'
 import { websiteApi, systemApi, phpApi, databaseApi } from '../api'
@@ -468,6 +470,15 @@ import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/compon
 import VChart from 'vue-echarts'
 
 use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, LegendComponent])
+
+// 宽屏才启用 fixed 列：sticky 操作列在窄屏会横向覆盖其它列。
+// 初值同步读取，避免桌面端首帧先渲染成非固定列再跳变。
+const WIDE_MQ = '(min-width: 901px)'
+const isWide = ref(typeof window !== 'undefined' ? window.matchMedia(WIDE_MQ).matches : true)
+let mql: MediaQueryList | null = null
+function syncWide(e: MediaQueryListEvent) {
+  isWide.value = e.matches
+}
 
 const websites = ref<any[]>([])
 const loading = ref(false)
@@ -997,14 +1008,68 @@ async function savePhpConfig() {
 }
 
 onMounted(async () => {
+  mql = window.matchMedia(WIDE_MQ)
+  mql.addEventListener('change', syncWide)
   await checkStatus()
   if (serviceStatus.value.installed) {
     loadWebsites()
   }
 })
+
+onUnmounted(() => {
+  mql?.removeEventListener('change', syncWide)
+})
 </script>
 
 <style scoped>
+/* ── 服务状态条：窄屏换行 ── */
+.svc-bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.svc-bar-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-width: 0; }
+.svc-bar-right { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* 工具栏（添加网站 / LNMP 管理）：原为 space-between 单行，窄屏溢出 */
+.list-toolbar {
+  margin-bottom: 16px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-start;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* ── 表格横向滚动容器 ──
+   不要给 .el-table 设 min-width：那会让表格根节点比容器宽、整表撑破视口。
+   横向滚动交给 el-table 内部的 .el-scrollbar__wrap。 */
+.table-wrap {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+.table-wrap :deep(.el-table) {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* 操作列按钮组：窄屏换行，避免四个按钮挤成一行溢出 */
+.row-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.row-actions :deep(.el-button) { margin-left: 0; }
+
+@media (max-width: 900px) {
+  .row-actions :deep(.el-button) { font-size: 12px; padding: 5px 8px; }
+}
+
+@media (max-width: 480px) {
+  .svc-bar { flex-direction: column; align-items: stretch; }
+  .svc-bar-right :deep(.el-button) { flex: 1 1 45%; margin-left: 0; }
+  .list-toolbar :deep(.el-button) { flex: 1 1 45%; margin-left: 0; }
+  .row-actions :deep(.el-button) { flex: 1 1 45%; }
+}
+
 .php-install-container {
   text-align: center;
   padding: 12px 0;

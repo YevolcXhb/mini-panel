@@ -75,7 +75,7 @@
 
     <h3 class="section-title">磁盘详情</h3>
     <div class="table-wrap">
-      <el-table :data="monitor.disks" size="small">
+      <el-table :data="monitor.disks" size="small" style="width: 100%">
         <el-table-column prop="path" label="挂载点" />
         <el-table-column label="已用/总量">
           <template #default="{ row }">{{ formatBytes(row.used) }} / {{ formatBytes(row.total) }}</template>
@@ -94,7 +94,7 @@
 
     <h3 class="section-title">网络监控</h3>
     <div class="table-wrap">
-      <el-table :data="monitor.network" size="small">
+      <el-table :data="monitor.network" size="small" style="width: 100%">
         <el-table-column prop="name" label="接口" />
         <el-table-column label="接收">
           <template #default="{ row }">{{ formatBytes(row.bytes_recv) }}</template>
@@ -183,4 +183,32 @@ onUnmounted(() => clearInterval(timer))
 <style scoped>
 .page-title { margin-bottom: 20px; }
 .section-title { margin-top: 24px; }
+
+/* ── 表格容器 ──
+   关键：不要给 .el-table 设 min-width。设了 min-width，el-table 根节点就会
+   比容器宽、整张表撑破视口（docW=390 但 table right=574 就是这个原因）。
+   让 el-table 收缩到容器宽度，横向滚动交给 el-table 自己的
+   .el-scrollbar__wrap（实测 cw=322 / sw=920，内部滚动本来就能用）。 */
+.table-wrap {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+.table-wrap :deep(.el-table) {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+@media (max-width: 900px) {
+  /* 窄屏再额外兜一层：万一全局 .table-wrap .el-table 的 min-width 没被改掉，
+     外层也还有滚动条可用，不会把整个页面撑出横向位移 */
+  .table-wrap {
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+  .table-wrap :deep(.el-table .cell) { word-break: break-all; }
+}
 </style>

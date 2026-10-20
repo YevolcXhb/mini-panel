@@ -26,7 +26,7 @@
     </div>
     <div v-else class="empty-state">暂无容器，点击上方按钮创建</div>
 
-    <el-dialog v-model="showCreate" title="创建容器" width="520px">
+    <el-dialog v-model="showCreate" title="创建容器" :width="isWide ? '520px' : '94vw'">
       <el-form :model="createForm" label-width="90px">
         <el-form-item label="名称">
           <el-input v-model="createForm.name" placeholder="容器名称" />
@@ -50,16 +50,22 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="showLogDialog" title="容器日志" width="700px">
+    <el-dialog v-model="showLogDialog" title="容器日志" :width="isWide ? '700px' : '94vw'">
       <div class="mono-block">{{ logs || '无日志' }}</div>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { containerApi } from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
+
+// 窄屏用 94vw 弹窗，避免固定像素宽度溢出屏幕
+const WIDE_MQ = '(min-width: 901px)'
+const isWide = ref(typeof window !== 'undefined' ? window.matchMedia(WIDE_MQ).matches : true)
+const mql = typeof window !== 'undefined' ? window.matchMedia(WIDE_MQ) : null
+function onMqlChange(e: MediaQueryListEvent) { isWide.value = e.matches }
 
 const containers = ref<any[]>([])
 const loading = ref(false)
@@ -108,5 +114,88 @@ async function showLogs(name: string) {
   } catch (e) {}
 }
 
-onMounted(loadContainers)
+onMounted(() => {
+  loadContainers()
+  if (mql) mql.addEventListener('change', onMqlChange)
+})
+onUnmounted(() => {
+  if (mql) mql.removeEventListener('change', onMqlChange)
+})
 </script>
+
+<style scoped>
+/* 容器日志块：dark-theme.css 未定义，需页面自带 */
+.mono-block {
+  background: #0d1117;
+  color: #c9d1d9;
+  border-radius: 8px;
+  padding: 12px;
+  max-height: 460px;
+  overflow: auto;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ── 移动端：卡片竖排，操作按钮铺成 2 列网格 ──
+   窄屏 901px 起生效，覆盖 dark-theme.css 只到 768px 的规则 */
+@media (max-width: 900px) {
+  .page-title {
+    font-size: 17px;
+    white-space: nowrap;
+  }
+  .ct-grid {
+    gap: 10px;
+  }
+  .ct-card {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 12px;
+  }
+  .ct-info {
+    min-width: 0;
+    width: 100%;
+  }
+  .ct-name {
+    font-size: 14px;
+    word-break: break-all;
+  }
+  .ct-meta {
+    font-size: 11.5px;
+    word-break: break-all;
+    line-height: 1.5;
+  }
+  .ct-acts {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    width: 100%;
+  }
+  .ct-acts .el-button {
+    width: 100%;
+    margin-left: 0 !important;
+  }
+  .empty-state {
+    padding: 40px 16px;
+    font-size: 13px;
+  }
+  .mono-block {
+    max-height: 55dvh;
+    font-size: 11.5px;
+    padding: 10px;
+  }
+}
+
+@media (max-width: 480px) {
+  .page-title {
+    font-size: 16px;
+  }
+  .ct-acts .el-button {
+    padding: 7px 6px !important;
+    font-size: 12px;
+  }
+}
+</style>

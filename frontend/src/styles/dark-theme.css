@@ -623,14 +623,24 @@ html, body, #app {
 }
 
 /* 表格容器：桌面端可能未定义宽度规则，移动端统一开启横向滚动，
-   避免列被挤压后剩余列完全不可见 */
+   避免列被挤压后剩余列完全不可见。
+
+   注意（踩过的坑）：这里曾经写 .table-wrap .el-table { min-width: 560px }，
+   意图是「让表格比容器宽以便横向滚动」。但 el-table 的横向滚动是由它
+   内部的 .el-scrollbar__wrap 承担的，把根节点撑到 560px 只会让根节点
+   在 362px 的容器里溢出（getBoundingClientRect 不受父级 scroll 裁剪），
+   造成整页横向位移。正确做法：根节点收缩到 100%，滚动交给内层。 */
 .table-wrap {
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
 }
 .table-wrap .el-table {
-  min-width: 560px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
 /* 固定像素宽度的对话框在小屏一律收缩为近全屏 */
@@ -670,4 +680,182 @@ html, body, #app {
   .el-input__wrapper, .el-textarea__inner {
     font-size: 16px !important; /* 防 iOS 聚焦自动放大 */
   }
+}
+
+/* ═══════════════════════════════════════════════
+   Mobile: 表格 / 表单 / 多列布局 通用修正
+   放在最后，确保能覆盖组件库默认样式
+   ═══════════════════════════════════════════════ */
+
+@media (max-width: 768px) {
+  /* ── 表格固定列在窄屏必须失效 ──
+     桌面端「操作」列用 fixed="right" 固定在右侧；
+     窄屏表格本身需要横向滚动，固定列会 sticky 在视口右侧
+     并覆盖其它列文字（实测 Databases/Users/FileManager 的
+     操作按钮直接压在名称上）。这里降级为普通静态列，
+     让它跟随表格一起横向滚动。 */
+  .el-table .el-table-fixed-column--right,
+  .el-table .el-table-fixed-column--left,
+  .el-table .el-table-fixed-column--right.is-first-column,
+  .el-table .el-table-fixed-column--left.is-last-column {
+    position: static !important;
+    left: auto !important;
+    right: auto !important;
+    box-shadow: none !important;
+  }
+  /* 固定列自带的阴影伪元素一并去掉 */
+  .el-table .el-table-fixed-column--right::before,
+  .el-table .el-table-fixed-column--left::after {
+    display: none !important;
+  }
+
+  /* ── 单元格内容不换行，靠横向滚动查看 ──
+     否则长进程名/路径会被压成四五行竖排文字。 */
+  .el-table .cell {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    word-break: keep-all;
+  }
+
+  /* 保证任何位置的表格都能横向触摸滚动 */
+  .el-table__body-wrapper,
+  .el-table__header-wrapper,
+  .el-scrollbar__wrap {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* ── 表单：固定 label-width 在窄屏改成上标签 ──
+     原来 label 占 120px，390px 屏幕上内容区只剩 130px，
+     单选框被挤成竖排。 */
+  .el-form-item {
+    margin-bottom: 16px !important;
+  }
+  .el-form:not(.el-form--inline) .el-form-item {
+    display: block !important;
+  }
+  .el-form:not(.el-form--inline) .el-form-item__label {
+    display: block !important;
+    float: none !important;
+    width: auto !important;
+    justify-content: flex-start !important;
+    text-align: left !important;
+    padding: 0 0 6px 0 !important;
+    line-height: 1.4 !important;
+  }
+  .el-form:not(.el-form--inline) .el-form-item__content {
+    margin-left: 0 !important;
+    width: 100% !important;
+  }
+  /* 行内表单（筛选条）不套用上标签，保持一行并允许换行 */
+  .el-form--inline .el-form-item {
+    margin-right: 8px !important;
+    margin-bottom: 8px !important;
+  }
+
+  /* ── 单选/复选按钮组：允许换行，不要被压成竖排 ── */
+  .el-radio-group,
+  .el-checkbox-group {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+    width: 100% !important;
+  }
+  .el-radio-button,
+  .el-radio-button__inner,
+  .el-checkbox {
+    flex-shrink: 0 !important;
+  }
+  .el-radio-button__inner {
+    white-space: nowrap !important;
+  }
+
+  /* ── 多列网格降级 ── */
+  .info-grid { grid-template-columns: 1fr 1fr !important; }
+  .meter-grid,
+  .tech-grid,
+  .ct-grid,
+  .chart-grid,
+  .gauge-grid,
+  .app-grid,
+  .hero-cards-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* ── 工具栏 / 页头 / 操作行：允许换行 ──
+     多个按钮挤在一行会被裁到视口外。 */
+  .toolbar,
+  .file-toolbar,
+  .action-bar,
+  .quick-actions,
+  .batch-bar,
+  .perm-toolbar,
+  .drawer-actions,
+  .update-actions,
+  .input-group,
+  .page-header {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    align-items: center !important;
+    gap: 8px !important;
+    row-gap: 8px !important;
+  }
+  /* 工具栏内的搜索框/下拉独占整行，避免右侧被裁 */
+  .toolbar > .el-input,
+  .file-toolbar > .el-input,
+  .input-group > .el-input,
+  .toolbar > .el-select {
+    flex: 1 1 100% !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  /* ── 卡片内边距收紧，给内容腾出宽度 ── */
+  .el-card__header { padding: 14px 16px !important; }
+  .el-card__body { padding: 16px !important; }
+
+  /* ── 页头标题不换行竖起 ── */
+  .page-title {
+    font-size: 18px !important;
+    margin-bottom: 16px !important;
+  }
+  .page-title > * { min-width: 0; }
+
+  /* 长单词/路径允许断行 */
+  .el-table .cell,
+  .info-value,
+  .tech-value {
+    word-break: break-word;
+  }
+
+  /* 分页器在窄屏居中并允许换行 */
+  .el-pagination {
+    flex-wrap: wrap !important;
+    justify-content: center !important;
+    row-gap: 8px !important;
+  }
+}
+
+@media (max-width: 480px) {
+  /* info-grid 在 390px 用两列 + 紧凑卡片，而不是一列大卡。
+     一列时每个字段独占 145px 高的一整行，8 个字段要滚两屏；
+     两列每列约 174px，label 与 value 都放得下。 */
+  .info-grid {
+    grid-template-columns: 1fr 1fr !important;
+    gap: 8px !important;
+  }
+  .info-card {
+    padding: 10px 12px;
+    border-radius: var(--r-md, 12px);
+  }
+  .info-card:hover { transform: none; }
+  .info-label {
+    font-size: 10px;
+    margin-bottom: 3px;
+    letter-spacing: 0.3px;
+  }
+  .info-value { font-size: 14px; }
+  .page-title { font-size: 17px !important; }
+  .el-card__body { padding: 12px !important; }
 }

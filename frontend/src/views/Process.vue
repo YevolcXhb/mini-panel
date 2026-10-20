@@ -15,10 +15,12 @@
         </el-table-column>
         <el-table-column prop="status" label="状态" width="120" />
         <el-table-column prop="cmdline" label="命令行" show-overflow-tooltip min-width="200" />
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column label="操作" width="150" :fixed="isWide ? 'right' : false">
           <template #default="{ row }">
-            <el-button size="small" type="danger" @click="killProcess(row.pid, false)">结束</el-button>
-            <el-button size="small" @click="killProcess(row.pid, true)">强制</el-button>
+            <div class="row-actions">
+              <el-button size="small" type="danger" @click="killProcess(row.pid, false)">结束</el-button>
+              <el-button size="small" @click="killProcess(row.pid, true)">强制</el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -30,6 +32,12 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { processApi } from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
+
+// 窄屏移除操作列 sticky 固定，避免覆盖进程名列
+const WIDE_MQ = '(min-width: 901px)'
+const isWide = ref(typeof window !== 'undefined' ? window.matchMedia(WIDE_MQ).matches : true)
+const mql = typeof window !== 'undefined' ? window.matchMedia(WIDE_MQ) : null
+function onMqlChange(e: MediaQueryListEvent) { isWide.value = e.matches }
 
 const processes = ref<any[]>([])
 const loading = ref(false)
@@ -69,6 +77,61 @@ async function killProcess(pid: number, force: boolean) {
   } catch (e) {}
 }
 
-onMounted(() => { loadProcesses(true); timer = setInterval(() => loadProcesses(false), 10000) })
-onUnmounted(() => clearInterval(timer))
+onMounted(() => {
+  loadProcesses(true)
+  timer = setInterval(() => loadProcesses(false), 10000)
+  if (mql) mql.addEventListener('change', onMqlChange)
+})
+onUnmounted(() => {
+  clearInterval(timer)
+  if (mql) mql.removeEventListener('change', onMqlChange)
+})
 </script>
+
+<style scoped>
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.table-wrap :deep(.el-table) {
+  min-width: 900px;
+}
+.row-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  align-items: center;
+}
+.row-actions .el-button {
+  margin-left: 0 !important;
+}
+.table-wrap :deep(.el-table .cell) {
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+/* ── 移动端：进程名不再被压成竖排 ── */
+@media (max-width: 900px) {
+  .table-wrap {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .table-wrap :deep(.el-table) {
+    min-width: 900px;
+  }
+  .table-wrap :deep(.el-table .cell) {
+    white-space: nowrap;
+    word-break: keep-all;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+@media (max-width: 480px) {
+  .table-wrap :deep(.el-table) {
+    min-width: 860px;
+  }
+}
+</style>
