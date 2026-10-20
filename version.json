@@ -1,6 +1,6 @@
 {
   "version": "7.3.8",
   "url": "https://github.com/YevolcXhb/mini-panel/releases/latest",
-  "release_notes": "Mini Panel v7.3.8 - battery: fix charge capacity unit (0/4 mAh), use magnitude-based detection",
+  "release_notes": "Mini Panel v7.3.8",
   "install_sha256": "dd0bf61f25f6ddddf7b2ab1c5d8948a8dcfc102e0a9ee5cb46749d61b9162efa"
 }
