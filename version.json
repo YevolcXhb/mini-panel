@@ -1,6 +1,6 @@
 {
   "version": "7.3.2",
   "url": "https://github.com/YevolcXhb/mini-panel/releases/latest",
-  "release_notes": "Mini Panel v7.3.2 - fix: keep-alive polling overlap, standby watchdog restart loop",
-  "install_sha256": "6d77d1231a71f2da788c0bbd69279210859ab6c4db2aefa864f58bf5d54067df"
+  "release_notes": "Mini Panel v7.3.2",
+  "install_sha256": "dd0bf61f25f6ddddf7b2ab1c5d8948a8dcfc102e0a9ee5cb46749d61b9162efa"
 }
