@@ -31,10 +31,10 @@
 	          <div class="battery-row">
 	            <span>{{ battery.status || '-' }}<span v-if="powerModeLabel" class="mode-badge">{{ powerModeLabel }}</span></span>
 	            <span class="power-cell" :title="powerHint">
-	              <template v-if="battery.power_source !== 'none' && battery.power_w > 0">
+	              <template v-if="battery.power_source !== 'none' && powerAvg > 0">
 	                <span v-if="battery.power_sign === 'discharge'" class="power-arrow" title="放电">↓</span>
 	                <span v-else-if="battery.power_sign === 'charge'" class="power-arrow charge" title="充电">↑</span>
-	                {{ battery.power_w.toFixed(2) }} W
+	                <span v-if="powerIsAveraged" class="est-mark" title="最近 3 次读数的平均值">≈</span>{{ powerAvg.toFixed(2) }} W
 	                <span class="power-tag" :class="battery.power_sign">{{ powerTag }}</span>
 	              </template>
 	              <template v-else>— W</template>
@@ -152,6 +152,34 @@ const timeRange = ref(1440)
 	const thermal = ref<any[]>([])
 	let realtimeLoading = false
 
+	// 功耗滑动平均。
+	//
+	// 为什么要做：usb/current_now 的零值率约 50%（驱动在采样间隙返回 0），
+	// 后端虽然已做 9 次去抖，但相邻两次 API 请求仍可能落在不同负载点，
+	// 导致界面数字在 0.03 ~ 0.2W 之间跳。
+	// 这里对最近 3 次有效读数取均值，只影响显示，不改变数据源。
+	//
+	// 注意：功率 <= 0 的读数（读不到）不入窗口，避免把均值拉低。
+	const POWER_AVG_WINDOW = 3
+	const powerHistory = ref<number[]>([])
+
+	function pushPowerSample(w: number) {
+	  if (!(w > 0)) return
+	  const arr = powerHistory.value
+	  arr.push(w)
+	  if (arr.length > POWER_AVG_WINDOW) arr.shift()
+	}
+
+	const powerAvg = computed(() => {
+	  const arr = powerHistory.value
+	  if (arr.length === 0) return 0
+	  const sum = arr.reduce((a, b) => a + b, 0)
+	  return sum / arr.length
+	})
+
+	// 窗口内做过平均时才加 ~ 前缀，让用户知道这是平滑值
+	const powerIsAveraged = computed(() => powerHistory.value.length > 1)
+
 	const batteryColor = computed(() => {
 	  const c = battery.value?.capacity ?? 0
 	  const charging = (battery.value?.status || '').toLowerCase().includes('charging')
@@ -195,6 +223,18 @@ const timeRange = ref(1440)
 	  const b = battery.value
 	  if (!b) return ''
 	  const st = (b.status || '').toLowerCase()
+
+	  // 有有效读数时，说明数值来源与平滑情况
+	  if (b.power_source && b.power_source !== 'none' && powerAvg.value > 0) {
+	    const parts: string[] = []
+	    if (b.power_detail) parts.push(b.power_detail)
+	    if (b.power_mode === 'usb') parts.push('适配器进线侧取电，含充电 IC 转换损耗')
+	    if (powerIsAveraged.value) {
+	      parts.push(`最近 ${powerHistory.value.length} 次读数的平均值（驱动读数有抖动）`)
+	    }
+	    if (parts.length > 0) return parts.join('；')
+	  }
+
 	  if (b.power_mode === 'usb') {
 	    if (st === 'full') return '外接供电且已充满，整机由 USB 直供，电池无电流输出'
 	    if (st === 'not charging') return '外接供电，电池未参与放电'
@@ -223,6 +263,10 @@ const timeRange = ref(1440)
 	  try {
 	    const res: any = await monitorApi.battery()
 	    battery.value = res.data
+	    // 把本次功率推进滑动窗口（<=0 的读数会被忽略）
+	    if (res.data?.power_source && res.data.power_source !== 'none') {
+	      pushPowerSample(Number(res.data.power_w) || 0)
+	    }
 	  } catch (e) {}
 	}
 
