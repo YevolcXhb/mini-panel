@@ -180,43 +180,22 @@ func GetBatteryInfo() *BatteryInfo {
 			info.CycleCount = int(v)
 		}
 
-		// 功耗三级取值：驱动功率节点 → V×I → mAh 变化率估算。
+		// 功耗计算：按供电形态选择数据源（见 readSystemPower）。
+		//
+		// 本机形态说明：电池是经 Type-C 供电的「模拟小板」接入主板电池接口，
+		// 没有真实电芯。所以：
+		//   - usb.online=1：外部通过 usb 供电路径给整机，输入侧功率才是整机功耗
+		//   - usb.online=0：电池接口侧（小板输出）就是整机唯一的电源
 		//
 		// 单位由同目录 voltage_now 的刻度推断：µV 量级说明驱动用内核标准
 		// 微单位，则 power_now 按 µW 解析；否则按 mV/mW 降级口径解析。
-		//
-		// 关于「0 值」：驱动暴露 power_now 不等于它有稳定读数。本机满电插电时
-		// current_now 在 0 / ±2.5mA 之间抖，power_now 随之在 0 与 ±11000µW 间跳。
-		// 因此单次读到 0 不能作为有效功耗，改用多采样去抖（见 readPowerDebounced）。
 		info.PowerSource = PowerSourceNone
 
-		if v, ok := readPowerDebounced(dir, microUnit); ok {
-			info.PowerW = v.watts
-			info.PowerSource = PowerSourceDriver
-			info.PowerSign = v.sign
-		}
-
-		// V × I 兜底：驱动没给出有效功率时，用电压电流算。
-		//
-		// 噪声门限按供电形态分开，因为两种情况下的「正常电流」量级完全不同：
-		//   - USB 供电（info.Charging）：电池不放电，current_now 只在 0/±2mA
-		//     之间抖，那是电量计噪声，必须过滤掉，否则会把 0.009W 当成功耗；
-		//   - 电池供电（Type-C 小板直供）：电池就是整机电源，正常放电电流
-		//     在几十~几千 mA。此时门限放宽到 1mA，避免把低负载下的真实
-		//     几 mA 电流误判成噪声而丢掉读数。
-		noiseFloor := currentNoiseFloorMA
-		if !info.Charging {
-			noiseFloor = 1.0
-		}
-		if info.PowerSource == PowerSourceNone && info.VoltageV > 0 && math.Abs(info.CurrentMA) >= noiseFloor {
-			info.PowerW = math.Abs(info.VoltageV * info.CurrentMA / 1000)
-			info.PowerSource = PowerSourceVI
-			// 电流符号：负=放电，正=充电
-			if info.CurrentMA < 0 {
-				info.PowerSign = PowerSignDischarge
-			} else {
-				info.PowerSign = PowerSignCharge
-			}
+		if sys, ok := readSystemPower(dir, info, microUnit); ok {
+			info.PowerW = sys.watts
+			info.PowerSource = sys.source
+			info.PowerSign = sys.sign
+			info.PowerDetail = sys.detail
 		}
 		// 兜底估算：仅当电池确实在放电（未接外部电源）时才尝试。
 		// 满电/充电中 BMS 会断开或切换回路，charge_now 的跳变不代表放电，
@@ -235,6 +214,128 @@ func GetBatteryInfo() *BatteryInfo {
 // currentNoiseFloorMA 是电流噪声门限。低于这个值的 current_now 视为
 // 电量计抖动（本机实测满电时会出现 ±2mA），不参与功耗计算。
 const currentNoiseFloorMA = 5.0
+
+// systemPower 是一次系统功耗计算的结果
+type systemPower struct {
+	watts  float64 // 瓦特，恒为正
+	source string  // PowerSource* 常量
+	sign   string  // PowerSign* 常量
+	detail string  // 计算口径说明，给前端展示
+}
+
+// readSystemPower 按供电形态选择功耗数据源。
+//
+// 取数逻辑（对本机「电池 = Type-C 供电的模拟小板」这一形态）：
+//
+//	usb.online == 1  →  system_power = usb.power_now        （充电器输入侧）
+//	usb.online == 0  →  system_power = battery.power_now    （电池接口侧）
+//
+//	若插着 USB 且电池侧还在放电（小板未满电），总功耗要加上放电部分：
+//	  system_power = usb.power_now
+//	               + max(0, -battery.current_now × battery.voltage_now / 1e6)
+//
+// 注意最后一项的单位：current_now 是 µA、voltage_now 是 µV，
+// 两者相乘再除以 1e6 得到 µW，与 usb.power_now 的 µW 口径一致。
+//
+// usb.power_now 不存在时（内核未暴露），退回 battery 侧计算。
+func readSystemPower(dir string, info *BatteryInfo, microUnit bool) (systemPower, bool) {
+	usbDir := siblingSupplyDir(dir, "usb")
+
+	// 1) 优先读 usb 输入侧功率
+	var usbWatts float64
+	var hasUSB bool
+	if usbDir != "" {
+		if v, ok := readPowerDebounced(usbDir, microUnit); ok && v.watts > 0 {
+			usbWatts = v.watts
+			hasUSB = true
+		}
+	}
+
+	if hasUSB {
+		// 2) 插着 USB 时，若电池侧仍在放电（小板未满电），加上放电功率
+		batteryDischarge := 0.0
+		if info.CurrentMA < 0 {
+			// current_ma 已是 mA，voltage_v 已是 V，相乘得到 W
+			batteryDischarge = math.Abs(info.VoltageV * info.CurrentMA / 1000)
+		}
+		total := usbWatts
+		detail := "USB 输入侧"
+		if batteryDischarge > 0.001 {
+			total += batteryDischarge
+			detail = "USB 输入 + 电池放电"
+		}
+		return systemPower{
+			watts:  total,
+			source: PowerSourceDriver,
+			sign:   PowerSignCharge,
+			detail: detail,
+		}, true
+	}
+
+	// 3) 没有 usb 侧功率：按电池接口侧计算
+	if v, ok := readPowerDebounced(dir, microUnit); ok && v.watts > 0 {
+		sign := v.sign
+		// 驱动的 power_now 符号约定不统一，有时恒为正。此时若电流明确为负，
+		// 应以电流方向为准 —— 电池接口侧负电流就是放电。
+		if sign == PowerSignUnknown || (sign == PowerSignCharge && info.CurrentMA < 0) {
+			if info.CurrentMA < 0 {
+				sign = PowerSignDischarge
+			} else if info.CurrentMA > 0 {
+				sign = PowerSignCharge
+			}
+		}
+		return systemPower{
+			watts:  v.watts,
+			source: PowerSourceDriver,
+			sign:   sign,
+			detail: "电池接口侧",
+		}, true
+	}
+
+	// 4) 最后兜底：V×I。门限按形态区分 ——
+	//    USB 供电时电池不放电，只有 ±2mA 噪声，必须过滤；
+	//    电池供电时电池就是整机电源，1mA 以上的读数都可能是真实负载。
+	noiseFloor := currentNoiseFloorMA
+	if !info.Charging {
+		noiseFloor = 1.0
+	}
+	if info.VoltageV > 0 && math.Abs(info.CurrentMA) >= noiseFloor {
+		sign := PowerSignCharge
+		if info.CurrentMA < 0 {
+			sign = PowerSignDischarge
+		}
+		return systemPower{
+			watts:  math.Abs(info.VoltageV * info.CurrentMA / 1000),
+			source: PowerSourceVI,
+			sign:   sign,
+			detail: "电压 × 电流",
+		}, true
+	}
+	return systemPower{}, false
+}
+
+// siblingSupplyDir 返回同级的另一个 power_supply 设备目录。
+// power_supply 目录本身可能是符号链接，所以用 Glob 而不是 ReadDir。
+func siblingSupplyDir(batteryDir, name string) string {
+	bases := []string{"/sys/class/power_supply"}
+	if root := androidHostRoot(); root != "" {
+		bases = append([]string{filepath.Join(root, "sys/class/power_supply")}, bases...)
+	}
+	// 先看 battery 所在目录的上级（通常是同一个 power_supply）
+	if parent := filepath.Dir(batteryDir); parent != "." && parent != "/" {
+		cand := filepath.Join(parent, name)
+		if _, err := os.Stat(cand); err == nil {
+			return cand
+		}
+	}
+	for _, base := range bases {
+		cand := filepath.Join(base, name)
+		if _, err := os.Stat(cand); err == nil {
+			return cand
+		}
+	}
+	return ""
+}
 
 // externalPowerOnline 检查 usb / ac / charger 任一节点 online==1。
 // 这些节点与电池并列在 power_supply 下，路径同样要兼容 chroot 逃逸根。

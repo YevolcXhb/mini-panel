@@ -171,12 +171,18 @@ const timeRange = ref(1440)
 	  return '电量计直接读数'
 	})
 
-	// 功耗来源标签：驱动直读 / V×I 计算 / 电量变化率估算
+	// 功耗来源标签：按取数口径显示，让用户知道这个数是怎么来的。
+	// 优先用后端给的 power_detail（如「USB 输入侧」「USB 输入 + 电池放电」
+	// 「电池接口侧」「电压 × 电流」），它比笼统的 driver/vi 更准确。
 	const powerTag = computed(() => {
-	  const s = battery.value?.power_source
-	  if (s === 'driver') return '驱动'
-	  if (s === 'vi') return 'V×I'
-	  if (s === 'estimate') return '估算'
+	  const b = battery.value
+	  const s = b?.power_source
+	  if (s === 'driver' || s === 'vi' || s === 'estimate') {
+	    if (b?.power_detail) return b.power_detail
+	    if (s === 'driver') return '驱动'
+	    if (s === 'vi') return 'V×I'
+	    return '估算'
+	  }
 	  return ''
 	})
 
@@ -411,6 +417,9 @@ async function loadNetInfo() {
 	  font-size: 10px; padding: 0 4px; border-radius: 3px;
 	  background: rgba(79, 140, 255, 0.15); color: #7aa7ff;
 	  font-weight: 500; line-height: 15px;
+	  /* 口径文案可能较长（如「USB 输入 + 电池放电」），长屏也不能撑破卡片 */
+	  white-space: nowrap; max-width: 120px;
+	  overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
 	}
 	/* 方向标识：放电向下（橙）、充电向上（绿），避免只看数字分不清充放电 */
 	.power-arrow { font-size: 12px; font-weight: 700; color: #ffa726; }

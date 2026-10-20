@@ -35,6 +35,9 @@ type BatteryInfo struct {
 	//   battery  —— usb/ac/charger 全 offline，电池就是供电来源（Type-C 小板直供）
 	//   取值见 PowerModeUSB / PowerModeBattery
 	PowerMode string `json:"power_mode"`
+	// PowerDetail 功耗的计算口径说明，例如「USB 输入侧」「USB 输入 + 电池放电」
+	// 「电池接口侧」「电压 × 电流」。前端可直接展示，便于用户理解数值来源。
+	PowerDetail string `json:"power_detail"`
 }
 
 // 功率来源常量
