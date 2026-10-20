@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/minipanel/minipanel/internal/utils/proxy"
 )
 
 // isBlockedIP 判断 IP 是否属于内网/回环/链路本地/保留地址。
@@ -58,6 +60,9 @@ func ValidateHTTPURL(raw string) error {
 }
 
 // Fetch 带超时与大小上限地获取 URL 内容（SSRF 防护）。
+//
+// 出站走 proxy.OutboundHTTPClient()，因此面板里配置的代理会一并生效
+// ——应用商店、应用源同步都要从这里下载，直连在受限网络下拿不到资源。
 func Fetch(raw string, maxBytes int64, timeout time.Duration) ([]byte, error) {
 	if err := ValidateHTTPURL(raw); err != nil {
 		return nil, err
@@ -65,7 +70,11 @@ func Fetch(raw string, maxBytes int64, timeout time.Duration) ([]byte, error) {
 	if maxBytes <= 0 {
 		maxBytes = 1 << 20
 	}
-	client := &http.Client{Timeout: timeout}
+	base := proxy.OutboundHTTPClient()
+	client := &http.Client{
+		Timeout:   timeout,
+		Transport: base.Transport,
+	}
 	resp, err := client.Get(strings.TrimSpace(raw))
 	if err != nil {
 		return nil, err
