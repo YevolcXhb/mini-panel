@@ -111,24 +111,35 @@ func GetBatteryInfo() *BatteryInfo {
 		if v, ok := readBatteryFloat(dir, "temp"); ok {
 			info.TempC = v / 10
 		}
+		// 容量：不能套用电压刻度。
+		//
+		// 本机实测：voltage_now=4416000（µV 口径），但 charge_now=5193、
+		// charge_full=4000、batt_rm=batt_fcc=4000 全是 mAh 口径。
+		// 同一个驱动里 voltage 用微单位、charge 用毫单位 —— 强行统一会
+		// 把 4000mAh 再除以 1000 变成 4mAh（界面上就是 "0 / 4 mAh"）。
+		//
+		// 所以容量单独按数值量级判断：手机电池容量在 1000~20000mAh 之间，
+		// µAh 表示会是 1e6~2e7 量级，两者有 1000 倍差距，不会混淆。
 		if v, ok := readBatteryFloat(dir, "charge_now"); ok {
-			info.ChargeNowMAh = normalizeCharge(v, microUnit)
+			info.ChargeNowMAh = normalizeChargeByMagnitude(v)
 		}
 		if v, ok := readBatteryFloat(dir, "charge_full"); ok {
-			info.ChargeFullMAh = normalizeCharge(v, microUnit)
+			info.ChargeFullMAh = normalizeChargeByMagnitude(v)
 		}
-		// 部分机型只用 batt_rm / batt_fcc（单位 mAh）。
+		// 部分机型只用 batt_rm / batt_fcc（单位 mAh），同样按量级归一。
 		// 注意 charge_now 在 MTK 驱动里常是「电量计剩余电荷」，与满电设计容量
-		// 口径不同（本机 5200/4000），因此当 charge_full 缺失或 charge_now
+		// 口径不同（本机 5193/4000），因此当 charge_full 缺失或 charge_now
 		// 明显超出 charge_full 时，改用 batt_rm/batt_fcc 这一对同口径值。
 		rm, hasRM := readBatteryFloat(dir, "batt_rm")
 		fcc, hasFCC := readBatteryFloat(dir, "batt_fcc")
+		rmMAh := normalizeChargeByMagnitude(rm)
+		fccMAh := normalizeChargeByMagnitude(fcc)
 		rawChargeMAh := info.ChargeNowMAh // 估算功耗必须用原始电量计读数
 		needPair := !hasFCC || info.ChargeFullMAh == 0 ||
 			(info.ChargeNowMAh > 0 && info.ChargeNowMAh > info.ChargeFullMAh*1.2)
-		if needPair && hasRM && hasFCC && rm > 0 && fcc > 0 {
-			info.ChargeNowMAh = rm
-			info.ChargeFullMAh = fcc
+		if needPair && hasRM && hasFCC && rmMAh > 0 && fccMAh > 0 {
+			info.ChargeNowMAh = rmMAh
+			info.ChargeFullMAh = fccMAh
 		}
 		if info.ChargeFullMAh <= 0 && info.ChargeNowMAh > 0 {
 			info.ChargeFullMAh = info.ChargeNowMAh
@@ -319,18 +330,6 @@ func normalizeCurrent(v float64, microUnit bool) float64 {
 		return v // 驱动整体降级为 mA
 	}
 	return v / 1e3 // µA → mA
-}
-
-// normalizeCharge 把 charge_now/charge_full 归一化为毫安时。
-//
-// 与电压/电流/功率统一：由 microUnit 决定口径，不再按单个数值大小猜。
-// 旧实现用「>100000 视为 µAh」，本机 charge_now=4000000（µAh=4000mAh）
-// 会被误判，且 4000mAh 的 mAh 口径（4000）与 µAh 口径边界混淆。
-func normalizeCharge(v float64, microUnit bool) float64 {
-	if !microUnit {
-		return v // 驱动整体降级为 mAh
-	}
-	return v / 1e3 // µAh → mAh
 }
 
 // powerUnitIsMicro 判断 power_supply 驱动属性是否使用内核标准微单位。

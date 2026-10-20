@@ -86,3 +86,22 @@ func normalizePowerWithHint(v float64, microUnit bool) float64 {
 	}
 	return primary
 }
+
+// normalizeChargeByMagnitude 把容量归一化为毫安时。
+//
+// 容量不能像电压/电流那样用 voltage 刻度判单位：本机实测同一个驱动里
+// voltage_now=4416000（µV）而 charge_full=4000（mAh），两者口径不同。
+// 强行统一会把 4000mAh 除以 1000 变成 4mAh —— 界面上就是「0 / 4 mAh」。
+//
+// 改用数值量级判断 —— 手机电池容量在 100~20000mAh，µAh 表示会是
+// 1e5~2e7，两个区间相差 1000 倍且不重叠，判断可靠。
+// 放在无 build tag 的文件里，便于跨平台单测。
+func normalizeChargeByMagnitude(v float64) float64 {
+	if v <= 0 {
+		return 0
+	}
+	if v > 100000 {
+		return v / 1e3 // µAh → mAh
+	}
+	return v // mAh
+}
