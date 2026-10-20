@@ -88,6 +88,32 @@
         </div>
         <div class="meter-detail">{{ formatBytes(diskUsed) }} / {{ formatBytes(diskTotal) }}</div>
       </div>
+      <div class="meter-card">
+        <div class="meter-header">
+          <span>CPU 温度</span>
+          <span class="meter-pct" :style="{ color: tempColor(cpuTemp) }">
+            <template v-if="cpuTemp !== null">{{ cpuTemp.toFixed(1) }}<span class="pw-unit">℃</span></template>
+            <template v-else>—</template>
+          </span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill temp" :style="{ width: tempBarPct(cpuTemp) + '%', background: tempColor(cpuTemp) }"></div>
+        </div>
+        <div class="meter-detail">{{ cpuTempDetail }}</div>
+      </div>
+      <div class="meter-card">
+        <div class="meter-header">
+          <span>电源温度</span>
+          <span class="meter-pct" :style="{ color: tempColor(psuTemp) }">
+            <template v-if="psuTemp !== null">{{ psuTemp.toFixed(1) }}<span class="pw-unit">℃</span></template>
+            <template v-else>—</template>
+          </span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill temp" :style="{ width: tempBarPct(psuTemp) + '%', background: tempColor(psuTemp) }"></div>
+        </div>
+        <div class="meter-detail">{{ psuTempDetail }}</div>
+      </div>
     </div>
 
     <h3 class="section-title">磁盘详情</h3>
@@ -196,6 +222,61 @@ const powerHint = computed(() => {
   return parts.join(' · ')
 })
 
+// ─── 温度卡片 ───
+//
+// 数据来自 /monitor/thermal，后端返回 [{name, temp}]，已过滤掉 tzimgs 那类
+// -127℃ 的无效占位。这里只取两个关键传感器：
+//   mtktscpu —— CPU 温度（MTK 平台 CPU 温度节）
+//   battery  —— 电源/电池温度
+// 找不到时值为 null，卡片显示「—」而不是 0℃（0℃ 会误导）。
+const thermal = ref<any[]>([])
+
+function findTemp(names: string[]): number | null {
+  const list = (thermal.value || []).filter((t: any) => t && t.valid !== false)
+  for (const n of names) {
+    // 先精确匹配传感器名
+    const exact = list.find((t: any) => t.type === n)
+    if (exact && typeof exact.temp_c === 'number') return exact.temp_c
+  }
+  for (const n of names) {
+    // 再按包含匹配（不同内核版本命名可能带后缀）
+    const partial = list.find((t: any) => String(t.type || '').includes(n))
+    if (partial && typeof partial.temp_c === 'number') return partial.temp_c
+  }
+  return null
+}
+
+const cpuTemp = computed(() => findTemp(['mtktscpu', 'mtktsAP', 'cpu']))
+const psuTemp = computed(() => findTemp(['battery', 'mtktsbattery', 'charger']))
+
+const cpuTempDetail = computed(() => {
+  if (cpuTemp.value === null) return '未找到 CPU 温度传感器'
+  return '传感器 mtktscpu'
+})
+const psuTempDetail = computed(() => {
+  if (psuTemp.value === null) return '未找到电源温度传感器'
+  return battery.value?.temp_c
+    ? `传感器 battery · BMS 报 ${battery.value.temp_c.toFixed(1)}℃`
+    : '传感器 battery'
+})
+
+// 温度阈值：手机 SoC 一般 45℃ 开始明显发热，60℃ 以上偏热，75℃ 接近降频
+function tempColor(t: number | null) {
+  if (t === null) return 'var(--dim)'
+  if (t >= 75) return 'var(--red)'
+  if (t >= 60) return 'var(--org)'
+  if (t >= 45) return 'var(--blue)'
+  return 'var(--grn)'
+}
+// 进度条刻度：20~80℃ 映射到 0~100%
+function tempBarPct(t: number | null) {
+  if (t === null) return 0
+  const lo = 20
+  const hi = 80
+  const pct = ((t - lo) / (hi - lo)) * 100
+  return Math.max(0, Math.min(100, Math.round(pct)))
+}
+
 const cpuPct = computed(() => {
   const v = monitor.value.cpu_usage || 0
   return Math.min(Math.round(v), 100)
@@ -266,6 +347,11 @@ async function loadData() {
         pushPowerSample(Number(battery.value.power_w) || 0)
       }
     } catch (e) {}
+    // 温度：/monitor/thermal，同样失败不阻塞
+    try {
+      const th: any = await (await import('../api')).monitorApi.thermal()
+      thermal.value = th?.data || []
+    } catch (e) {}
   } catch (e) {
   } finally {
     loading = false
@@ -303,6 +389,8 @@ onMounted(() => {
 .pw-arrow.down { color: var(--org); }
 /* 做过滑动平均时用 ≈ 提示，避免把平滑值当成瞬时精确值 */
 .pw-approx { color: var(--dim); font-weight: 600; margin-right: 1px; }
+/* 温度卡片沿用功耗卡片的单位样式 */
+.progress-fill.temp { transition: width .4s ease; }
 
 
 /* ── 表格容器 ──
