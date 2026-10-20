@@ -1,6 +1,6 @@
 {
-  "version": "7.1.1",
+  "version": "7.2.0",
   "url": "https://github.com/YevolcXhb/mini-panel/releases/latest",
-  "release_notes": "Mini Panel v7.1.1",
+  "release_notes": "Mini Panel v7.2.0：移动端 UI 适配修复 + 监控中心电池硬件监控 + 面板设置代理配置（保存后热加载立即生效）",
   "install_sha256": "dd0bf61f25f6ddddf7b2ab1c5d8948a8dcfc102e0a9ee5cb46749d61b9162efa"
 }
