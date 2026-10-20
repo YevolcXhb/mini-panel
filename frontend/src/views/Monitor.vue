@@ -29,7 +29,7 @@
 	        <template v-if="battery?.present">
 	          <div class="battery-pct" :style="{ color: batteryColor }">{{ battery.capacity }}<span class="battery-pct-sign">%</span></div>
 	          <div class="battery-row">
-	            <span>{{ battery.status || '-' }}</span>
+	            <span>{{ battery.status || '-' }}<span v-if="powerModeLabel" class="mode-badge">{{ powerModeLabel }}</span></span>
 	            <span class="power-cell" :title="powerHint">
 	              <template v-if="battery.power_source !== 'none' && battery.power_w > 0">
 	                <span v-if="battery.power_sign === 'discharge'" class="power-arrow" title="放电">↓</span>
@@ -180,16 +180,31 @@ const timeRange = ref(1440)
 	  return ''
 	})
 
-	// 读不到功耗时的原因说明。满电静置时 BMS 断开充电回路，
-	// current_now 物理上就是 0，这不是故障。
+	// 读不到功耗时的原因说明。要区分两种供电形态：
+	//   - 接 USB：整机由 USB 供电，电池不放电，BMS 报的电流只有漏电流，
+	//     此时功耗接近 0 是物理事实，不是故障；
+	//   - 电池供电（Type-C 小板直供，usb.online=0）：电池就是整机电源，
+	//     功耗应当有真实读数，读不到才是数据缺失。
 	const powerHint = computed(() => {
 	  const b = battery.value
 	  if (!b) return ''
 	  const st = (b.status || '').toLowerCase()
-	  if (st === 'full') return '满电静置，充电回路已断开，无电流可测'
-	  if (st === 'not charging') return '未充电状态，电池无电流输出'
-	  if (b.charging) return '已接外部电源，等待电流采样'
-	  return '本轮采样无电荷变化，稍后自动刷新'
+	  if (b.power_mode === 'usb') {
+	    if (st === 'full') return '外接供电且已充满，整机由 USB 直供，电池无电流输出'
+	    if (st === 'not charging') return '外接供电，电池未参与放电'
+	    return '外接供电中，电池侧功率接近 0 属正常'
+	  }
+	  // 电池供电形态
+	  if (st === 'full') return '电池供电，满电静置无放电电流'
+	  return '电池供电，本轮采样无有效电流读数'
+	})
+
+	// 供电形态徽标：让用户一眼看出当前是外接供电还是电池直供
+	const powerModeLabel = computed(() => {
+	  const m = battery.value?.power_mode
+	  if (m === 'usb') return '外接供电'
+	  if (m === 'battery') return '电池供电'
+	  return ''
 	})
 
 	function tempColor(t: number) {
@@ -401,6 +416,11 @@ async function loadNetInfo() {
 	.power-arrow { font-size: 12px; font-weight: 700; color: #ffa726; }
 	/* 推算值标记：提示这不是电量计的直接读数 */
 	.est-mark { color: #9aa0a6; margin-right: 1px; font-weight: 600; }
+	/* 供电形态徽标：外接供电 / 电池供电 */
+	.mode-badge {
+	  margin-left: 5px; font-size: 10px; padding: 0 4px; border-radius: 3px;
+	  background: rgba(154, 160, 166, 0.18); color: #9aa0a6; line-height: 15px;
+	}
 	.power-arrow.charge { color: #81c995; }
 	.power-tag.discharge { background: rgba(255, 167, 38, 0.15); color: #ffa726; }
 	.power-tag.charge { background: rgba(129, 201, 149, 0.15); color: #81c995; }

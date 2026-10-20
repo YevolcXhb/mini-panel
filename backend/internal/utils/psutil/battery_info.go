@@ -30,6 +30,11 @@ type BatteryInfo struct {
 	// （直供形态 charge_now=0，或读数超过满电容量）。
 	ChargeNowEstimated bool `json:"charge_now_estimated"`
 	CycleCount         int  `json:"cycle_count"` // 循环次数
+	// PowerMode 供电形态，用于解释「为什么功耗是 0」：
+	//   usb      —— usb.online=1，整机由 USB 供电，电池侧功率天然接近 0
+	//   battery  —— usb/ac/charger 全 offline，电池就是供电来源（Type-C 小板直供）
+	//   取值见 PowerModeUSB / PowerModeBattery
+	PowerMode string `json:"power_mode"`
 }
 
 // 功率来源常量
@@ -48,6 +53,17 @@ const (
 	PowerSignCharge    = "charge"
 	PowerSignDischarge = "discharge"
 	PowerSignUnknown   = "unknown"
+)
+
+// 供电形态常量。
+//
+// 直接影响功耗的可读性：
+//   - USB 供电时，电池不参与放电，battery/power_now 只反映漏电流；
+//   - 电池供电（Type-C 小板直供）时，电池就是整机电源，
+//     功耗应当由电流推导，是真实可用的读数。
+const (
+	PowerModeUSB     = "usb"     // 接外部电源
+	PowerModeBattery = "battery" // 电池供电
 )
 
 // estimateChargeTracker 保存上一次的电荷读数，用于估算功耗。

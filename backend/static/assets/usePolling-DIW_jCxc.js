@@ -1,1 +1,0 @@
-import{a6 as r,ah as u,ai as c,W as d}from"./index-BxY-afLC.js";function m(n,l,o={}){let t=null;const e=()=>{t!==null&&(clearInterval(t),t=null)},a=()=>{e(),o.immediate&&n(),t=setInterval(()=>{n()},l)},s=()=>t!==null;if(r()){let i=!1;u(()=>{i&&n(),i=!0,a()}),c(()=>e()),d(()=>e())}return{start:a,stop:e,isRunning:s}}export{m as u};

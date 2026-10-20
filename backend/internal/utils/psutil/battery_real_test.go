@@ -73,8 +73,10 @@ func TestRealBatteryInfoEndToEnd(t *testing.T) {
 	}
 	t.Logf("present=%v capacity=%d%% status=%s", info.Present, info.Capacity, info.Status)
 	t.Logf("voltage=%.3fV current=%.3fmA", info.VoltageV, info.CurrentMA)
-	t.Logf("power=%.6fW source=%s charging=%v", info.PowerW, info.PowerSource, info.Charging)
-	t.Logf("temp=%.1fC health=%s charge=%.0f/%.0fmAh", info.TempC, info.Health, info.ChargeNowMAh, info.ChargeFullMAh)
+	t.Logf("power=%.6fW source=%s sign=%s mode=%s charging=%v",
+		info.PowerW, info.PowerSource, info.PowerSign, info.PowerMode, info.Charging)
+	t.Logf("temp=%.1fC health=%s est=%v charge=%.0f/%.0fmAh",
+		info.TempC, info.Health, info.ChargeNowEstimated, info.ChargeNowMAh, info.ChargeFullMAh)
 
 	// 电压必须归一化到伏特
 	if info.VoltageV < 3.0 || info.VoltageV > 4.6 {

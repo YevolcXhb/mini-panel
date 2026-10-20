@@ -107,6 +107,12 @@ func GetBatteryInfo() *BatteryInfo {
 		// 满电（status=Full）时 BMS 会断开充电回路，current_now 物理上就是 0，
 		// 这时候算不出功耗是正常的，需要在 UI 上如实说明而不是显示 0.00 W。
 		info.Charging = externalPowerOnline()
+		// 供电形态：决定「功耗为 0」是物理事实还是数据缺失。
+		if info.Charging {
+			info.PowerMode = PowerModeUSB
+		} else {
+			info.PowerMode = PowerModeBattery
+		}
 		// temp: 0.1℃
 		if v, ok := readBatteryFloat(dir, "temp"); ok {
 			info.TempC = v / 10
@@ -191,10 +197,18 @@ func GetBatteryInfo() *BatteryInfo {
 		}
 
 		// V × I 兜底：驱动没给出有效功率时，用电压电流算。
-		// 驱动报的电流必须达到噪声门限才算真实电流 —— 本机满电时
-		// current_now 会在 0 / ±2mA 之间抖动，2mA 折合 0.009W，
-		// 低于 5mA 一律视为电量计噪声，不当成有效功耗。
-		if info.PowerSource == PowerSourceNone && info.VoltageV > 0 && math.Abs(info.CurrentMA) >= currentNoiseFloorMA {
+		//
+		// 噪声门限按供电形态分开，因为两种情况下的「正常电流」量级完全不同：
+		//   - USB 供电（info.Charging）：电池不放电，current_now 只在 0/±2mA
+		//     之间抖，那是电量计噪声，必须过滤掉，否则会把 0.009W 当成功耗；
+		//   - 电池供电（Type-C 小板直供）：电池就是整机电源，正常放电电流
+		//     在几十~几千 mA。此时门限放宽到 1mA，避免把低负载下的真实
+		//     几 mA 电流误判成噪声而丢掉读数。
+		noiseFloor := currentNoiseFloorMA
+		if !info.Charging {
+			noiseFloor = 1.0
+		}
+		if info.PowerSource == PowerSourceNone && info.VoltageV > 0 && math.Abs(info.CurrentMA) >= noiseFloor {
 			info.PowerW = math.Abs(info.VoltageV * info.CurrentMA / 1000)
 			info.PowerSource = PowerSourceVI
 			// 电流符号：负=放电，正=充电
@@ -224,13 +238,21 @@ const currentNoiseFloorMA = 5.0
 
 // externalPowerOnline 检查 usb / ac / charger 任一节点 online==1。
 // 这些节点与电池并列在 power_supply 下，路径同样要兼容 chroot 逃逸根。
+//
+// 注意：Type-C 小板直供的机器上 usb.online 会是 0 —— 那时电池就是整机的
+// 供电源，功耗必须靠 V×I 或电量变化率算，不能当作「无读数」。
 func externalPowerOnline() bool {
+	return powerSupplyOnline("usb", "ac", "charger", "dc")
+}
+
+// powerSupplyOnline 检查指定 power_supply 节点中是否有 online==1。
+func powerSupplyOnline(names ...string) bool {
 	bases := []string{"/sys/class/power_supply"}
 	if root := androidHostRoot(); root != "" {
 		bases = append([]string{filepath.Join(root, "sys/class/power_supply")}, bases...)
 	}
 	for _, base := range bases {
-		for _, name := range []string{"usb", "ac", "charger", "dc"} {
+		for _, name := range names {
 			if v, err := os.ReadFile(filepath.Join(base, name, "online")); err == nil {
 				if strings.TrimSpace(string(v)) == "1" {
 					return true
