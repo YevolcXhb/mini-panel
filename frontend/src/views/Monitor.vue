@@ -35,8 +35,8 @@
 	              <template v-else>— W</template>
 	            </span>
 	          </div>
-	          <div class="battery-row"><span>{{ battery.voltage_v.toFixed(2) }} V</span><span>{{ Math.abs(battery.current_ma).toFixed(1) }} mA</span></div>
-	          <div class="battery-row"><span>{{ battery.temp_c.toFixed(1) }} ℃</span><span v-if="battery.health">❤ {{ battery.health }}</span></div>
+	          <div class="battery-row"><span>{{ (battery.voltage_v || 0).toFixed(2) }} V</span><span>{{ Math.abs(battery.current_ma || 0).toFixed(1) }} mA</span></div>
+	          <div class="battery-row"><span>{{ (battery.temp_c || 0).toFixed(1) }} ℃</span><span v-if="battery.health">❤ {{ battery.health }}</span></div>
 	          <div v-if="battery.charge_full_mah > 0" class="battery-row">
 	            <span>{{ battery.charge_now_mah.toFixed(0) }} / {{ battery.charge_full_mah.toFixed(0) }} mAh</span>
 	            <span v-if="battery.cycle_count > 0">{{ battery.cycle_count }} 循环</span>
@@ -58,7 +58,7 @@
 	        <template v-if="thermal.length">
 	          <div v-for="z in thermal" :key="z.index + z.type" class="thermal-row">
 	            <span class="thermal-type" :title="z.type">{{ z.type || ('zone' + z.index) }}</span>
-	            <span class="thermal-temp" :style="{ color: tempColor(z.temp_c) }">{{ z.temp_c.toFixed(1) }} ℃</span>
+	            <span class="thermal-temp" :style="{ color: tempColor(z.temp_c) }">{{ (z.temp_c || 0).toFixed(1) }} ℃</span>
 	          </div>
 	        </template>
 	        <div v-else class="battery-na">
@@ -68,7 +68,7 @@
 	      </div>
 	    </div>
 
-	    <div style="margin-bottom:16px;display:flex;gap:8px;align-items:center">
+	    <div style="margin-bottom:16px;display:flex;gap:8px;align-items:center" class="range-bar">
       <el-radio-group v-model="timeRange" size="small" @change="loadData">
         <el-radio-button label="60">1小时</el-radio-button>
         <el-radio-button label="360">6小时</el-radio-button>
@@ -97,7 +97,16 @@
     </div>
 
     <h3 class="section-title" style="margin-top:24px">网络接口实时数据</h3>
-    <div class="table-wrap">
+    <div class="mobile-card-list">
+      <div v-for="n in netInfo" :key="n.name" class="info-card net-mobile-card">
+        <div class="net-mobile-head">{{ n.name }}</div>
+        <div class="net-mobile-row"><span>接收</span><span>{{ formatBytes(n.bytes_recv) }}</span></div>
+        <div class="net-mobile-row"><span>发送</span><span>{{ formatBytes(n.bytes_sent) }}</span></div>
+        <div class="net-mobile-row"><span>包数 收/发</span><span>{{ n.packets_recv }} / {{ n.packets_sent }}</span></div>
+      </div>
+      <div v-if="!netInfo.length" class="battery-na">暂无网络接口数据</div>
+    </div>
+    <div class="table-wrap desktop-only">
       <el-table :data="netInfo" size="small">
         <el-table-column prop="name" label="接口" />
         <el-table-column label="接收">
@@ -355,5 +364,28 @@ async function loadNetInfo() {
 	.chart {
 	  width: 100%;
 	  height: 260px;
+	}
+	/* 网络接口：移动端用卡片，桌面端用表格 */
+	.mobile-card-list { display: none; }
+	.net-mobile-card { padding: 12px; margin-bottom: 10px; }
+	.net-mobile-head {
+	  font-size: 14px; font-weight: 600; color: #e8eaed;
+	  padding-bottom: 8px; margin-bottom: 6px; border-bottom: 1px solid #2a2a2a;
+	  font-family: 'SF Mono', Consolas, monospace;
+	}
+	.net-mobile-row {
+	  display: flex; justify-content: space-between; align-items: center;
+	  font-size: 13px; color: #9aa0a6; padding: 3px 0;
+	}
+	.net-mobile-row span:last-child { color: #e8eaed; font-weight: 600; }
+	@media (max-width: 768px) {
+	  .desktop-only { display: none; }
+	  .mobile-card-list { display: block; }
+	  .range-bar :deep(.el-radio-group) { flex-wrap: wrap; width: 100%; }
+	  .range-bar :deep(.el-radio-button) { flex: 1 1 45%; }
+	  .range-bar :deep(.el-radio-button__inner) { width: 100%; padding: 8px 0; }
+	  .chart { height: 200px; }
+	  .thermal-type { max-width: 55%; font-size: 12px; }
+	  .battery-row { font-size: 12px; }
 	}
 </style>

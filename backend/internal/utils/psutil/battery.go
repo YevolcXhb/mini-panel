@@ -116,16 +116,20 @@ func GetBatteryInfo() *BatteryInfo {
 		if v, ok := readBatteryFloat(dir, "charge_full"); ok {
 			info.ChargeFullMAh = normalizeCharge(v)
 		}
-		// 部分机型只用 batt_rm / batt_fcc（单位 mAh）
-		if info.ChargeNowMAh == 0 {
-			if v, ok := readBatteryFloat(dir, "batt_rm"); ok && v > 0 {
-				info.ChargeNowMAh = v
-			}
+		// 部分机型只用 batt_rm / batt_fcc（单位 mAh）。
+		// 注意 charge_now 在 MTK 驱动里常是「电量计剩余电荷」，与满电设计容量
+		// 口径不同（本机 5200/4000），因此当 charge_full 缺失或 charge_now
+		// 明显超出 charge_full 时，改用 batt_rm/batt_fcc 这一对同口径值。
+		rm, hasRM := readBatteryFloat(dir, "batt_rm")
+		fcc, hasFCC := readBatteryFloat(dir, "batt_fcc")
+		needPair := !hasFCC || info.ChargeFullMAh == 0 ||
+			(info.ChargeNowMAh > 0 && info.ChargeNowMAh > info.ChargeFullMAh*1.2)
+		if needPair && hasRM && hasFCC && rm > 0 && fcc > 0 {
+			info.ChargeNowMAh = rm
+			info.ChargeFullMAh = fcc
 		}
-		if info.ChargeFullMAh == 0 {
-			if v, ok := readBatteryFloat(dir, "batt_fcc"); ok && v > 0 {
-				info.ChargeFullMAh = v
-			}
+		if info.ChargeFullMAh <= 0 && info.ChargeNowMAh > 0 {
+			info.ChargeFullMAh = info.ChargeNowMAh
 		}
 		if v, ok := readBatteryFloat(dir, "cycle_count"); ok && v >= 0 {
 			info.CycleCount = int(v)

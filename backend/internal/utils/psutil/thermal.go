@@ -62,6 +62,11 @@ func GetThermalZones() []ThermalZone {
 			if !ok || zTemp <= invalidTempThresholdC || zTemp >= thermalMaxTempC {
 				continue // 无效占位（tzimgs 的 -127）或读不到
 			}
+			if zType == "" {
+				// type 读不到时按 MTK/高通驱动常见顺序补一个可辨识的名字，
+				// 否则前端标题为空、用户无法分辨是哪个传感器。
+				zType = "zone" + strconv.Itoa(zoneIndexOf(dir))
+			}
 			zones = append(zones, ThermalZone{
 				Index: zoneIndexOf(dir),
 				Type:  zType,
