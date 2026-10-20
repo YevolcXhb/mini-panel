@@ -150,8 +150,10 @@
         <div v-for="(msg, idx) in messages" :key="idx" class="message-row">
           <!-- 用户提问气泡 -->
           <div v-if="msg.role === 'user'" class="user-bubble-container">
-            <div class="user-bubble">
+            <div class="user-bubble" :class="{ 'is-pending': msg.pending, 'is-failed': msg.error }">
               <div class="bubble-text">{{ msg.content }}</div>
+              <div v-if="msg.pending" class="bubble-hint">待注入 · 当前步骤结束后生效</div>
+              <div v-else-if="msg.error" class="bubble-hint is-error">发送失败</div>
             </div>
           </div>
 
@@ -243,9 +245,8 @@
             ref="textareaRef"
             v-model="inputMessage"
             class="gemini-textarea"
-            :placeholder="streaming ? 'Mini Agent 正在工作中...' : '向 Mini Agent 发送指令或提问运维问题... (Enter 发送, Shift+Enter 换行)'"
+            :placeholder="streaming ? 'Agent 正在执行…此处输入可中途插话，当前步骤结束后生效' : '向 Mini Agent 发送指令或提问运维问题... (Enter 发送, Shift+Enter 换行)'"
             rows="1"
-            :disabled="streaming"
             @focus="isInputFocused = true"
             @blur="isInputFocused = false"
             @keydown.enter.exact.prevent="handleSend"
@@ -265,7 +266,7 @@
               </svg>
             </button>
 
-            <!-- 停止生成按钮 -->
+            <!-- 停止生成按钮（运行中与插话发送并存） -->
             <button
               v-if="streaming"
               class="pill-stop-btn"
@@ -275,12 +276,12 @@
               <div class="stop-square"></div>
             </button>
 
-            <!-- 发送按钮 -->
+            <!-- 发送按钮：运行中也可用，此时语义是"插话" -->
             <button
-              v-else
               class="pill-send-btn"
-              :class="{ 'can-send': inputMessage.trim().length > 0 }"
+              :class="{ 'can-send': inputMessage.trim().length > 0, 'is-interrupt': streaming }"
               :disabled="!inputMessage.trim() || currentSessionId === 0"
+              :title="streaming ? '插话（当前步骤结束后生效）' : '发送'"
               @click="handleSend"
             >
               <svg viewBox="0 0 24 24" fill="currentColor">
@@ -321,7 +322,29 @@
             <el-slider v-model="config.temperature" :min="0" :max="2" :step="0.1" />
           </el-form-item>
           <el-form-item label="Max Tokens">
-            <el-input-number v-model="config.max_tokens" :min="512" :max="131072" :step="1024" />
+            <el-input-number
+              v-model="config.max_tokens"
+              class="num-input-wide"
+              :min="512"
+              :max="maxTokensLimit"
+              :step="1024"
+              controls-position="right"
+            />
+            <div class="form-tip">单次回复最多生成的 token 数</div>
+          </el-form-item>
+          <el-form-item label="上下文窗口">
+            <el-input-number
+              v-model="config.context_window"
+              class="num-input-wide"
+              :min="8192"
+              :max="contextWindowLimit"
+              :step="32768"
+              controls-position="right"
+            />
+            <div class="form-tip">
+              模型支持的上下文长度，用于计算压缩水位。按模型实际能力填，
+              百万级（1000000）也支持；留空或 0 时按 65536 保守估计。
+            </div>
           </el-form-item>
           <el-divider content-position="left">安全执行策略</el-divider>
           <el-form-item label="高危指令自动执行">
@@ -357,7 +380,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, reactive, onMounted, nextTick } from 'vue'
 import { Setting, Delete } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { agentApi, type StreamChunk } from '../api/agent'
@@ -385,6 +408,12 @@ interface ChatMessage {
   toolName?: string
   aggregated?: boolean
   phase?: string
+  /** 运行中插话：已投递但尚未在当前步边界注入 */
+  pending?: boolean
+  /** 运行中插话：已注入上下文 */
+  delivered?: boolean
+  /** 运行中插话：投递失败 */
+  error?: boolean
 }
 
 interface Session {
@@ -407,6 +436,11 @@ const pendingConfirm = ref<{ toolCallId: string; command: string; message: strin
 const pendingPlan = ref<{ plan: string } | null>(null)
 const currentSessionId = ref(0)
 let currentController: AbortController | null = null
+
+// 运行中插话：pendingInterrupts 是"已排队待注入"的条数，
+// 收到 user_input_received 事件后递减并把气泡从"待注入"改成已送达。
+const pendingInterrupts = ref(0)
+let pendingInterruptBubble: any = null
 
 const sessions = ref<Session[]>([])
 
@@ -460,12 +494,19 @@ const exampleCards = [
 
 const availableSkills = ref<{ id: string; name: string; description: string; icon: string }[]>([])
 
+// 上限：单次回复 128 万 token 足够覆盖当前所有模型；
+// 上下文窗口放到 1000 万，为百万级上下文的模型留出余量。
+// 真正的约束来自模型服务端，这里只是防止误填天文数字。
+const maxTokensLimit = 1048576
+const contextWindowLimit = 10000000
+
 const config = ref<{
   provider: string
   base_url: string
   model: string
   temperature: number
   max_tokens: number
+  context_window: number
   enabled: boolean
   system_prompt: string
   apiKey: string
@@ -478,6 +519,7 @@ const config = ref<{
   model: 'gpt-4o-mini',
   temperature: 0.3,
   max_tokens: 4096,
+  context_window: 65536,
   enabled: true,
   system_prompt: '',
   apiKey: '',
@@ -569,6 +611,7 @@ async function saveConfig() {
       model: config.value.model,
       temperature: config.value.temperature,
       max_tokens: config.value.max_tokens,
+      context_window: config.value.context_window,
       enabled: config.value.enabled,
       system_prompt: config.value.system_prompt,
       skills: JSON.stringify(config.value.skills),
@@ -763,7 +806,15 @@ function setErrorMessage(errText: string) {
 
 function handleSend() {
   const text = inputMessage.value.trim()
-  if (!text || streaming.value || currentSessionId.value === 0) return
+  if (!text || currentSessionId.value === 0) return
+
+  // 运行中：投递为插话，由引擎在下一个步边界注入上下文。
+  // 不打断正在进行的流，也不新建气泡对 —— 只把这条消息追加成一条
+  // 标了 pending 的 user 气泡，收到 user_input_received 后转为已送达。
+  if (streaming.value) {
+    interruptSend(text)
+    return
+  }
 
   lastInput.value = text
   messages.value.push({ role: 'user', content: text })
@@ -786,6 +837,58 @@ function handleSend() {
   } else {
     startChat(text)
   }
+}
+
+// interruptSend 运行中插话。
+//
+// 与普通发送的区别：这条消息不会另开一轮，而是进 inbox 队列，
+// 由主循环在"当前工具批次全部执行完、下一次调 LLM 之前"注入。
+// 因此界面上它先显示为待注入，收到 user_input_received 才生效。
+function interruptSend(text: string) {
+  inputMessage.value = ''
+  adjustTextareaHeight()
+
+  const bubble = reactive({
+    role: 'user',
+    content: text,
+    pending: true,
+  })
+  // 插到当前 assistant 气泡之前，保持对话顺序可读
+  const lastAssistant = messages.value.length - 1
+  if (
+    lastAssistant >= 0 &&
+    messages.value[lastAssistant].role === 'assistant' &&
+    !messages.value[lastAssistant].content
+  ) {
+    messages.value.splice(lastAssistant, 0, bubble as never)
+  } else {
+    messages.value.push(bubble as never)
+  }
+  pendingInterrupts.value++
+  scrollToBottom()
+
+  pendingInterruptBubble = bubble as never
+
+  agentApi
+    .pushInput(currentSessionId.value, text)
+    .then((res: any) => {
+      const data = res && res.data
+      if (data && data.queued) {
+        ElMessage.success('插话已排队，当前步骤结束后生效')
+      } else {
+        // 服务端此时已不在运行（上一轮刚结束），那就直接当普通消息发一遍
+        bubble.pending = false
+        pendingInterrupts.value = Math.max(0, pendingInterrupts.value - 1)
+        inputMessage.value = text
+        handleSend()
+      }
+    })
+    .catch(() => {
+      bubble.pending = false
+      bubble.error = true
+      pendingInterrupts.value = Math.max(0, pendingInterrupts.value - 1)
+      ElMessage.error('插话发送失败')
+    })
 }
 
 function startChat(text: string) {
@@ -869,11 +972,24 @@ function handleChunk(chunk: StreamChunk) {
       stopTypewriter()
       break
 
+    case 'compression':
     case 'compression_triggered':
       tokensSaved.value += chunk.tokens_saved || 0
       compressionCount.value++
       if (chunk.step_number) stepNumber.value = chunk.step_number
       break
+
+    case 'user_input_received': {
+      // 插话已在步边界注入上下文：把对应气泡从"待注入"改成已送达
+      pendingInterrupts.value = Math.max(0, pendingInterrupts.value - 1)
+      if (pendingInterruptBubble && pendingInterruptBubble.pending) {
+        pendingInterruptBubble.pending = false
+        pendingInterruptBubble.delivered = true
+      }
+      pendingInterruptBubble = null
+      nextTick(() => scrollToBottom())
+      break
+    }
 
     case 'confirm_required':
       pendingConfirm.value = {
@@ -1554,6 +1670,53 @@ function escapeHtml(str: string): string {
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* 运行中插话：待注入时虚化边框 + 底部提示，注入后恢复常态 */
+.user-bubble.is-pending {
+  border-style: dashed;
+  border-color: var(--el-color-primary, #409eff);
+  opacity: 0.78;
+}
+
+.user-bubble.is-failed {
+  border-color: var(--el-color-danger, #f56c6c);
+}
+
+.bubble-hint {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--el-color-primary, #409eff);
+  letter-spacing: 0.2px;
+}
+
+.bubble-hint.is-error {
+  color: var(--el-color-danger, #f56c6c);
+}
+
+/* 运行中发送按钮 = 插话，用不同底色区分"插话"与"发送" */
+.pill-send-btn.is-interrupt.can-send {
+  background: var(--el-color-warning, #e6a23c);
+}
+
+/* 数字输入框：默认宽度装不下六位数（131072/1000000），
+   六位以上数字会被挤到看不全，这里给足宽度并让内部 input 撑满 */
+.num-input-wide {
+  width: 100%;
+  max-width: 320px;
+}
+
+.num-input-wide :deep(.el-input__inner) {
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.3px;
+}
+
+@media (max-width: 768px) {
+  .num-input-wide {
+    max-width: 100%;
+  }
 }
 
 /* 助手回复（左侧星芒通栏风格） */

@@ -117,6 +117,15 @@ export const agentApi = {
   deleteSession: (id: number) => api.delete(`/agent/sessions/${id}`),
   getMessages: (id: number) => api.get(`/agent/sessions/${id}/messages`),
 
+  // 查询运行中插话队列（pending 条数 / 是否在运行）
+  getInbox: (id: number) => api.get(`/agent/sessions/${id}/inbox`),
+
+  // pushInput 运行中插话：普通 POST，服务端识别到会话在跑就投入 inbox，
+  // 不会返回 SSE，因此不复用 parseSSEStream。
+  // 返回 { queued: true, pending: N } 表示已排队。
+  pushInput: (sessionId: number, message: string) =>
+    api.post('/agent/chat', { session_id: sessionId, message }),
+
   // chat 单轮 ReAct 聊天（SSE）
   chat: (sessionId: number, message: string, onChunk: (chunk: StreamChunk) => void, onDone: () => void, onError: (err: string) => void, regenerate = false) => {
     return parseSSEStream('/api/v1/agent/chat', { session_id: sessionId, message, regenerate }, { onChunk, onDone, onError })

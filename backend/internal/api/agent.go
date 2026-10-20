@@ -12,6 +12,7 @@ import (
 	"github.com/gin-contrib/sse"
 	"github.com/gin-gonic/gin"
 	"github.com/minipanel/minipanel/internal/agent"
+	"github.com/minipanel/minipanel/internal/agent/agentcore"
 	"github.com/minipanel/minipanel/internal/agent/provider"
 	"github.com/minipanel/minipanel/internal/agent/repository"
 	"github.com/minipanel/minipanel/internal/agent/tools"
@@ -54,6 +55,46 @@ func sendChunk(ctx context.Context, stream chan<- agent.StreamChunk, chunk agent
 	}
 }
 
+// adaptStream 把 agentcore 的 StreamChunk 适配到 agent.StreamChunk。
+//
+// 两个结构字段与 JSON tag 完全一致，所以只需逐字段搬运；
+// 用独立 goroutine 转发是为了让上游 API 层的读出逻辑（c.Stream）保持原样，
+// 前端 SSE 协议一个字节都不用改。
+func adaptStream(src <-chan agentcore.StreamChunk) chan agent.StreamChunk {
+	dst := make(chan agent.StreamChunk, 10)
+	go func() {
+		defer close(dst)
+		for c := range src {
+			out := agent.StreamChunk{
+				Type:        c.Type,
+				Content:     c.Content,
+				ToolCallID:  c.ToolCallID,
+				ToolName:    c.ToolName,
+				Command:     c.Command,
+				Message:     c.Message,
+				Error:       c.Error,
+				Success:     c.Success,
+				Cached:      c.Cached,
+				Phase:       c.Phase,
+				TokensSaved: c.TokensSaved,
+				StepNumber:  c.StepNumber,
+				MaxSteps:    c.MaxSteps,
+			}
+			if c.Usage != nil {
+				out.Usage = &agent.StreamUsage{
+					Tokens:        c.Usage.Tokens,
+					Threshold:     c.Usage.Threshold,
+					ContextWindow: c.Usage.ContextWindow,
+					Percent:       c.Usage.Percent,
+					Compactions:   c.Usage.Compactions,
+				}
+			}
+			dst <- out
+		}
+	}()
+	return dst
+}
+
 func NewAgentAPI() *AgentAPI {
 	a := &AgentAPI{
 		service:       service.NewAgentService(),
@@ -90,6 +131,7 @@ func (a *AgentAPI) RegisterRoutes(r *gin.RouterGroup) {
 		r.POST("/sessions", a.CreateSession)
 		r.DELETE("/sessions/:id", a.DeleteSession)
 		r.GET("/sessions/:id/messages", a.GetSessionMessages)
+		r.GET("/sessions/:id/inbox", a.GetInbox)
 		r.POST("/chat", a.Chat)
 		r.POST("/confirm", a.Confirm)
 		r.POST("/orchestrate", a.Orchestrate)
@@ -146,6 +188,13 @@ func (a *AgentAPI) endRun(sessionID uint) {
 	delete(a.running, sessionID)
 }
 
+// isRunning 查询会话是否正在运行
+func (a *AgentAPI) isRunning(sessionID uint) bool {
+	a.runMu.Lock()
+	defer a.runMu.Unlock()
+	return a.running[sessionID]
+}
+
 // validateSession 校验会话存在且属于当前用户；失败时直接响应并返回 false
 func (a *AgentAPI) validateSession(c *gin.Context, userID uint, sessionID uint) bool {
 	sm := repository.NewSessionManager()
@@ -188,6 +237,9 @@ func (a *AgentAPI) GetConfig(c *gin.Context) {
 			"skills":                   cfg.Skills,
 			"allow_dangerous_commands": cfg.AllowDangerousCommands,
 			"exec_timeout_seconds":     cfg.ExecTimeoutSeconds,
+			"context_window":           cfg.ContextWindow,
+			"max_steps":                cfg.MaxSteps,
+			"use_orchestrator":         cfg.UseOrchestrator,
 		},
 		"available_skills": agent.GetAllSkills(),
 	})
@@ -200,6 +252,11 @@ func (a *AgentAPI) UpdateConfig(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": 400, "message": err.Error()})
 		return
+	}
+	// 上下文窗口按 0 表示"未指定"，交给下游用保守默认值，
+	// 而不是把 0 写进预算里导致每轮都触发压缩。
+	if req.ContextWindow < 0 {
+		req.ContextWindow = 0
 	}
 	if err := a.service.UpdateConfig(userID, &req); err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
@@ -245,6 +302,8 @@ func (a *AgentAPI) DeleteSession(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
 		return
 	}
+	// 会话删除后它的插话队列没有意义了，顺手释放，避免长期堆积
+	agentcore.DefaultInboxes().Drop(uint(id))
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "已删除"})
 }
 
@@ -258,6 +317,34 @@ func (a *AgentAPI) GetSessionMessages(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": messages})
+}
+
+// GetInbox 查询会话的运行中插话队列状态。
+//
+// 前端在 agent 运行期间可以轮询这个接口，显示"还有 N 条插话待注入"。
+func (a *AgentAPI) GetInbox(c *gin.Context) {
+	userID := a.getUserID(c)
+	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	sessionID := uint(id)
+	if !a.validateSession(c, userID, sessionID) {
+		return
+	}
+	inbox := agentcore.DefaultInboxes().Lookup(sessionID)
+	if inbox == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"code": 200,
+			"data": gin.H{"pending": 0, "total": 0, "running": a.isRunning(sessionID)},
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"code": 200,
+		"data": gin.H{
+			"pending": inbox.Pending(),
+			"total":   inbox.Total(),
+			"running": a.isRunning(sessionID),
+		},
+	})
 }
 
 // Chat 流式聊天（SSE）
@@ -291,7 +378,23 @@ func (a *AgentAPI) Chat(c *gin.Context) {
 		return
 	}
 	if !a.beginRun(req.SessionID) {
-		c.JSON(http.StatusConflict, gin.H{"code": 409, "message": "该会话正在处理中，请稍后再试"})
+		// 会话正在运行：不再直接拒绝，而是把这条消息投进 inbox，
+		// 由引擎在下一个步边界注入上下文。
+		// 这样用户在 agent 跑动中能直接补充信息、修正目标，
+		// 不必等本轮结束再重发一遍。
+		inbox := agentcore.DefaultInboxes().Get(req.SessionID)
+		if inbox.Push(req.Message) {
+			_ = repository.NewSessionManager().SaveUserMessage(req.SessionID, req.Message)
+			global.LOG.Infof("[AgentAPI] 会话%d 正在运行，插话已入队（待注入 %d 条）",
+				req.SessionID, inbox.Pending())
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "插话已排队，将在当前步骤结束后注入",
+				"data":    gin.H{"queued": true, "pending": inbox.Pending()},
+			})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 400, "message": "消息不能为空"})
 		return
 	}
 
@@ -326,12 +429,35 @@ func (a *AgentAPI) Chat(c *gin.Context) {
 		}
 		var skillIDs []string
 		_ = json.Unmarshal([]byte(cfg.Skills), &skillIDs)
-		engine := agent.NewEngineWithProvider(p, skillIDs, cfg.SystemPrompt)
-		if req.Regenerate {
-			_ = engine.RunRegenerate(ctx, req.SessionID, stream)
-		} else {
-			_ = engine.Run(ctx, req.SessionID, req.Message, stream)
+		// 纯 agent 模式：走 agentcore（DSH 风格 ReAct 主循环 + 事务式上下文压缩）。
+		// 三阶段编排仅在显式开启 use_orchestrator 时使用。
+		var engine *agentcore.Engine
+		if cfg.UseOrchestrator {
+			legacy := agent.NewEngineWithProvider(p, skillIDs, cfg.SystemPrompt)
+			if req.Regenerate {
+				_ = legacy.RunRegenerate(ctx, req.SessionID, stream)
+			} else {
+				_ = legacy.Run(ctx, req.SessionID, req.Message, stream)
+			}
+			return
 		}
+		engine, err = agentcore.NewFromConfig(cfg, skillIDs)
+		if err != nil {
+			sendChunk(ctx, stream, agent.StreamChunk{Type: "error", Error: "创建 Agent 失败: " + err.Error()})
+			return
+		}
+		acStream := make(chan agentcore.StreamChunk, 10)
+		go func() {
+			for c := range adaptStream(acStream) {
+				sendChunk(ctx, stream, c)
+			}
+		}()
+		if req.Regenerate {
+			_ = engine.RunRegenerate(ctx, req.SessionID, acStream)
+		} else {
+			_ = engine.Run(ctx, req.SessionID, req.Message, acStream)
+		}
+		close(acStream)
 	}()
 
 	c.Stream(func(w io.Writer) bool {
@@ -408,15 +534,25 @@ func (a *AgentAPI) Confirm(c *gin.Context) {
 			_ = orch.ConfirmTool(ctx, req.SessionID, req.ToolCallID, req.Confirmed, stream)
 			return
 		}
-		p, err := provider.NewProvider(cfg.Provider, cfg.BaseURL, cfg.APIKey, cfg.Model, float32(cfg.Temperature), cfg.MaxTokens)
-		if err != nil {
+		if _, err := provider.NewProvider(cfg.Provider, cfg.BaseURL, cfg.APIKey, cfg.Model, float32(cfg.Temperature), cfg.MaxTokens); err != nil {
 			sendChunk(ctx, stream, agent.StreamChunk{Type: "error", Error: "创建 Provider 失败: " + err.Error()})
 			return
 		}
 		var skillIDs []string
 		_ = json.Unmarshal([]byte(cfg.Skills), &skillIDs)
-		engine := agent.NewEngineWithProvider(p, skillIDs, cfg.SystemPrompt)
-		_ = engine.RunWithConfirm(ctx, req.SessionID, req.ToolCallID, req.Confirmed, stream)
+		engine, err := agentcore.NewFromConfig(cfg, skillIDs)
+		if err != nil {
+			sendChunk(ctx, stream, agent.StreamChunk{Type: "error", Error: "创建 Agent 失败: " + err.Error()})
+			return
+		}
+		acStream := make(chan agentcore.StreamChunk, 10)
+		go func() {
+			for c := range adaptStream(acStream) {
+				sendChunk(ctx, stream, c)
+			}
+		}()
+		_ = engine.RunWithConfirm(ctx, req.SessionID, req.ToolCallID, req.Confirmed, acStream)
+		close(acStream)
 	}()
 
 	c.Stream(func(w io.Writer) bool {

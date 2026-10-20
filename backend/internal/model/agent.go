@@ -15,6 +15,11 @@ type AgentConfig struct {
 	Skills                  string  `json:"skills" gorm:"type:text;default:'[\"system\",\"container\",\"website\",\"database\",\"firewall\",\"file\",\"backup\",\"web\"]'"` // JSON 数组
 	AllowDangerousCommands  bool    `json:"allow_dangerous_commands" gorm:"default:false"` // 允许危险命令自动执行（关闭时拦截并询问用户）
 	ExecTimeoutSeconds      int     `json:"exec_timeout_seconds" gorm:"default:120"`        // 工具执行超时（秒），默认 120
+	ContextWindow           int     `json:"context_window" gorm:"default:65536"`            // 模型上下文窗口（token），用于压缩水位计算
+	MaxSteps                int     `json:"max_steps" gorm:"default:24"`                     // 单轮最大 ReAct 步数
+	// UseOrchestrator 是否启用三阶段编排（规划→编码→审查）。
+	// 纯 agent 模式下建议关闭：运维任务多为直接执行，编排会多消耗 2 轮 LLM 调用。
+	UseOrchestrator bool `json:"use_orchestrator" gorm:"default:false"`
 }
 
 // AgentSession 会话

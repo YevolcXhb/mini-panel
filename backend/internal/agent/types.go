@@ -29,6 +29,17 @@ type StreamChunk struct {
 	TokensSaved int    `json:"tokens_saved,omitempty"` // 压缩节省的 token 数
 	StepNumber  int    `json:"step_number,omitempty"`  // 当前步数
 	MaxSteps    int    `json:"max_steps,omitempty"`    // 最大步数
+	// Usage 上下文占用（compression 事件携带，前端用来画占用条）
+	Usage *StreamUsage `json:"usage,omitempty"`
+}
+
+// StreamUsage 上下文占用快照。
+type StreamUsage struct {
+	Tokens        int     `json:"tokens"`
+	Threshold     int     `json:"threshold"`
+	ContextWindow int     `json:"context_window"`
+	Percent       float64 `json:"percent"`
+	Compactions   int     `json:"compactions"`
 }
 
 // ConfirmRequiredError 需要用户确认的错误

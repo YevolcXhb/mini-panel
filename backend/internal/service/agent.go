@@ -37,6 +37,15 @@ func (s *AgentService) UpdateConfig(userID uint, cfg *model.AgentConfig) error {
 		"allow_dangerous_commands": cfg.AllowDangerousCommands,
 		"exec_timeout_seconds":     cfg.ExecTimeoutSeconds,
 	}
+	// 这三个字段是 0 表示"沿用默认"以外的真实值，不能无条件写 0，
+	// 否则老前端提交配置（不带这些键）会把窗口和步数清空。
+	if cfg.ContextWindow > 0 {
+		updates["context_window"] = cfg.ContextWindow
+	}
+	if cfg.MaxSteps > 0 {
+		updates["max_steps"] = cfg.MaxSteps
+	}
+	updates["use_orchestrator"] = cfg.UseOrchestrator
 	if cfg.APIKey != "" {
 		updates["api_key"] = cfg.APIKey
 	}
