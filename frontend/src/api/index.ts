@@ -190,7 +190,8 @@ export const monitorApi = {
   history: (limit?: number) => api.get('/monitor/history', { params: { limit } }),
   realtime: () => api.get('/monitor/realtime'),
   battery: () => api.get('/monitor/battery'),
-  thermal: () => api.get('/monitor/thermal')
+  thermal: () => api.get('/monitor/thermal'),
+  hardwareDiag: () => api.get('/monitor/hardware-diag')
 }
 
 export const websiteApi = {

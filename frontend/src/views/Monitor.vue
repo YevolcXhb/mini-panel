@@ -28,8 +28,14 @@
 	        <div class="info-label">🔋 电池状态</div>
 	        <template v-if="battery?.present">
 	          <div class="battery-pct" :style="{ color: batteryColor }">{{ battery.capacity }}<span class="battery-pct-sign">%</span></div>
-	          <div class="battery-row"><span>{{ battery.status || '-' }}</span><span>{{ battery.power_w > 0 ? battery.power_w.toFixed(2) + ' W' : '-' }}</span></div>
-	          <div class="battery-row"><span>{{ battery.voltage_v.toFixed(2) }} V</span><span>{{ Math.abs(battery.current_ma).toFixed(0) }} mA</span></div>
+	          <div class="battery-row">
+	            <span>{{ battery.status || '-' }}</span>
+	            <span>
+	              <template v-if="battery.power_w > 0">{{ battery.power_w.toFixed(2) }} W</template>
+	              <template v-else>— W</template>
+	            </span>
+	          </div>
+	          <div class="battery-row"><span>{{ battery.voltage_v.toFixed(2) }} V</span><span>{{ Math.abs(battery.current_ma).toFixed(1) }} mA</span></div>
 	          <div class="battery-row"><span>{{ battery.temp_c.toFixed(1) }} ℃</span><span v-if="battery.health">❤ {{ battery.health }}</span></div>
 	          <div v-if="battery.charge_full_mah > 0" class="battery-row">
 	            <span>{{ battery.charge_now_mah.toFixed(0) }} / {{ battery.charge_full_mah.toFixed(0) }} mAh</span>
@@ -39,17 +45,26 @@
 	            <div class="progress-fill" :style="{ width: battery.capacity + '%', background: batteryColor }"></div>
 	          </div>
 	        </template>
-	        <div v-else class="battery-na">未检测到电池</div>
+	        <div v-else class="battery-na">
+	          未检测到电池
+	          <div class="diag-link" @click="showDiag">查看诊断 →</div>
+	        </div>
 	      </div>
 	      <div class="info-card gauge-card battery-card thermal-card">
-	        <div class="info-label">🌡 温度传感器</div>
+	        <div class="info-label">
+	          🌡 温度传感器
+	          <span v-if="thermal.length" class="thermal-count">{{ thermal.length }}</span>
+	        </div>
 	        <template v-if="thermal.length">
 	          <div v-for="z in thermal" :key="z.index + z.type" class="thermal-row">
 	            <span class="thermal-type" :title="z.type">{{ z.type || ('zone' + z.index) }}</span>
 	            <span class="thermal-temp" :style="{ color: tempColor(z.temp_c) }">{{ z.temp_c.toFixed(1) }} ℃</span>
 	          </div>
 	        </template>
-	        <div v-else class="battery-na">未检测到温度传感器</div>
+	        <div v-else class="battery-na">
+	          未检测到有效温度传感器
+	          <div class="diag-link" @click="showDiag">查看诊断 →</div>
+	        </div>
 	      </div>
 	    </div>
 
@@ -107,7 +122,7 @@ import { use } from 'echarts/core'
 	import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 	import VChart from 'vue-echarts'
 	import { monitorApi, dashboardApi } from '../api'
-	import { ElMessage } from 'element-plus'
+	import { ElMessage, ElMessageBox } from 'element-plus'
 
 	use([CanvasRenderer, LineChart, GaugeChart, GridComponent, TooltipComponent, LegendComponent])
 
@@ -145,6 +160,32 @@ const timeRange = ref(1440)
 	    const res: any = await monitorApi.thermal()
 	    thermal.value = res.data || []
 	  } catch (e) {}
+	}
+
+	async function showDiag() {
+	  try {
+	    const res: any = await monitorApi.hardwareDiag()
+	    const d = res.data || {}
+	    const lines = [
+	      '宿主根: ' + (d.host_root || '(未逃逸)'),
+	      'chroot 环境: ' + (d.chroot_like ? '是' : '否'),
+	      '电池命中: ' + (d.battery_hit || '(无)'),
+	      '电池候选: ' + ((d.battery_dirs || []).join(' , ') || '(无)'),
+	      '温度命中: ' + (d.thermal_hit || '(无)'),
+	      '温度候选: ' + ((d.thermal_bases || []).join(' , ') || '(无)'),
+	      '有效传感器: ' + (d.thermal_valid ?? 0),
+	      '原始 zone: ' + ((d.thermal_raw || []).join(' , ') || '(无)'),
+	      '电池属性: ' + ((d.battery_files || []).join(' , ') || '(无)')
+	    ]
+	    ElMessageBox.alert(
+	      '<pre style="white-space:pre-wrap;word-break:break-all;font-size:12px;margin:0">' +
+	      lines.map((l) => l.replace(/</g, '&lt;')).join('\n') + '</pre>',
+	      '硬件读取诊断',
+	      { dangerouslyUseHTMLString: true, customClass: 'hw-diag-box' }
+	    )
+	  } catch (e: any) {
+	    ElMessage.error(e?.message || '诊断失败')
+	  }
 	}
 
 function formatBytes(bytes?: number) {
@@ -294,6 +335,9 @@ async function loadNetInfo() {
 	.thermal-row { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; font-size: 13px; gap: 8px; }
 	.thermal-type { color: #9aa0a6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; font-family: 'SF Mono', Consolas, monospace; }
 	.thermal-temp { font-weight: 600; white-space: nowrap; }
+	.thermal-count { float: right; font-size: 11px; color: #888; font-weight: normal; }
+	.diag-link { margin-top: 6px; font-size: 12px; color: #4f8cff; cursor: pointer; }
+	.diag-link:hover { text-decoration: underline; }
 	.gauge-chart {
 	  width: 100%;
 	  height: 180px;

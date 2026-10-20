@@ -49,3 +49,8 @@ func (a *MonitorAPI) List(c *gin.Context) {
 	func (a *MonitorAPI) GetThermal(c *gin.Context) {
 		c.JSON(http.StatusOK, dto.Response{Code: 200, Data: a.service.GetThermal()})
 	}
+
+	// GetHardwareDiag 硬件读取诊断：实际尝试/命中的 sysfs 路径
+	func (a *MonitorAPI) GetHardwareDiag(c *gin.Context) {
+		c.JSON(http.StatusOK, dto.Response{Code: 200, Data: a.service.GetHardwareDiag()})
+	}

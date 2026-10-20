@@ -15,7 +15,12 @@ type ThermalZone struct {
 	Index int     `json:"index"`
 	Type  string  `json:"type"`  // 传感器名，如 mtktscpu
 	TempC float64 `json:"temp_c"`
+	Valid bool    `json:"valid"` // false = 无效占位值（如 -127℃ 的 tzimgs）
 }
+
+// invalidTempThreshold 无效占位判定：驱动未接入的传感器（如摄像头 tzimgs）
+// 用 -127000（-127℃）甚至更低填充，普通环境不可能出现，直接过滤。
+const invalidTempThresholdC = -50.0
 
 // androidHostRoot 定义于 android_linux.go（宿主逃逸根）。
 
@@ -29,7 +34,8 @@ func thermalBaseDirs() []string {
 }
 
 // GetThermalZones 枚举全部 thermal_zone 传感器温度。
-// type 优先取 zone 目录下的 type 文件；temp 为毫摄氏度 ÷1000。
+// temp 为毫摄氏度 ÷1000；负值低于 -50℃ 视为无效占位（valid=false），
+// 默认只在 valid 传感器中返回—— tzimgs 之类 -127 噪声不再出现。
 func GetThermalZones() []ThermalZone {
 	var zones []ThermalZone
 	seen := map[string]bool{}
@@ -43,22 +49,22 @@ func GetThermalZones() []ThermalZone {
 				continue
 			}
 			dir := filepath.Join(base, e.Name())
-			// 以 type+temp 作为去重键，chroot 与宿主逃逸根可能重叠
 			idx := 0
 			if _, tail, ok := strings.Cut(e.Name(), "thermal_zone"); ok {
 				idx, _ = strconv.Atoi(tail)
 			}
 			zType := readFirstLine(filepath.Join(dir, "type"))
-			zTemp := readThermalTemp(filepath.Join(dir, "temp"))
-			key := zType + "|" + strconv.FormatFloat(zTemp, 'f', 3, 64)
+			zTemp, rawOK := readThermalTemp(filepath.Join(dir, "temp"))
+			valid := rawOK && zTemp > invalidTempThresholdC && zTemp < 150
+			key := zType + "|" + strconv.Itoa(idx)
 			if seen[key] {
 				continue
 			}
 			seen[key] = true
-			if zType == "" && zTemp == 0 {
-				continue
+			if !valid {
+				continue // 无效占位（-127 等）直接丢弃，不进列表
 			}
-			zones = append(zones, ThermalZone{Index: idx, Type: zType, TempC: zTemp})
+			zones = append(zones, ThermalZone{Index: idx, Type: zType, TempC: zTemp, Valid: true})
 		}
 		if len(zones) > 0 {
 			break // 第一个可用的 base（优先宿主逃逸根）已经拿到数据
@@ -67,15 +73,18 @@ func GetThermalZones() []ThermalZone {
 	return zones
 }
 
-// GetCpuTemp 取 CPU 温度：优先 type 含 cpu 的传感器，否则取温度最高的一个。
+// GetCpuTemp 取 CPU 温度：按 type 名找（mtktscpu 等，zone 编号重启会变，
+// 不能硬编码），优先级 cpu > soc > 最高温的有效传感器。
 func GetCpuTemp() (float64, bool) {
 	zones := GetThermalZones()
 	if len(zones) == 0 {
 		return 0, false
 	}
-	for _, z := range zones {
-		if strings.Contains(strings.ToLower(z.Type), "cpu") {
-			return z.TempC, true
+	for _, kw := range []string{"cpu", "soc", "ap"} {
+		for _, z := range zones {
+			if strings.Contains(strings.ToLower(z.Type), kw) {
+				return z.TempC, true
+			}
 		}
 	}
 	best := zones[0]
@@ -87,16 +96,16 @@ func GetCpuTemp() (float64, bool) {
 	return best.TempC, true
 }
 
-func readThermalTemp(path string) float64 {
+func readThermalTemp(path string) (float64, bool) {
 	s := readFirstLine(path)
 	if s == "" {
-		return 0
+		return 0, false
 	}
 	v, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
 	if err != nil {
-		return 0
+		return 0, false
 	}
-	return v / 1000.0 // 毫摄氏度 → ℃
+	return v / 1000.0, true // 毫摄氏度 → ℃
 }
 
 func readFirstLine(path string) string {

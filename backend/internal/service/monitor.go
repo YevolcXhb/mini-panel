@@ -93,6 +93,11 @@ func (s *MonitorService) Cleanup(days int) error {
 		return psutil.GetThermalZones()
 	}
 
+	// GetHardwareDiag 硬件读取路径诊断（排查 Android chroot 读不到数据）
+	func (s *MonitorService) GetHardwareDiag() *psutil.HardwareDiag {
+		return psutil.GetHardwareDiag()
+	}
+
 	// RealtimeMetrics 实时指标
 	type RealtimeMetrics struct {
 		CPUPercent   float64 `json:"cpu_percent"`

@@ -89,17 +89,19 @@ func GetBatteryInfo() *BatteryInfo {
 		info.Technology, _ = readBatteryFile(dir, "technology")
 
 		// voltage_now: µV → V；current_now: µA → mA
+		// （该平台 MTK/OPLUS 驱动无 power_now/原生功耗接口，power 字段为空，
+		//   功耗一律由 V×I 计算得出；current_now 空闲态读数偏小属正常）
 		if v, ok := readBatteryFloat(dir, "voltage_now"); ok {
 			info.VoltageV = v / 1e6
 		}
 		if v, ok := readBatteryFloat(dir, "current_now"); ok {
 			info.CurrentMA = v / 1e3
 		}
-		// 部分驱动只提供 power_now（µW）
-		if p, ok := readBatteryFloat(dir, "power_now"); ok && info.VoltageV <= 0 {
+		// 部分驱动提供有效 power_now（µW）则优先；为空/0 时回退 V×I
+		if p, ok := readBatteryFloat(dir, "power_now"); ok && p > 0 {
 			info.PowerW = p / 1e6
 		}
-		if info.PowerW == 0 && info.VoltageV > 0 {
+		if info.PowerW == 0 && info.VoltageV > 0 && info.CurrentMA != 0 {
 			info.PowerW = math.Abs(info.VoltageV * info.CurrentMA / 1000)
 		}
 		// temp: 0.1℃
