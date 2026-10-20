@@ -47,52 +47,105 @@ const orchCleanupInterval = 10 * time.Minute
 // orchTimeout 编排器等待确认的超时时间
 const orchTimeout = 30 * time.Minute
 
-// sendChunk 安全地向 SSE 流发送数据：客户端断开（ctx 取消）时直接放弃本次发送
-func sendChunk(ctx context.Context, stream chan<- agent.StreamChunk, chunk agent.StreamChunk) {
+// sendChunk 安全地向 SSE 流发送数据：客户端断开（ctx 取消）时放弃本次发送。
+//
+// 注意 recover：调用方可能在 stream 已被关闭之后才执行到这里，
+// 而"向已关闭的 channel 发送"会 panic，且 panic 发生在普通 goroutine 里
+// 会直接终止整个进程（历史上 PC 端面板因此每两分钟崩一次，见 agent.go:452）。
+// 所以这里兜底吞掉该 panic，返回 false 表示本次发送未成功。
+func sendChunk(ctx context.Context, stream chan<- agent.StreamChunk, chunk agent.StreamChunk) (sent bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			sent = false
+		}
+	}()
 	select {
 	case <-ctx.Done():
+		return false
 	case stream <- chunk:
+		return true
 	}
 }
 
-// adaptStream 把 agentcore 的 StreamChunk 适配到 agent.StreamChunk。
-//
-// 两个结构字段与 JSON tag 完全一致，所以只需逐字段搬运；
-// 用独立 goroutine 转发是为了让上游 API 层的读出逻辑（c.Stream）保持原样，
-// 前端 SSE 协议一个字节都不用改。
-func adaptStream(src <-chan agentcore.StreamChunk) chan agent.StreamChunk {
-	dst := make(chan agent.StreamChunk, 10)
-	go func() {
-		defer close(dst)
-		for c := range src {
-			out := agent.StreamChunk{
-				Type:        c.Type,
-				Content:     c.Content,
-				ToolCallID:  c.ToolCallID,
-				ToolName:    c.ToolName,
-				Command:     c.Command,
-				Message:     c.Message,
-				Error:       c.Error,
-				Success:     c.Success,
-				Cached:      c.Cached,
-				Phase:       c.Phase,
-				TokensSaved: c.TokensSaved,
-				StepNumber:  c.StepNumber,
-				MaxSteps:    c.MaxSteps,
-			}
-			if c.Usage != nil {
-				out.Usage = &agent.StreamUsage{
-					Tokens:        c.Usage.Tokens,
-					Threshold:     c.Usage.Threshold,
-					ContextWindow: c.Usage.ContextWindow,
-					Percent:       c.Usage.Percent,
-					Compactions:   c.Usage.Compactions,
-				}
-			}
-			dst <- out
+// toAgentChunk 把 agentcore 的 StreamChunk 转成 agent.StreamChunk。
+// 两者字段与 JSON tag 完全一致，因此只需逐字段搬运，SSE 协议一个字节都不用改。
+func toAgentChunk(c agentcore.StreamChunk) agent.StreamChunk {
+	out := agent.StreamChunk{
+		Type:        c.Type,
+		Content:     c.Content,
+		ToolCallID:  c.ToolCallID,
+		ToolName:    c.ToolName,
+		Command:     c.Command,
+		Message:     c.Message,
+		Error:       c.Error,
+		Success:     c.Success,
+		Cached:      c.Cached,
+		Phase:       c.Phase,
+		TokensSaved: c.TokensSaved,
+		StepNumber:  c.StepNumber,
+		MaxSteps:    c.MaxSteps,
+	}
+	if c.Usage != nil {
+		out.Usage = &agent.StreamUsage{
+			Tokens:        c.Usage.Tokens,
+			Threshold:     c.Usage.Threshold,
+			ContextWindow: c.Usage.ContextWindow,
+			Percent:       c.Usage.Percent,
+			Compactions:   c.Usage.Compactions,
 		}
+	}
+	return out
+}
+
+// forwardChunks 同步地把 agentcore 流转换并转发到 SSE 流，直到 src 关闭。
+//
+// 必须是同步函数（而非自己起 goroutine），这样调用方能用 done channel 精确知道
+// 转发何时结束，从而保证「先等转发退出，再 close(dst)」的顺序 —— 顺序反了就是
+// "send on closed channel" panic 的根源。
+//
+// ctx 取消后不再发送，但仍继续排空 src，避免上游生产者在写 acStream 时永久阻塞。
+func forwardChunks(ctx context.Context, src <-chan agentcore.StreamChunk, dst chan<- agent.StreamChunk) {
+	defer func() { _ = recover() }()
+
+	alive := true
+	for c := range src {
+		if !alive {
+			continue // 只排空，不再发送
+		}
+		if !sendChunk(ctx, dst, toAgentChunk(c)) {
+			alive = false
+		}
+	}
+}
+
+// runAndForward 启动转发 goroutine，调用 run 生产数据，然后安全收尾：
+// 关闭 acStream、等待转发退出、才允许调用方 close(dst)。
+//
+// waitTimeout 是兜底：客户端异常消失且 ctx 未及时取消时，不让关闭流程无限卡住。
+// 因为 sendChunk 已能吞掉"向已关闭通道发送"的 panic，超时后关流是安全的。
+func runAndForward(
+	ctx context.Context,
+	run func(acStream chan agentcore.StreamChunk) error,
+	dst chan agent.StreamChunk,
+) {
+	acStream := make(chan agentcore.StreamChunk, 10)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		forwardChunks(ctx, acStream, dst)
 	}()
-	return dst
+
+	_ = run(acStream)
+	close(acStream)
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		// 转发 goroutine 未能及时退出，记录后继续收尾（sendChunk 有 recover 保护）
+		if global.LOG != nil {
+			global.LOG.Warn("[Agent] 流转发未在 3 秒内退出，强制继续关闭")
+		}
+	}
 }
 
 func NewAgentAPI() *AgentAPI {
@@ -446,18 +499,14 @@ func (a *AgentAPI) Chat(c *gin.Context) {
 			sendChunk(ctx, stream, agent.StreamChunk{Type: "error", Error: "创建 Agent 失败: " + err.Error()})
 			return
 		}
-		acStream := make(chan agentcore.StreamChunk, 10)
-		go func() {
-			for c := range adaptStream(acStream) {
-				sendChunk(ctx, stream, c)
+		// runAndForward 内部保证：等转发 goroutine 退出后本函数才返回，
+		// 从而让外层 defer 的 close(stream) 一定发生在最后一次发送之后。
+		runAndForward(ctx, func(acStream chan agentcore.StreamChunk) error {
+			if req.Regenerate {
+				return engine.RunRegenerate(ctx, req.SessionID, acStream)
 			}
-		}()
-		if req.Regenerate {
-			_ = engine.RunRegenerate(ctx, req.SessionID, acStream)
-		} else {
-			_ = engine.Run(ctx, req.SessionID, req.Message, acStream)
-		}
-		close(acStream)
+			return engine.Run(ctx, req.SessionID, req.Message, acStream)
+		}, stream)
 	}()
 
 	c.Stream(func(w io.Writer) bool {
@@ -545,14 +594,9 @@ func (a *AgentAPI) Confirm(c *gin.Context) {
 			sendChunk(ctx, stream, agent.StreamChunk{Type: "error", Error: "创建 Agent 失败: " + err.Error()})
 			return
 		}
-		acStream := make(chan agentcore.StreamChunk, 10)
-		go func() {
-			for c := range adaptStream(acStream) {
-				sendChunk(ctx, stream, c)
-			}
-		}()
-		_ = engine.RunWithConfirm(ctx, req.SessionID, req.ToolCallID, req.Confirmed, acStream)
-		close(acStream)
+		runAndForward(ctx, func(acStream chan agentcore.StreamChunk) error {
+			return engine.RunWithConfirm(ctx, req.SessionID, req.ToolCallID, req.Confirmed, acStream)
+		}, stream)
 	}()
 
 	c.Stream(func(w io.Writer) bool {
