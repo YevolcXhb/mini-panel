@@ -1,6 +1,1 @@
-{
-  "version": "7.2.9",
-  "url": "https://github.com/YevolcXhb/mini-panel/releases/latest",
-  "release_notes": "Mini Panel v7.2.9",
-  "install_sha256": "dd0bf61f25f6ddddf7b2ab1c5d8948a8dcfc102e0a9ee5cb46749d61b9162efa"
-}
+﻿{"version":"7.3.0","url":"https://github.com/YevolcXhb/mini-panel/releases/latest","release_notes":"Mini Panel v7.3.0 - MiniAgent pure agent core refactor, mid-run interjection, million-token context window","install_sha256":"d618162077b923c01046bbc61d20e84ab30a234ccf77ce3836450835275dbd36"}
