@@ -88,6 +88,11 @@ func (s *MonitorService) Cleanup(days int) error {
 		return psutil.GetBatteryInfo(), nil
 	}
 
+	// GetThermal 获取温度传感器列表（/sys/class/thermal/thermal_zoneN）
+	func (s *MonitorService) GetThermal() []psutil.ThermalZone {
+		return psutil.GetThermalZones()
+	}
+
 	// RealtimeMetrics 实时指标
 	type RealtimeMetrics struct {
 		CPUPercent   float64 `json:"cpu_percent"`

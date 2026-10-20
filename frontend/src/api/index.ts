@@ -167,8 +167,7 @@ export const settingApi = {
   update: (data: any) => api.put('/settings', data),
   reset: () => api.post('/settings/reset'),
   clearData: () => api.post('/settings/clear-data'),
-  updateProxy: (config: any) => api.put('/settings/proxy', config)
-}
+  updateProxy: (config: any) => api.put('/settings/proxy', config)}
 
 export const logApi = {
   list: (levels?: string[], lines?: number) => api.get('/logs', {
@@ -188,10 +187,11 @@ export const updateApi = {
 }
 
 export const monitorApi = {
-	  history: (limit?: number) => api.get('/monitor/history', { params: { limit } }),
-	  realtime: () => api.get('/monitor/realtime'),
-	  battery: () => api.get('/monitor/battery')
-	}
+  history: (limit?: number) => api.get('/monitor/history', { params: { limit } }),
+  realtime: () => api.get('/monitor/realtime'),
+  battery: () => api.get('/monitor/battery'),
+  thermal: () => api.get('/monitor/thermal')
+}
 
 export const websiteApi = {
   list: () => api.get('/websites'),

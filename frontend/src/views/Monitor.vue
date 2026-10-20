@@ -41,6 +41,16 @@
 	        </template>
 	        <div v-else class="battery-na">未检测到电池</div>
 	      </div>
+	      <div class="info-card gauge-card battery-card thermal-card">
+	        <div class="info-label">🌡 温度传感器</div>
+	        <template v-if="thermal.length">
+	          <div v-for="z in thermal" :key="z.index + z.type" class="thermal-row">
+	            <span class="thermal-type" :title="z.type">{{ z.type || ('zone' + z.index) }}</span>
+	            <span class="thermal-temp" :style="{ color: tempColor(z.temp_c) }">{{ z.temp_c.toFixed(1) }} ℃</span>
+	          </div>
+	        </template>
+	        <div v-else class="battery-na">未检测到温度传感器</div>
+	      </div>
 	    </div>
 
 	    <div style="margin-bottom:16px;display:flex;gap:8px;align-items:center">
@@ -106,6 +116,7 @@ const timeRange = ref(1440)
 	const netInfo = ref<any[]>([])
 	const realtimeMetrics = ref<any>(null)
 	const battery = ref<any>(null)
+	const thermal = ref<any[]>([])
 	let timer: any
 	let realtimeTimer: any
 
@@ -116,10 +127,23 @@ const timeRange = ref(1440)
 	  return c > 50 ? '#00d26a' : c > 20 ? '#ffa726' : '#f28b82'
 	})
 
+	function tempColor(t: number) {
+	  if (t >= 70) return '#f28b82'
+	  if (t >= 50) return '#ffa726'
+	  return '#81c995'
+	}
+
 	async function loadBattery() {
 	  try {
 	    const res: any = await monitorApi.battery()
 	    battery.value = res.data
+	  } catch (e) {}
+	}
+
+	async function loadThermal() {
+	  try {
+	    const res: any = await monitorApi.thermal()
+	    thermal.value = res.data || []
 	  } catch (e) {}
 	}
 
@@ -226,7 +250,8 @@ async function loadNetInfo() {
 	  loadNetInfo()
 	  loadRealtime()
 	  loadBattery()
-	  timer = setInterval(() => { loadData(); loadNetInfo(); loadBattery() }, 60000)
+	  loadThermal()
+	  timer = setInterval(() => { loadData(); loadNetInfo(); loadBattery(); loadThermal() }, 60000)
 	  realtimeTimer = setInterval(loadRealtime, 5000)
 	})
 
@@ -266,6 +291,9 @@ async function loadNetInfo() {
 	.battery-row span { white-space: nowrap; }
 	.battery-bar { margin-top: 10px; }
 	.battery-na { color: #888; font-size: 13px; padding: 24px 0; }
+	.thermal-row { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; font-size: 13px; gap: 8px; }
+	.thermal-type { color: #9aa0a6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; font-family: 'SF Mono', Consolas, monospace; }
+	.thermal-temp { font-weight: 600; white-space: nowrap; }
 	.gauge-chart {
 	  width: 100%;
 	  height: 180px;

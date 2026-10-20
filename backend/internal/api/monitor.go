@@ -44,3 +44,8 @@ func (a *MonitorAPI) List(c *gin.Context) {
 		}
 		c.JSON(http.StatusOK, dto.Response{Code: 200, Data: b})
 	}
+
+	// GetThermal 温度传感器列表（含 CPU 温度）
+	func (a *MonitorAPI) GetThermal(c *gin.Context) {
+		c.JSON(http.StatusOK, dto.Response{Code: 200, Data: a.service.GetThermal()})
+	}

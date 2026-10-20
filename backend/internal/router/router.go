@@ -142,6 +142,7 @@ func NewRouter() *gin.Engine {
 		monitorGroup.GET("/history", monitor.List)
 		monitorGroup.GET("/realtime", monitor.GetRealtime)
 		monitorGroup.GET("/battery", monitor.GetBattery)
+		monitorGroup.GET("/thermal", monitor.GetThermal)
 
 		apiV1.POST("/auth/change-password", auth.ChangePassword)
 
