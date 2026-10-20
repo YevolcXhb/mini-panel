@@ -1,6 +1,6 @@
 {
-  "version": "7.3.0",
+  "version": "7.3.1",
   "url": "https://github.com/YevolcXhb/mini-panel/releases/latest",
-  "release_notes": "Mini Panel v7.3.0",
-  "install_sha256": "dd0bf61f25f6ddddf7b2ab1c5d8948a8dcfc102e0a9ee5cb46749d61b9162efa"
+  "release_notes": "Mini Panel v7.3.1 - fix: process list CPU sampling caused 98% redundant disk reads and 2.5 core burn",
+  "install_sha256": "0822582befff8e0a3380307a74780c2637e13b81a340478fffe331ace94de945"
 }
