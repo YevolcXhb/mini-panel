@@ -1,6 +1,6 @@
 {
-  "version": "7.2.0",
+  "version": "7.2.1",
   "url": "https://github.com/YevolcXhb/mini-panel/releases/latest",
-  "release_notes": "Mini Panel v7.2.0",
+  "release_notes": "Mini Panel v7.2.1：修复温度传感器 -127 无效占位干扰、CPU 温度按 type 定位、功耗 V×I 兜底，新增硬件读取诊断端点",
   "install_sha256": "dd0bf61f25f6ddddf7b2ab1c5d8948a8dcfc102e0a9ee5cb46749d61b9162efa"
 }
