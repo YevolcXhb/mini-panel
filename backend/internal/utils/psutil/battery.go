@@ -135,14 +135,22 @@ func GetBatteryInfo() *BatteryInfo {
 
 		// 功耗三级取值：驱动功率节点 → V×I → mAh 变化率估算。
 		// 先试 power_now / power_avg 这类驱动直接暴露的功率属性。
+		//
+		// 注意符号：内核各驱动对 power_now 的正负约定并不统一，有的放电为负、
+		// 充电为正，有的恒为正。这里只取绝对值用于展示，不因符号丢弃读数
+		// （旧实现写 p > 0，遇到"放电为负"的驱动会整条链路失效）。
+		//
+		// 单位由同目录 voltage_now 的刻度推断：µV 量级说明驱动用内核标准
+		// 微单位，则 power_now 按 µW 解析；否则按 mV/mW 降级口径解析。
 		info.PowerSource = PowerSourceNone
-		if p, ok := readBatteryFloat(dir, "power_now"); ok && p > 0 {
-			info.PowerW = normalizePowerMicro(p) // 规范为 µW
+		microUnit := powerUnitIsMicro(dir)
+		if p, ok := readBatteryFloat(dir, "power_now"); ok && p != 0 {
+			info.PowerW = normalizePowerWithHint(p, microUnit)
 			info.PowerSource = PowerSourceDriver
 		}
 		if info.PowerSource == PowerSourceNone {
-			if p, ok := readBatteryFloat(dir, "power_avg"); ok && p > 0 {
-				info.PowerW = normalizePowerMicro(p)
+			if p, ok := readBatteryFloat(dir, "power_avg"); ok && p != 0 {
+				info.PowerW = normalizePowerWithHint(p, microUnit)
 				info.PowerSource = PowerSourceDriver
 			}
 		}
@@ -311,12 +319,14 @@ func normalizeCharge(v float64) float64 {
 	return v // mAh
 }
 
-// normalizePowerMicro 把 power_now/power_avg 归一化为瓦特。
-// 内核规范是 µW，但部分厂商驱动直接给 mW（量级差异 1000 倍）：
-// 手机整机功耗在 0.1~20W 之间，>100000 视为 µW，其余按 mW。
-func normalizePowerMicro(v float64) float64 {
-	if v > 100000 {
-		return v / 1e6 // µW
+// powerUnitIsMicro 判断 power_supply 驱动属性是否使用内核标准微单位。
+//
+// 依据同目录 voltage_now 的量级：内核规范是 µV（手机电池约 4.2e6），
+// 厂商驱动常整体降级为 mV（约 4200）。据此决定 power_now 按 µW 还是 mW 解析，
+// 避免「数值落在两种解释都合理」的区间时判错。读不到电压时按内核标准处理。
+func powerUnitIsMicro(dir string) bool {
+	if v, ok := readBatteryFloat(dir, "voltage_now"); ok && v > 0 {
+		return v > 100000
 	}
-	return v / 1e3 // mW
+	return true
 }

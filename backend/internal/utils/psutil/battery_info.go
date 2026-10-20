@@ -1,5 +1,7 @@
 package psutil
 
+import "math"
+
 // BatteryInfo 电池硬件信息（Android power_supply class）。
 //
 // PowerW 的含义要分清「读到的」和「算出来的」两层：
@@ -39,4 +41,37 @@ const (
 type estimateChargeTracker struct {
 	lastChargeMAh float64
 	lastAt        int64 // Unix 秒
+}
+
+// normalizePowerWithHint 把 power_now/power_avg 归一化为瓦特（恒为正）。
+//
+// 单位歧义无法只靠数值大小解决：12000 既可能是 12000 µW（0.012W），
+// 也可能是 12000 mW（12W），两种都在手机功耗的可能范围内。所以由调用方
+// 根据同目录的属性单位给出提示 microUnit：
+//   - 内核 power_supply 规范：voltage_now 用 µV（手机电池约 4.2e6）、
+//     current_now 用 µA、power_now 用 µW
+//   - 部分厂商驱动整体降级成 mV / mA / mW（voltage_now 约 4200）
+//
+// 提示判断不了时（如电压读不到），按内核标准 µW 处理。
+// primary 超出合理区间时用另一种解释兜底，避免个别驱动的怪值直接漏出去。
+func normalizePowerWithHint(v float64, microUnit bool) float64 {
+	a := math.Abs(v)
+	if a == 0 {
+		return 0
+	}
+
+	primary, secondary := a/1e6, a/1e3 // µW 解释 / mW 解释
+	if !microUnit {
+		primary, secondary = secondary, primary
+	}
+
+	// 手机整机功耗大致在 1mW ~ 60W
+	const lo, hi = 0.001, 60.0
+	if primary >= lo && primary <= hi {
+		return primary
+	}
+	if secondary >= lo && secondary <= hi {
+		return secondary
+	}
+	return primary
 }
