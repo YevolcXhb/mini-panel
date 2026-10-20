@@ -16,8 +16,9 @@ type BatteryInfo struct {
 	Status        string  `json:"status"`          // Charging / Discharging / Not charging / Full
 	VoltageV      float64 `json:"voltage_v"`       // 电压（V）
 	CurrentMA     float64 `json:"current_ma"`      // 电流（mA，符号表示充放电方向）
-	PowerW        float64 `json:"power_w"`         // 功率（W），0 表示当前读不到
+	PowerW        float64 `json:"power_w"`         // 功率（W，恒为正），0 表示当前读不到
 	PowerSource   string  `json:"power_source"`    // driver / vi / estimate / none
+	PowerSign     string  `json:"power_sign"`      // charge / discharge / unknown：功率方向
 	Charging      bool    `json:"charging"`        // 是否接入外部电源（usb/charger/ac online）
 	TempC         float64 `json:"temp_c"`          // 温度（℃）
 	Health        string  `json:"health"`          // Good / Overheat / Dead ...
@@ -33,6 +34,16 @@ const (
 	PowerSourceVI       = "vi"       // 电压 × 电流计算
 	PowerSourceEstimate = "estimate" // mAh 变化率估算
 	PowerSourceNone     = "none"     // 读不到（满电静置 / 无电流采样）
+)
+
+// 功率方向常量。
+//
+// 各驱动对 power_now 的正负约定并不统一，所以这里不假设固定语义，
+// 而是由读数符号推断：负=电池放电，正=充电/外部输入，无法判定时 unknown。
+const (
+	PowerSignCharge    = "charge"
+	PowerSignDischarge = "discharge"
+	PowerSignUnknown   = "unknown"
 )
 
 // estimateChargeTracker 保存上一次的电荷读数，用于估算功耗。

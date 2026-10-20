@@ -32,8 +32,10 @@
 	            <span>{{ battery.status || '-' }}</span>
 	            <span class="power-cell" :title="powerHint">
 	              <template v-if="battery.power_source !== 'none' && battery.power_w > 0">
+	                <span v-if="battery.power_sign === 'discharge'" class="power-arrow" title="放电">↓</span>
+	                <span v-else-if="battery.power_sign === 'charge'" class="power-arrow charge" title="充电">↑</span>
 	                {{ battery.power_w.toFixed(2) }} W
-	                <span class="power-tag">{{ powerTag }}</span>
+	                <span class="power-tag" :class="battery.power_sign">{{ powerTag }}</span>
 	              </template>
 	              <template v-else>— W</template>
 	            </span>
@@ -158,7 +160,7 @@ const timeRange = ref(1440)
 	// 功耗来源标签：驱动直读 / V×I 计算 / 电量变化率估算
 	const powerTag = computed(() => {
 	  const s = battery.value?.power_source
-	  if (s === 'driver') return ''
+	  if (s === 'driver') return '驱动'
 	  if (s === 'vi') return 'V×I'
 	  if (s === 'estimate') return '估算'
 	  return ''
@@ -381,6 +383,11 @@ async function loadNetInfo() {
 	  background: rgba(79, 140, 255, 0.15); color: #7aa7ff;
 	  font-weight: 500; line-height: 15px;
 	}
+	/* 方向标识：放电向下（橙）、充电向上（绿），避免只看数字分不清充放电 */
+	.power-arrow { font-size: 12px; font-weight: 700; color: #ffa726; }
+	.power-arrow.charge { color: #81c995; }
+	.power-tag.discharge { background: rgba(255, 167, 38, 0.15); color: #ffa726; }
+	.power-tag.charge { background: rgba(129, 201, 149, 0.15); color: #81c995; }
 	.power-note {
 	  margin-top: 8px; font-size: 11px; color: #6b7280;
 	  line-height: 1.4; text-align: left;
