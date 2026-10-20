@@ -2,5 +2,5 @@
   "version": "7.2.6",
   "url": "https://github.com/YevolcXhb/mini-panel/releases/latest",
   "release_notes": "Mini Panel v7.2.6：修复电池功耗读数——区分「读不到」与「真为 0」，满电静置时如实显示原因而非 0.00 W；新增 power_source/charging 字段与电流噪声门限；移动端监控页网络接口卡片化、温度与电池卡片自适应",
-  "install_sha256": "placeholder"
+  "install_sha256": "8b570bbd95fd69f05b77015dde69fd87cfa4c2c0ff12db2316e027bf9615d5e1"
 }
