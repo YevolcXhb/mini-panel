@@ -1,6 +1,6 @@
 {
   "version": "7.5.2",
   "url": "https://github.com/YevolcXhb/mini-panel/releases/latest",
-  "release_notes": "Mini Panel v7.5.2 - firewall fixes: rules now append to chain tail (NLM_F_APPEND), CIDR broadcast address computed correctly, masquerade uses the masq expression, insert position resolves to a real handle; lockdown no longer drops its own management traffic",
+  "release_notes": "Mini Panel v7.5.2",
   "install_sha256": "dd0bf61f25f6ddddf7b2ab1c5d8948a8dcfc102e0a9ee5cb46749d61b9162efa"
 }
