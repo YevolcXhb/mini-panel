@@ -405,7 +405,17 @@ func (s *FirewallService) ClearDeletedRules() (int64, error) {
 func (s *FirewallService) getAvailableBackends() []string {
 	var backends []string
 
-	// 最高优先级：Android chroot 环境下的原生 iptables（legacy 后端）
+	// 最高优先级：直接走 netlink 操作内核 nf_tables。
+	//
+	// 这条路径不依赖任何用户态程序（nft 命令行、iptables 都不需要），
+	// 在 Android 这类精简系统上是唯一能用的方案：内核有 CONFIG_NF_TABLES，
+	// 但没有 nft 可执行文件，iptables 也只有 legacy 后端。
+	if runtime.GOOS == "linux" && nftAvailable() {
+		backends = append(backends, "nft-netlink")
+		global.LOG.Infof("[Firewall] 内核对 nf_tables 可用（netlink 直连）")
+	}
+
+	// Android chroot 环境下的原生 iptables（legacy 后端）
 	// Ubuntu 的 iptables（nft 后端）与 Android 内核 netfilter ABI 不兼容，
 	// 必须通过 /proc/1/root/ 逃逸调用 Android 原生 iptables
 	if isAndroidEnv() {
@@ -486,6 +496,40 @@ func (s *FirewallService) GetStatus() (map[string]interface{}, error) {
 	}
 
 	switch backend {
+	case "nft-netlink":
+		// 直接读内核：能拿到面板表就说明规则集已建立，等价于「运行中」
+		c, err := nftHandle()
+		if err != nil {
+			result["kernel_warning"] = fmt.Sprintf("连接 nf_tables 失败: %v", err)
+			break
+		}
+		hasFilter, _ := c.HasTable(filterTable())
+		hasNAT, _ := c.HasTable(natTable())
+		result["running"] = hasFilter || hasNAT
+		result["version"] = "nf_tables (netlink 直连)"
+		result["panel_owned"] = hasFilter || hasNAT
+		result["no_userspace_needed"] = true
+
+		// 面板规则条数与内核实际条数对照，用于发现「库里有、内核没有」的漂移
+		enabled := 0
+		if rules, err := s.repo.List(); err == nil {
+			for _, r := range rules {
+				if r.Enabled {
+					enabled++
+				}
+			}
+		}
+		result["rule_count_db"] = enabled
+		kernelRules := 0
+		for _, ch := range []string{nftChainInput, nftChainOutput, nftChainForward} {
+			if rs, err := c.ListRules(filterTable(), ch); err == nil {
+				kernelRules += len(rs)
+			}
+		}
+		result["rule_count_kernel"] = kernelRules
+		if hasFilter && kernelRules < enabled {
+			result["kernel_warning"] = "内核规则数少于面板启用数，建议重新应用一次规则集"
+		}
 	case "firewalld":
 		out, err := exec.Command("firewall-cmd", "--state").CombinedOutput()
 		if err == nil && strings.TrimSpace(string(out)) == "running" {
@@ -766,6 +810,14 @@ func (s *FirewallService) Start() error {
 		global.LOG.Infof("[Firewall] trying to start with backend: %s", backend)
 		var err error
 		switch backend {
+		case "nft-netlink":
+			// 建骨架 + 应用面板规则，一步到位；失败直接换下一个后端
+			if ensureErr := nftEnsureBase(); ensureErr != nil {
+				global.LOG.Warnf("[Firewall] nft 建骨架失败: %v", ensureErr)
+				err = ensureErr
+			} else {
+				_, err = s.ApplyRulesForBackend(backend)
+			}
 		case "firewalld":
 			if out, startErr := exec.Command("systemctl", "start", "firewalld").CombinedOutput(); startErr != nil {
 				if out2, err2 := exec.Command("service", "firewalld", "start").CombinedOutput(); err2 != nil {
@@ -829,6 +881,13 @@ func (s *FirewallService) Start() error {
 
 func (s *FirewallService) checkBackendRunning(backend string) bool {
 	switch backend {
+	case "nft-netlink":
+		c, err := nftHandle()
+		if err != nil {
+			return false
+		}
+		ok, _ := c.HasTable(filterTable())
+		return ok
 	case "firewalld":
 		out, err := exec.Command("firewall-cmd", "--state").CombinedOutput()
 		return err == nil && strings.TrimSpace(string(out)) == "running"
@@ -849,6 +908,10 @@ func (s *FirewallService) Stop() error {
 	backends := s.getAvailableBackends()
 	for _, backend := range backends {
 		switch backend {
+		case "nft-netlink":
+			if err := nftFlush(); err != nil {
+				global.LOG.Warnf("[Firewall] nft 清空失败: %v", err)
+			}
 		case "firewalld":
 			exec.Command("systemctl", "stop", "firewalld").Run()
 			exec.Command("service", "firewalld", "stop").Run()
@@ -876,6 +939,11 @@ func (s *FirewallService) Stop() error {
 
 func (s *FirewallService) flushRulesForBackend(backend string) error {
 	switch backend {
+	case "nft-netlink":
+		if err := nftFlush(); err != nil {
+			return err
+		}
+		return nftEnsureBase()
 	case "firewalld":
 		exec.Command("firewall-cmd", "--reload").Run()
 	case "ufw":
@@ -947,6 +1015,13 @@ func (s *FirewallService) ApplyRulesForBackend(backend string) (string, error) {
 	rules, err := s.repo.List()
 	if err != nil {
 		return "", err
+	}
+
+	// nft-netlink 走完全不同的路径：不刷系统规则集，不调任何子进程，
+	// 只把面板自己的两张表整体重建。整个过程在单个 netlink 事务里完成。
+	if backend == "nft-netlink" {
+		lines, err := nftApplyRules(rules)
+		return strings.Join(lines, "\n"), err
 	}
 
 	var output []string
@@ -1580,8 +1655,37 @@ func liveRuleArgs(chain, table string) []string {
 // table: 空=filter, "nat"=nat 表（用于查看 DNAT 端口转发规则）
 func (s *FirewallService) LiveRules(chain, family, table string) (string, error) {
 	backend := s.getFirewallBackend()
+	if backend == "nft-netlink" {
+		view, err := nftListSystem(table, chain)
+		if err != nil {
+			return "", err
+		}
+		var sb strings.Builder
+		for _, t := range view.Tables {
+			sb.WriteString(fmt.Sprintf("table ip %s%s\n", t.Name, panelTag(t.PanelOwned)))
+			for _, ch := range t.Chains {
+				if ch.HasHook {
+					sb.WriteString(fmt.Sprintf("  chain %s { type %s hook %s priority %d; policy %s;\n", ch.Name, ch.Type, ch.Hook, ch.Priority, ch.Policy))
+				} else {
+					sb.WriteString(fmt.Sprintf("  chain %s {\n", ch.Name))
+				}
+				for _, r := range ch.Rules {
+					line := fmt.Sprintf("    #%d %s", r.Handle, r.Text)
+					if r.HasCount {
+						line += fmt.Sprintf("   [%d packets, %d bytes]", r.Packets, r.Bytes)
+					}
+					sb.WriteString(line + "\n")
+				}
+				sb.WriteString("  }\n")
+			}
+		}
+		if sb.Len() == 0 {
+			return "(内核里没有任何 ip 表)", nil
+		}
+		return sb.String(), nil
+	}
 	if backend != "android-iptables" && backend != "iptables" {
-		return "", fmt.Errorf("当前后端 %s 不支持实时规则查看，仅 iptables 后端支持", backend)
+		return "", fmt.Errorf("当前后端 %s 不支持实时规则查看", backend)
 	}
 
 	args := liveRuleArgs(chain, table)
@@ -1613,13 +1717,39 @@ func (s *FirewallService) LiveRules(chain, family, table string) (string, error)
 	return sb.String(), nil
 }
 
-// InsertRule 插入规则到指定位置（-I）
-// chain: INPUT / OUTPUT / FORWARD
+// InsertRule 插入规则到指定位置（-I）// chain: INPUT / OUTPUT / FORWARD（nft 后端为 input/output/forward/prerouting/postrouting）
 // position: 插入位置，1=最前面
-// spec: 完整的 iptables 规则参数，如 ["-p","tcp","--dport","80","-j","ACCEPT"]
-// family: "6"/"ipv6" 使用 ip6tables，其余默认 iptables
-func (s *FirewallService) InsertRule(chain string, position int, spec []string, family string) error {
+// spec: 规则片段。iptables 后端是完整参数（["-p","tcp","--dport","80","-j","ACCEPT"]）；
+// nft 后端是自然顺序（["tcp","dport","80","accept"]）
+// family: "6"/"ipv6" 使用 ip6tables，其余默认 iptables；nft 后端忽略
+// table: 仅在 nft 后端有效，"nat" 或空（filter）
+func (s *FirewallService) InsertRule(chain string, position int, spec []string, family, table string) error {
 	backend := s.getFirewallBackend()
+	if backend == "nft-netlink" {
+		if chain == "" {
+			chain = nftChainInput
+		}
+		if position < 1 {
+			position = 1
+		}
+		action := "accept"
+		if n := len(spec); n > 0 {
+			last := strings.ToLower(strings.TrimSpace(spec[n-1]))
+			if last == "accept" || last == "drop" || last == "reject" {
+				action = last
+				spec = spec[:n-1]
+			}
+		}
+		tbl := filterTable()
+		if table == "nat" {
+			tbl = natTable()
+		}
+		if err := nftInsertRule(tbl.Name, chain, uint64(position), spec, action); err != nil {
+			return err
+		}
+		global.LOG.Infof("[Firewall] nft 插入规则: %s/%s 位置 %d %v → %s", tbl.Name, chain, position, spec, action)
+		return nil
+	}
 	if backend != "android-iptables" && backend != "iptables" {
 		return fmt.Errorf("当前后端 %s 不支持插入规则", backend)
 	}
@@ -1658,12 +1788,28 @@ func (s *FirewallService) InsertRule(chain string, position int, spec []string, 
 	return nil
 }
 
-// DeleteLiveRule 按行号删除系统 iptables/ip6tables 规则（-D）
-// chain: INPUT / OUTPUT / FORWARD
-// num: 行号（从 LiveRules 的 --line-numbers 获取）
-// family: "6"/"ipv6" 操作 ip6tables，其余默认 iptables
-func (s *FirewallService) DeleteLiveRule(chain string, num int, family string) error {
+// DeleteLiveRule 删除系统规则
+// iptables 后端按行号删（-D chain num）；nft 后端按 handle 删（稳定标识，不受顺序变动影响）
+// chain: INPUT / OUTPUT / FORWARD（nft 为 input/output/forward/prerouting/postrouting）
+// num: iptables 行号；nft 后端为规则 handle
+// family: "6"/"ipv6" 操作 ip6tables，其余默认 iptables；nft 后端忽略
+// table: 仅在 nft 后端有效，"nat" 或空（filter）
+func (s *FirewallService) DeleteLiveRule(chain string, num int, family, table string) error {
 	backend := s.getFirewallBackend()
+	if backend == "nft-netlink" {
+		if chain == "" {
+			chain = nftChainInput
+		}
+		tbl := filterTable()
+		if table == "nat" {
+			tbl = natTable()
+		}
+		if err := nftDeleteRule(tbl.Name, chain, uint64(num)); err != nil {
+			return err
+		}
+		global.LOG.Infof("[Firewall] nft 删除规则: %s/%s handle=%d", tbl.Name, chain, num)
+		return nil
+	}
 	if backend != "android-iptables" && backend != "iptables" {
 		return fmt.Errorf("当前后端 %s 不支持删除规则", backend)
 	}
@@ -1696,6 +1842,12 @@ func (s *FirewallService) DeleteLiveRule(chain string, num int, family string) e
 // Lockdown 一键内网-only 模式：只允许内网+已建立连接+回环，拒绝外网（IPv4 + IPv6）
 func (s *FirewallService) Lockdown() (string, error) {
 	backend := s.getFirewallBackend()
+	if backend == "nft-netlink" {
+		if err := nftLockdown(); err != nil {
+			return "", err
+		}
+		return "✅ nft 内网模式已启用\n· 放行 ESTABLISHED/RELATED\n· 放行 lo 回环\n· 放行内网段 192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12\n· 其余入站全部 DROP", nil
+	}
 	if backend != "android-iptables" && backend != "iptables" {
 		return "", fmt.Errorf("当前后端 %s 不支持 Lockdown", backend)
 	}

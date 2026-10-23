@@ -15,16 +15,9 @@
       </template>
       <template #default>
         <div style="margin-top: 8px">
-          <pre v-if="serviceStatus.diagnosis" style="margin: 0; white-space: pre-wrap; color: #666; font-size: 13px; font-family: monospace">{{ serviceStatus.diagnosis }}</pre>
-          <p v-else style="margin: 0; color: #666; font-size: 13px">点击"一键诊断"获取详细原因</p>
+          <pre v-if="serviceStatus.diagnosis" class="diag-pre">{{ serviceStatus.diagnosis }}</pre>
+          <p v-else class="muted">点击"一键诊断"获取详细原因</p>
         </div>
-      </template>
-    </el-alert>
-
-    <el-alert v-else-if="serviceStatus.kernel_warning" type="warning" show-icon :closable="false" style="margin-bottom: 16px">
-      <template #title>内核模块警告</template>
-      <template #default>
-        <div style="margin-top: 8px; color: #666; font-size: 13px">{{ serviceStatus.kernel_warning }}</div>
       </template>
     </el-alert>
 
@@ -36,9 +29,9 @@
             <el-tag :type="serviceStatus.running ? 'success' : 'danger'" size="large">
               {{ serviceStatus.running ? '运行中' : '已停止' }}
             </el-tag>
-            <span>{{ firewallType }} {{ serviceStatus.version ? 'v' + serviceStatus.version : '' }}</span>
+            <span class="backend-name">{{ firewallType }}</span>
+            <el-tag v-if="isNft" type="success" size="small" effect="plain">内核直连 · 无需 nft 命令</el-tag>
             <el-tag v-if="serviceStatus.ipv6_supported" type="success" size="small">IPv6 已支持</el-tag>
-            <el-tag v-else type="info" size="small">IPv6 不可用</el-tag>
           </div>
           <div class="svc-bar-right">
             <el-button size="small" type="primary" @click="startFirewall" v-if="!serviceStatus.running" :loading="actionLoading">启动</el-button>
@@ -46,81 +39,90 @@
             <el-button size="small" @click="checkStatus">刷新</el-button>
           </div>
         </div>
+
+        <!-- nft 后端：库与内核的对照数据 -->
+        <div v-if="isNft" class="stat-row">
+          <div class="stat">
+            <span class="stat-label">面板规则（库）</span>
+            <span class="stat-value">{{ serviceStatus.rule_count_db ?? 0 }}</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">内核规则</span>
+            <span class="stat-value">{{ serviceStatus.rule_count_kernel ?? 0 }}</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">表归属</span>
+            <span class="stat-value small">{{ serviceStatus.panel_owned ? 'mp_filter / mp_nat' : '未建立' }}</span>
+          </div>
+        </div>
+
+        <div v-if="serviceStatus.kernel_warning" class="warn-line">
+          ⚠️ {{ serviceStatus.kernel_warning }}
+          <el-button size="small" type="primary" link @click="applyRules">立即重新应用</el-button>
+        </div>
       </el-card>
 
       <!-- 快捷操作栏 -->
       <el-card style="margin-bottom: 16px">
         <div class="quick-actions">
-          <el-button type="primary" @click="showLiveRules" :loading="liveLoading">📋 查看系统规则</el-button>
-          <el-button type="success" @click="quickOpenPort">🔓 快速开放端口</el-button>
-          <el-button type="danger" @click="quickBanIP">🚫 快速封禁IP</el-button>
-          <el-button type="warning" @click="insertDialogVisible = true">📌 插入规则</el-button>
-          <el-button type="info" @click="lockdown" :loading="lockdownLoading">🔒 一键内网模式</el-button>
-          <el-button type="danger" plain @click="resetAllRules" :loading="resetLoading">🗑️ 重置（清空所有规则）</el-button>
-          <el-button @click="applyRules" :loading="applying">✅ 应用面板规则</el-button>
+          <el-button type="primary" @click="openSystemRules">📋 查看内核规则</el-button>
+          <el-button type="success" @click="applyPanelRules">✅ 应用面板规则</el-button>
           <el-button type="primary" @click="openDialog()">➕ 添加面板规则</el-button>
+          <el-button type="warning" @click="openInsert">📌 插入内核规则</el-button>
+          <el-button type="info" @click="lockdown" :loading="lockdownLoading">🔒 一键内网模式</el-button>
+          <el-button type="danger" plain @click="resetAllRules" :loading="resetLoading">🗑️ 清空面板表</el-button>
         </div>
       </el-card>
 
-      <el-alert
-        v-if="serviceStatus.ipv6_supported"
-        type="success"
-        show-icon
-        :closable="false"
-        style="margin-bottom: 12px"
-      >
-        <template #title>端口规则会同时应用到 IPv4 (iptables) 和 IPv6 (ip6tables)；IP 规则按地址类型自动匹配对应协议族</template>
-      </el-alert>
-
       <!-- 面板规则表格 -->
-      <div class="table-wrap">
-        <el-table :data="rules" style="width: 100%" v-loading="loading">
-          <el-table-column prop="name" label="名称" min-width="120" />
-          <el-table-column prop="type" label="类型" width="80">
-            <template #default="{ row }">
-              <el-tag :type="row.type === 'port' ? 'primary' : row.type === 'dnat' ? 'success' : 'warning'">{{ row.type === 'port' ? '端口' : row.type === 'dnat' ? '转发' : 'IP' }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="action" label="动作" width="80">
-            <template #default="{ row }">
-              <el-tag :type="row.action === 'allow' ? 'success' : 'danger'">{{ row.action === 'allow' ? '允许' : '拒绝' }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="protocol" label="协议" width="80" />
-          <el-table-column prop="port" label="端口" width="100" />
-          <el-table-column prop="ip" label="IP" width="120" />
-          <el-table-column prop="target_port" label="目标端口" width="100">
-            <template #default="{ row }">
-              <span v-if="row.type === 'dnat'">{{ row.target_port }}</span>
-              <span v-else style="color: #c0c4cc">-</span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="direction" label="方向" width="80">
-            <template #default="{ row }">
-              {{ row.direction === 'in' ? '入站' : '出站' }}
-            </template>
-          </el-table-column>
-          <el-table-column prop="enabled" label="状态" width="80">
-            <template #default="{ row }">
-              <el-tag v-if="row.enabled" type="success">启用</el-tag>
-              <el-tag v-else type="info">停用</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" :width="isWide ? 180 : 140" :fixed="isWide ? 'right' : false">
-            <template #default="{ row }">
-              <div class="row-actions">
-                <el-button size="small" @click="openDialog(row)">编辑</el-button>
-                <el-button size="small" type="danger" @click="handleDelete(row.id)">删除</el-button>
-              </div>
-            </template>
-          </el-table-column>
-        </el-table>
-      </div>
+      <el-card>
+        <div class="section-bar">
+          <span class="section-title">面板规则</span>
+          <span class="muted">保存后需点「应用面板规则」才会写入内核</span>
+        </div>
+        <div class="table-wrap">
+          <el-table :data="rules" style="width: 100%" v-loading="loading">
+            <el-table-column prop="name" label="名称" min-width="130" />
+            <el-table-column prop="type" label="类型" width="90">
+              <template #default="{ row }">
+                <el-tag :type="row.type === 'port' ? 'primary' : row.type === 'dnat' ? 'success' : 'warning'" size="small">
+                  {{ row.type === 'port' ? '端口' : row.type === 'dnat' ? '转发' : 'IP' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="action" label="动作" width="80">
+              <template #default="{ row }">
+                <el-tag :type="row.action === 'allow' ? 'success' : 'danger'" size="small">{{ row.action === 'allow' ? '允许' : '拒绝' }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="protocol" label="协议" width="80" />
+            <el-table-column prop="port" label="端口" width="140" />
+            <el-table-column prop="ip" label="IP / 目标" min-width="140" />
+            <el-table-column prop="direction" label="方向" width="80">
+              <template #default="{ row }">{{ row.direction === 'in' ? '入站' : '出站' }}</template>
+            </el-table-column>
+            <el-table-column prop="enabled" label="状态" width="80">
+              <template #default="{ row }">
+                <el-tag v-if="row.enabled" type="success" size="small">启用</el-tag>
+                <el-tag v-else type="info" size="small">停用</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" :width="isWide ? 180 : 140" :fixed="isWide ? 'right' : false">
+              <template #default="{ row }">
+                <div class="row-actions">
+                  <el-button size="small" @click="openDialog(row)">编辑</el-button>
+                  <el-button size="small" type="danger" @click="handleDelete(row.id)">删除</el-button>
+                </div>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </el-card>
 
-      <!-- 回收站：已删除的面板规则 -->
+      <!-- 回收站 -->
       <el-card style="margin-top: 16px">
-        <div class="trash-bar">
-          <span style="font-weight: 600">🗑️ 已删除规则（可恢复）</span>
+        <div class="section-bar">
+          <span class="section-title">🗑️ 已删除规则（可恢复）</span>
           <div class="trash-actions">
             <el-button size="small" @click="loadDeletedRules" :loading="deletedLoading">刷新</el-button>
             <el-button size="small" type="primary" @click="restoreAllDeleted" :disabled="!deletedRules.length">全部恢复</el-button>
@@ -131,22 +133,15 @@
           <el-table :data="deletedRules" size="small" v-loading="deletedLoading" empty-text="没有已删除的规则">
             <el-table-column prop="name" label="名称" min-width="120" />
             <el-table-column prop="type" label="类型" width="80">
-              <template #default="{ row }">
-                <el-tag :type="row.type === 'port' ? 'primary' : row.type === 'dnat' ? 'success' : 'warning'" size="small">{{ row.type === 'port' ? '端口' : row.type === 'dnat' ? '转发' : 'IP' }}</el-tag>
-              </template>
+              <template #default="{ row }">{{ row.type === 'port' ? '端口' : row.type === 'dnat' ? '转发' : 'IP' }}</template>
             </el-table-column>
             <el-table-column prop="action" label="动作" width="80">
-              <template #default="{ row }">
-                <el-tag :type="row.action === 'allow' ? 'success' : 'danger'" size="small">{{ row.action === 'allow' ? '允许' : '拒绝' }}</el-tag>
-              </template>
+              <template #default="{ row }">{{ row.action === 'allow' ? '允许' : '拒绝' }}</template>
             </el-table-column>
             <el-table-column prop="protocol" label="协议" width="80" />
-            <el-table-column prop="port" label="端口" width="100" />
-            <el-table-column prop="ip" label="IP" width="120" />
-            <el-table-column prop="direction" label="方向" width="80">
-              <template #default="{ row }">{{ row.direction === 'in' ? '入站' : '出站' }}</template>
-            </el-table-column>
-            <el-table-column label="操作" :width="isWide ? 90 : 96" :fixed="isWide ? 'right' : false">
+            <el-table-column prop="port" label="端口" width="140" />
+            <el-table-column prop="ip" label="IP" min-width="120" />
+            <el-table-column label="操作" width="90" :fixed="isWide ? 'right' : false">
               <template #default="{ row }">
                 <div class="row-actions">
                   <el-button size="small" type="primary" @click="restoreRule(row.id)">恢复</el-button>
@@ -167,92 +162,68 @@
           <el-descriptions-item label="运行权限">
             <el-tag :type="diagnoseReport.is_root ? 'success' : 'danger'">{{ diagnoseReport.is_root ? 'root (有权限)' : '非 root (权限不足)' }}</el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="容器环境">
-            <el-tag :type="diagnoseReport.in_container ? 'warning' : 'success'">{{ diagnoseReport.in_container ? `在容器中 (${diagnoseReport.container_type || 'unknown'})` : '物理机/虚拟机' }}</el-tag>
-          </el-descriptions-item>
           <el-descriptions-item label="可用后端">{{ (diagnoseReport.available_backends || []).join(', ') || 'none' }}</el-descriptions-item>
-          <el-descriptions-item label="IPv6 支持">
-            <el-tag :type="diagnoseReport.ipv6_supported ? 'success' : 'danger'">{{ diagnoseReport.ipv6_supported ? '可用' : '不可用' }}</el-tag>
-            <span v-if="diagnoseReport.ipv6_error" style="margin-left: 8px; color: #f56c6c; font-size: 12px">{{ diagnoseReport.ipv6_error }}</span>
-          </el-descriptions-item>
-          <el-descriptions-item label="工具安装情况">
-            <div style="display: flex; gap: 8px; flex-wrap: wrap">
-              <el-tag v-for="(installed, tool) in (diagnoseReport.tools_installed || {})" :key="tool" :type="installed ? 'success' : 'info'">{{ tool }}: {{ installed ? '已装' : '未装' }}</el-tag>
-            </div>
-          </el-descriptions-item>
-          <el-descriptions-item label="内核模块">
-            <div v-if="diagnoseReport.kernel_modules" style="display: flex; gap: 8px; flex-wrap: wrap">
-              <el-tag v-for="(status, mod) in diagnoseReport.kernel_modules" :key="mod" :type="status === 'ok' ? 'success' : 'danger'">{{ mod }}: {{ status }}</el-tag>
-            </div>
-            <span v-else style="color: #c0c4cc">无</span>
-          </el-descriptions-item>
           <el-descriptions-item label="总结">
-            <span style="color: #f56c6c; font-weight: bold">{{ diagnoseReport.summary }}</span>
+            <span class="danger-text">{{ diagnoseReport.summary }}</span>
           </el-descriptions-item>
           <el-descriptions-item label="建议">
-            <pre style="margin: 0; white-space: pre-wrap; color: #666; font-size: 13px">{{ diagnoseReport.recommendation }}</pre>
+            <pre class="diag-pre">{{ diagnoseReport.recommendation }}</pre>
           </el-descriptions-item>
         </el-descriptions>
       </div>
       <div v-else style="text-align: center; padding: 20px">诊断中...</div>
     </el-dialog>
 
-    <!-- 面板规则添加/编辑弹窗 -->
-    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑规则' : '添加规则'" width="500px">
+    <!-- 面板规则弹窗 -->
+    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑规则' : '添加规则'" width="520px">
       <el-form :model="form" label-width="100px" ref="formRef" :rules="formRules">
         <el-form-item label="名称" prop="name">
           <el-input v-model="form.name" placeholder="如: 允许 SSH" />
         </el-form-item>
         <el-form-item label="类型" prop="type">
-          <el-select v-model="form.type" placeholder="选择类型" style="width: 100%">
+          <el-select v-model="form.type" style="width: 100%">
             <el-option label="端口规则" value="port" />
             <el-option label="IP 规则" value="ip" />
             <el-option label="DNAT 端口转发" value="dnat" />
           </el-select>
         </el-form-item>
         <el-form-item label="动作" prop="action">
-          <el-select v-model="form.action" placeholder="选择动作" style="width: 100%">
+          <el-select v-model="form.action" style="width: 100%">
             <el-option label="允许" value="allow" />
             <el-option label="拒绝" value="deny" />
           </el-select>
         </el-form-item>
-        <el-form-item label="协议" v-if="form.type === 'port' || form.type === 'dnat'">
-          <el-select v-model="form.protocol" placeholder="选择协议" style="width: 100%">
+        <el-form-item label="协议" v-if="form.type !== 'ip'">
+          <el-select v-model="form.protocol" style="width: 100%">
             <el-option label="TCP" value="tcp" />
             <el-option label="UDP" value="udp" />
             <el-option label="全部" value="all" />
           </el-select>
         </el-form-item>
-        <el-form-item label="端口" v-if="form.type === 'port' || form.type === 'dnat'">
-          <el-input v-model="form.port" :placeholder="form.type === 'dnat' ? '公网端口，如: 25565' : '如: 22, 80, 3306-3308'" />
+        <el-form-item label="端口" v-if="form.type !== 'ip'">
+          <el-input v-model="form.port" :placeholder="form.type === 'dnat' ? '对外端口，如: 25565' : '如: 22, 80, 3306-3308'" />
         </el-form-item>
-        <el-form-item label="IP 地址" v-if="form.type === 'ip' || form.type === 'dnat'">
+        <el-form-item label="IP / 网段" v-if="form.type !== 'port'">
           <el-input v-model="form.ip" :placeholder="form.type === 'dnat' ? '目标 IP，如: 192.168.3.50' : '如: 192.168.1.100 或 10.0.0.0/24'" />
         </el-form-item>
         <el-form-item label="目标端口" v-if="form.type === 'dnat'">
           <el-input v-model="form.target_port" placeholder="如: 25565" />
         </el-form-item>
-        <el-form-item label="转发链" v-if="form.type === 'dnat'">
-          <el-select v-model="form.chain" style="width: 100%">
-            <el-option label="PREROUTING (标准)" value="PREROUTING" />
-            <el-option label="oem_nat_pre (Android)" value="oem_nat_pre" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="回程NAT" v-if="form.type === 'dnat'">
+        <el-form-item label="回程 NAT" v-if="form.type === 'dnat'">
           <el-switch v-model="form.masq" />
-          <span style="margin-left: 8px; color: #909399; font-size: 12px">自动添加 MASQUERADE，外网访问通常需要开启</span>
+          <span class="hint">自动 masquerade，外网访问通常需要开启</span>
         </el-form-item>
         <el-form-item label="方向">
-          <el-select v-model="form.direction" placeholder="选择方向" style="width: 100%">
-            <el-option label="入站" value="in" />
-            <el-option label="出站" value="out" />
+          <el-select v-model="form.direction" style="width: 100%">
+            <el-option label="入站 (input / prerouting)" value="in" />
+            <el-option label="出站 (output)" value="out" />
           </el-select>
         </el-form-item>
         <el-form-item label="启用">
           <el-switch v-model="form.enabled" />
         </el-form-item>
         <el-form-item label="备注">
-          <el-input v-model="form.note" type="textarea" :rows="2" placeholder="备注信息" />
+          <el-input v-model="form.note" type="textarea" :rows="2" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -261,108 +232,107 @@
       </template>
     </el-dialog>
 
-    <!-- 系统实时规则弹窗 -->
-    <el-dialog v-model="liveDialogVisible" title="系统实时规则 (iptables -L)" width="850px" top="5vh">
-      <div style="margin-bottom: 12px; display: flex; gap: 8px; align-items: center">
-        <el-select v-model="liveChain" placeholder="选择链" style="width: 150px" @change="showLiveRules">
+    <!-- 内核规则查看 -->
+    <el-dialog v-model="sysDialogVisible" title="内核规则（nf_tables 实时读取）" width="900px" top="5vh">
+      <div class="sys-toolbar">
+        <el-select v-model="sysTable" size="small" style="width: 150px" @change="loadSystemRules">
+          <el-option label="全部表" value="" />
+          <el-option label="mp_filter" value="mp_filter" />
+          <el-option label="mp_nat" value="mp_nat" />
+        </el-select>
+        <el-select v-model="sysChain" size="small" style="width: 150px" @change="loadSystemRules">
           <el-option label="全部链" value="" />
-          <el-option label="INPUT (入站)" value="INPUT" />
-          <el-option label="OUTPUT (出站)" value="OUTPUT" />
-          <el-option label="FORWARD (转发)" value="FORWARD" />
+          <el-option v-for="c in chainOptions" :key="c" :label="c" :value="c" />
         </el-select>
-        <el-radio-group v-model="liveFamily" size="small" @change="showLiveRules">
-          <el-radio-button label="">全部</el-radio-button>
-          <el-radio-button label="4">IPv4</el-radio-button>
-          <el-radio-button label="6">IPv6</el-radio-button>
-        </el-radio-group>
-        <el-select v-model="liveTable" placeholder="选择表" style="width: 130px" @change="showLiveRules">
-          <el-option label="filter 表" value="" />
-          <el-option label="nat 表" value="nat" />
-        </el-select>
-        <el-button size="small" @click="showLiveRules" :loading="liveLoading">刷新</el-button>
-        <el-divider direction="vertical" />
-        <span style="color: #909399; font-size: 12px">删除行号</span>
-        <el-input-number v-model="liveDeleteNum" :min="1" :max="99999" size="small" style="width: 110px" />
-        <el-button size="small" type="danger" :loading="liveDeleting" @click="deleteLiveRule">删除该行</el-button>
-        <span style="color: #999; font-size: 12px; margin-left: auto">删除规则后行号会变化，建议从大到小删</span>
+        <el-button size="small" @click="loadSystemRules" :loading="sysLoading">刷新</el-button>
+        <span class="hint" style="margin-left: auto">按 handle 删除，不受顺序变化影响</span>
       </div>
-      <div style="background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; max-height: 500px; overflow: auto; font-family: 'Courier New', monospace; font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-all">{{ liveRulesText || '加载中...' }}</div>
+
+      <div v-loading="sysLoading" class="sys-body">
+        <div v-if="!sysView.tables.length" class="muted" style="padding: 24px; text-align: center">
+          内核里没有任何 ip 表
+        </div>
+        <div v-for="t in sysView.tables" :key="t.name" class="sys-table">
+          <div class="sys-table-head">
+            <span class="sys-table-name">table ip {{ t.name }}</span>
+            <el-tag v-if="t.panel_owned" type="success" size="small" effect="dark">面板</el-tag>
+            <el-tag v-else type="info" size="small">系统</el-tag>
+          </div>
+          <div v-for="c in t.chains" :key="c.name" class="sys-chain">
+            <div class="sys-chain-head">
+              <span class="sys-chain-name">chain {{ c.name }}</span>
+              <span v-if="c.has_hook" class="sys-meta">type {{ c.type }} · hook {{ c.hook }} · prio {{ c.priority }} · policy {{ c.policy || '—' }}</span>
+              <span v-else class="sys-meta">普通链</span>
+              <span class="sys-count">{{ c.rules.length }} 条</span>
+            </div>
+            <el-table v-if="c.rules.length" :data="c.rules" size="small" class="sys-rule-table">
+              <el-table-column prop="handle" label="#" width="70" />
+              <el-table-column prop="text" label="规则" min-width="300">
+                <template #default="{ row }">
+                  <span class="mono">{{ row.text || '(空)' }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="verdict" label="判决" width="90">
+                <template #default="{ row }">
+                  <el-tag v-if="row.verdict === 'accept'" type="success" size="small">accept</el-tag>
+                  <el-tag v-else-if="row.verdict === 'drop'" type="danger" size="small">drop</el-tag>
+                  <span v-else class="muted">—</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="计数" width="140">
+                <template #default="{ row }">
+                  <span v-if="row.has_count" class="mono">{{ row.packets }} pkt / {{ formatBytes(row.bytes) }}</span>
+                  <span v-else class="muted">—</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="80">
+                <template #default="{ row }">
+                  <el-button size="small" type="danger" link @click="deleteKernelRule(t, c, row)">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div v-else class="muted" style="padding: 6px 0 6px 12px">（空链）</div>
+          </div>
+        </div>
+      </div>
     </el-dialog>
 
-    <!-- 插入规则弹窗 -->
-    <el-dialog v-model="insertDialogVisible" title="插入规则到指定位置 (-I)" width="600px">
+    <!-- 插入内核规则 -->
+    <el-dialog v-model="insertDialogVisible" title="插入内核规则" width="600px">
       <el-alert type="info" show-icon :closable="false" style="margin-bottom: 16px">
-        <template #default>直接操作系统的 iptables -I 命令，将规则插入到指定链的指定位置。位置 1 = 最前面（优先级最高）。</template>
+        <template #default>
+          直接写内核 nf_tables。规则写法是自然顺序，如 <code>tcp dport 8080 accept</code>、<code>saddr 10.0.0.5 drop</code>；位置 1 = 链首。
+        </template>
       </el-alert>
       <el-form :model="insertForm" label-width="100px">
-        <el-form-item label="链">
-          <el-select v-model="insertForm.chain" style="width: 100%">
-            <el-option label="INPUT (入站)" value="INPUT" />
-            <el-option label="OUTPUT (出站)" value="OUTPUT" />
-            <el-option label="FORWARD (转发)" value="FORWARD" />
+        <el-form-item label="表">
+          <el-select v-model="insertForm.table" style="width: 100%">
+            <el-option label="mp_filter (过滤)" value="mp_filter" />
+            <el-option label="mp_nat (NAT)" value="mp_nat" />
           </el-select>
         </el-form-item>
-        <el-form-item label="协议族">
-          <el-select v-model="insertForm.family" style="width: 100%">
-            <el-option label="IPv4 (iptables)" value="4" />
-            <el-option label="IPv6 (ip6tables)" value="6" />
+        <el-form-item label="链">
+          <el-select v-model="insertForm.chain" style="width: 100%">
+            <el-option label="input (入站)" value="input" />
+            <el-option label="output (出站)" value="output" />
+            <el-option label="forward (转发)" value="forward" />
+            <el-option label="prerouting (NAT 前置)" value="prerouting" />
+            <el-option label="postrouting (NAT 后置)" value="postrouting" />
           </el-select>
         </el-form-item>
         <el-form-item label="插入位置">
-          <el-input-number v-model="insertForm.position" :min="1" :max="999" style="width: 100%" />
+          <el-input-number v-model="insertForm.position" :min="1" :max="9999" style="width: 100%" />
         </el-form-item>
-        <el-form-item label="规则参数">
-          <el-input v-model="insertForm.spec" type="textarea" :rows="3" placeholder='如: -p tcp --dport 80 -j ACCEPT' />
-          <div style="color: #999; font-size: 12px; margin-top: 4px">完整 iptables 参数（不含 -I 和链名），例如：<code>-p tcp --dport 25565 -j ACCEPT</code></div>
+        <el-form-item label="规则">
+          <el-input v-model="insertForm.spec" type="textarea" :rows="3" placeholder="tcp dport 8080 accept" />
+          <div class="hint" style="margin-top: 4px">
+            支持：<code>tcp|udp|icmp</code>、<code>dport|sport 80</code> 或 <code>8000-8100</code>、<code>saddr|daddr 10.0.0.0/8</code>，结尾 <code>accept|drop|reject</code>
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="insertDialogVisible = false">取消</el-button>
         <el-button type="primary" @click="doInsert">插入</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 快速开放端口弹窗 -->
-    <el-dialog v-model="quickPortDialogVisible" title="快速开放端口" width="420px">
-      <el-form :model="quickPortForm" label-width="80px">
-        <el-form-item label="端口">
-          <el-input v-model="quickPortForm.port" placeholder="如: 25565" />
-        </el-form-item>
-        <el-form-item label="协议">
-          <el-radio-group v-model="quickPortForm.protocol">
-            <el-radio value="tcp">TCP</el-radio>
-            <el-radio value="udp">UDP</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item label="链">
-          <el-radio-group v-model="quickPortForm.chain">
-            <el-radio value="INPUT">INPUT (入站)</el-radio>
-            <el-radio value="OUTPUT">OUTPUT (出站)</el-radio>
-          </el-radio-group>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="quickPortDialogVisible = false">取消</el-button>
-        <el-button type="success" @click="doQuickOpenPort" :loading="quickLoading">立即开放</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 快速封禁IP弹窗 -->
-    <el-dialog v-model="quickIPDialogVisible" title="快速封禁IP" width="420px">
-      <el-form :model="quickIPForm" label-width="80px">
-        <el-form-item label="IP地址">
-          <el-input v-model="quickIPForm.ip" placeholder="如: 192.168.1.100 或 10.0.0.0/8" />
-        </el-form-item>
-        <el-form-item label="动作">
-          <el-radio-group v-model="quickIPForm.action">
-            <el-radio value="DROP">DROP (丢弃，对方卡住)</el-radio>
-            <el-radio value="REJECT">REJECT (拒绝，对方收到拒绝)</el-radio>
-          </el-radio-group>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="quickIPDialogVisible = false">取消</el-button>
-        <el-button type="danger" @click="doQuickBanIP" :loading="quickLoading">立即封禁</el-button>
       </template>
     </el-dialog>
   </div>
@@ -374,13 +344,10 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { firewallApi } from '../api'
 
 // 宽屏才启用 fixed 列：sticky 操作列在窄屏会横向覆盖其它列。
-// 初值同步读取，避免桌面端首帧先渲染成非固定列再跳变。
 const WIDE_MQ = '(min-width: 901px)'
 const isWide = ref(typeof window !== 'undefined' ? window.matchMedia(WIDE_MQ).matches : true)
 let mql: MediaQueryList | null = null
-function syncWide(e: MediaQueryListEvent) {
-  isWide.value = e.matches
-}
+function syncWide(e: MediaQueryListEvent) { isWide.value = e.matches }
 
 const rules = ref<any[]>([])
 const loading = ref(false)
@@ -389,43 +356,46 @@ const actionLoading = ref(false)
 const dialogVisible = ref(false)
 const isEdit = ref(false)
 const formRef = ref<any>(null)
-const serviceStatus = ref<any>({ installed: false, running: false, version: '', name: 'firewalld' })
+const serviceStatus = ref<any>({ installed: false, running: false, name: '' })
 const diagnosing = ref(false)
 const diagnoseDialogVisible = ref(false)
 const diagnoseReport = ref<any>(null)
-
-// 实时规则
-const liveDialogVisible = ref(false)
-const liveLoading = ref(false)
-const liveRulesText = ref('')
-const liveChain = ref('INPUT')
-const liveFamily = ref('')
-const liveTable = ref('')
-const liveDeleteNum = ref(1)
-const liveDeleting = ref(false)
-
-// 插入规则
-const insertDialogVisible = ref(false)
-const insertForm = reactive({ chain: 'INPUT', position: 1, spec: '', family: '4' })
-
-// 快捷操作
-const quickPortDialogVisible = ref(false)
-const quickIPDialogVisible = ref(false)
-const quickLoading = ref(false)
-const quickPortForm = reactive({ port: '', protocol: 'tcp', chain: 'INPUT' })
-const quickIPForm = reactive({ ip: '', action: 'DROP' })
-const lockdownLoading = ref(false)
-const resetLoading = ref(false)
 const deletedRules = ref<any[]>([])
 const deletedLoading = ref(false)
+const lockdownLoading = ref(false)
+const resetLoading = ref(false)
+
+// 内核规则视图
+const sysDialogVisible = ref(false)
+const sysLoading = ref(false)
+const sysTable = ref('')
+const sysChain = ref('')
+const sysView = ref<any>({ family: 'ipv4', tables: [] })
+
+// 插入内核规则
+const insertDialogVisible = ref(false)
+const insertForm = reactive({ table: 'mp_filter', chain: 'input', position: 1, spec: '' })
+
+const isNft = computed(() => serviceStatus.value.backend === 'nft-netlink')
 
 const firewallType = computed(() => {
-  const name = serviceStatus.value.backend || serviceStatus.value.name || 'firewalld'
-  if (name === 'ufw') return 'UFW'
+  const name = serviceStatus.value.backend || serviceStatus.value.name || ''
+  if (name === 'nft-netlink') return 'nf_tables（内核直连）'
   if (name === 'nftables') return 'nftables'
   if (name === 'android-iptables') return 'Android iptables'
   if (name === 'iptables') return 'iptables'
-  return 'firewalld'
+  if (name === 'ufw') return 'UFW'
+  if (name === 'firewalld') return 'firewalld'
+  return name || '未知后端'
+})
+
+// 当前内核里所有链名，供筛选下拉用
+const chainOptions = computed(() => {
+  const set = new Set<string>()
+  for (const t of sysView.value.tables || []) {
+    for (const c of t.chains || []) set.add(c.name)
+  }
+  return [...set]
 })
 
 const form = reactive({
@@ -441,7 +411,11 @@ const formRules = {
 }
 
 function resetForm() {
-  Object.assign(form, { id: 0, name: '', type: 'port', action: 'allow', protocol: 'tcp', port: '', ip: '', target_port: '', chain: 'PREROUTING', masq: true, direction: 'in', enabled: true, note: '' })
+  Object.assign(form, {
+    id: 0, name: '', type: 'port', action: 'allow', protocol: 'tcp',
+    port: '', ip: '', target_port: '', chain: 'PREROUTING', masq: true,
+    direction: 'in', enabled: true, note: ''
+  })
 }
 
 function openDialog(row?: any) {
@@ -450,10 +424,17 @@ function openDialog(row?: any) {
   dialogVisible.value = true
 }
 
+function formatBytes(n: number) {
+  if (!n) return '0 B'
+  if (n < 1024) return n + ' B'
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
+  return (n / 1024 / 1024).toFixed(1) + ' MB'
+}
+
 async function checkStatus() {
   try {
     const res: any = await firewallApi.status()
-    serviceStatus.value = res.data || { installed: false, running: false, name: 'firewalld' }
+    serviceStatus.value = res.data || { installed: false, running: false, name: '' }
   } catch (e: any) { ElMessage.error(e?.message || '检查服务状态失败') }
 }
 
@@ -469,14 +450,14 @@ async function runDiagnose() {
 
 async function startFirewall() {
   actionLoading.value = true
-  try { await firewallApi.start(); ElMessage.success('防火墙启动成功'); await checkStatus() }
+  try { await firewallApi.start(); ElMessage.success('防火墙已启动'); await checkStatus() }
   catch (e: any) { ElMessage.error(e?.message || '启动失败') }
   finally { actionLoading.value = false }
 }
 
 async function stopFirewall() {
   actionLoading.value = true
-  try { await firewallApi.stop(); ElMessage.success('防火墙停止成功'); await checkStatus() }
+  try { await firewallApi.stop(); ElMessage.success('防火墙已停止'); await checkStatus() }
   catch (e: any) { ElMessage.error(e?.message || '停止失败') }
   finally { actionLoading.value = false }
 }
@@ -499,8 +480,7 @@ async function restoreRule(id: number) {
   try {
     await firewallApi.restoreRule(id)
     ElMessage.success('规则已恢复')
-    loadDeletedRules()
-    loadRules()
+    loadDeletedRules(); loadRules()
   } catch (e: any) { ElMessage.error(e?.message || '恢复失败') }
 }
 
@@ -508,12 +488,9 @@ async function restoreAllDeleted() {
   if (!deletedRules.value.length) return
   try {
     await ElMessageBox.confirm(`确定恢复全部 ${deletedRules.value.length} 条已删除规则吗？`, '恢复规则', { type: 'warning' })
-    for (const r of [...deletedRules.value]) {
-      await firewallApi.restoreRule(r.id)
-    }
+    for (const r of [...deletedRules.value]) await firewallApi.restoreRule(r.id)
     ElMessage.success('已全部恢复')
-    loadDeletedRules()
-    loadRules()
+    loadDeletedRules(); loadRules()
   } catch (e: any) { if (e !== 'cancel') ElMessage.error(e?.message || '恢复失败') }
 }
 
@@ -523,8 +500,7 @@ async function clearDeletedRules() {
     await ElMessageBox.confirm(`确定永久清空 ${deletedRules.value.length} 条已删除规则吗？清空后无法恢复！`, '清空回收站', { type: 'error', confirmButtonText: '清空', cancelButtonText: '取消' })
     const res: any = await firewallApi.clearDeletedRules()
     ElMessage.success(res.message || '已清空')
-    loadDeletedRules()
-    loadRules()
+    loadDeletedRules(); loadRules()
   } catch (e: any) { if (e !== 'cancel') ElMessage.error(e?.message || '清空失败') }
 }
 
@@ -544,92 +520,87 @@ async function handleDelete(id: number) {
   } catch (e: any) { if (e !== 'cancel') ElMessage.error(e?.message || '删除失败') }
 }
 
-async function applyRules() {
+// 应用面板规则：把库里的规则整体重建进内核
+async function applyRules(quiet = false) {
   applying.value = true
-  try { const res: any = await firewallApi.apply(); ElMessage.success(res.message || '规则已应用') }
-  catch (e: any) { ElMessage.error(e?.message || '应用失败') }
-  finally { applying.value = false }
-}
-
-// === 实时规则查看 ===
-async function showLiveRules() {
-  liveLoading.value = true
-  liveDialogVisible.value = true
   try {
-    const res: any = await firewallApi.liveRules(liveChain.value, liveFamily.value, liveTable.value)
-    liveRulesText.value = res.data || '(空)'
+    const res: any = await firewallApi.apply()
+    if (!quiet) ElMessage.success(res.message || '规则已应用')
+    await checkStatus()
+    if (sysDialogVisible.value) await loadSystemRules()
+    return true
   } catch (e: any) {
-    liveRulesText.value = '加载失败: ' + (e?.message || '未知错误')
-  } finally { liveLoading.value = false }
+    ElMessage.error(e?.message || '应用失败')
+    return false
+  } finally { applying.value = false }
 }
 
-// === 删除系统实时规则 ===
-async function deleteLiveRule() {
-  liveDeleting.value = true
+function applyPanelRules() { applyRules() }
+
+// === 内核规则 ===
+async function openSystemRules() {
+  sysDialogVisible.value = true
+  await loadSystemRules()
+}
+
+async function loadSystemRules() {
+  sysLoading.value = true
   try {
-    await firewallApi.deleteLiveRule(liveChain.value, liveDeleteNum.value, liveFamily.value)
-    ElMessage.success('规则已删除')
-    await showLiveRules()
+    const res: any = await firewallApi.systemRules(sysChain.value || undefined, sysTable.value || undefined)
+    sysView.value = res.data || { family: 'ipv4', tables: [] }
   } catch (e: any) {
-    ElMessage.error(e?.message || '删除失败')
-  } finally {
-    liveDeleting.value = false
-  }
+    ElMessage.error(e?.message || '读取内核规则失败')
+    sysView.value = { family: 'ipv4', tables: [] }
+  } finally { sysLoading.value = false }
 }
 
-// === 插入规则 ===
+async function deleteKernelRule(t: any, c: any, row: any) {
+  try {
+    await ElMessageBox.confirm(
+      `删除 ${t.name}/${c.name} 中 #${row.handle} 的规则？\n${row.text}`,
+      '删除内核规则',
+      { type: 'warning' }
+    )
+    await firewallApi.deleteLiveRule(c.name, row.handle, undefined, t.name)
+    ElMessage.success('已删除')
+    await loadSystemRules()
+    await checkStatus()
+  } catch (e: any) { if (e !== 'cancel') ElMessage.error(e?.message || '删除失败') }
+}
+
+// === 插入内核规则 ===
+function openInsert() {
+  insertForm.table = 'mp_filter'
+  insertForm.chain = 'input'
+  insertForm.position = 1
+  insertForm.spec = ''
+  insertDialogVisible.value = true
+}
+
 async function doInsert() {
-  if (!insertForm.spec.trim()) { ElMessage.warning('请输入规则参数'); return }
-  const spec = insertForm.spec.trim().split(/\s+/)
+  const spec = insertForm.spec.trim()
+  if (!spec) { ElMessage.warning('请输入规则内容'); return }
   try {
-    await firewallApi.insertRule({ chain: insertForm.chain, position: insertForm.position, spec, family: insertForm.family })
+    await firewallApi.insertRule({
+      chain: insertForm.chain,
+      position: insertForm.position,
+      spec: spec.split(/\s+/),
+      table: insertForm.table === 'mp_nat' ? 'nat' : undefined
+    })
     ElMessage.success('规则已插入')
     insertDialogVisible.value = false
-    showLiveRules()
+    if (sysDialogVisible.value) await loadSystemRules()
+    await checkStatus()
   } catch (e: any) { ElMessage.error(e?.message || '插入失败') }
-}
-
-// === 快速开放端口 ===
-function quickOpenPort() {
-  quickPortForm.port = ''; quickPortForm.protocol = 'tcp'; quickPortForm.chain = 'INPUT'
-  quickPortDialogVisible.value = true
-}
-
-async function doQuickOpenPort() {
-  if (!quickPortForm.port.trim()) { ElMessage.warning('请输入端口'); return }
-  quickLoading.value = true
-  const spec = ['-p', quickPortForm.protocol, '--dport', quickPortForm.port.trim(), '-j', 'ACCEPT']
-  try {
-    await firewallApi.insertRule({ chain: quickPortForm.chain, position: 1, spec })
-    ElMessage.success(`端口 ${quickPortForm.port} 已开放 (${quickPortForm.protocol})`)
-    quickPortDialogVisible.value = false
-  } catch (e: any) { ElMessage.error(e?.message || '开放失败') }
-  finally { quickLoading.value = false }
-}
-
-// === 快速封禁IP ===
-function quickBanIP() {
-  quickIPForm.ip = ''; quickIPForm.action = 'DROP'
-  quickIPDialogVisible.value = true
-}
-
-async function doQuickBanIP() {
-  if (!quickIPForm.ip.trim()) { ElMessage.warning('请输入IP地址'); return }
-  quickLoading.value = true
-  const spec = ['-s', quickIPForm.ip.trim(), '-j', quickIPForm.action]
-  try {
-    await firewallApi.insertRule({ chain: 'INPUT', position: 1, spec })
-    ElMessage.success(`IP ${quickIPForm.ip} 已封禁 (${quickIPForm.action})`)
-    quickIPDialogVisible.value = false
-  } catch (e: any) { ElMessage.error(e?.message || '封禁失败') }
-  finally { quickLoading.value = false }
 }
 
 // === 一键内网模式 ===
 async function lockdown() {
   try {
     await ElMessageBox.confirm(
-      '此操作将清空 INPUT 链并设置为只允许内网访问，外网将被全部拒绝。确定继续？',
+      isNft
+        ? '将以 nft 重建 mp_filter：只允许已建立连接、回环与内网段，其余入站全部丢弃。确定继续？'
+        : '此操作将清空 INPUT 链并设置为只允许内网访问，外网将被全部拒绝。确定继续？',
       '一键内网模式',
       { type: 'warning', confirmButtonText: '确认开启', cancelButtonText: '取消' }
     )
@@ -637,26 +608,29 @@ async function lockdown() {
     const res: any = await firewallApi.lockdown()
     ElMessage.success('内网模式已开启')
     if (res.message) ElMessageBox.alert(res.message, '执行结果', { type: 'success' })
+    await checkStatus()
   } catch (e: any) {
     if (e !== 'cancel') ElMessage.error(e?.message || '操作失败')
   } finally { lockdownLoading.value = false }
 }
 
-// === 重置（清空所有规则） ===
+// === 清空面板表 ===
 async function resetAllRules() {
   try {
     await ElMessageBox.confirm(
-      '此操作将清空 INPUT、OUTPUT、FORWARD 三条链的所有规则，恢复到出厂状态。确定继续？',
-      '重置防火墙',
-      { type: 'error', confirmButtonText: '确认重置', cancelButtonText: '取消' }
+      isNft
+        ? '将删除面板的两张表（mp_filter / mp_nat），内核里面板规则全部清空。系统自带的 oem_* 等表不受影响。确定继续？'
+        : '此操作将清空 INPUT、OUTPUT、FORWARD 三条链的所有规则。确定继续？',
+      '清空面板规则',
+      { type: 'error', confirmButtonText: '确认清空', cancelButtonText: '取消' }
     )
     resetLoading.value = true
-    // 直接调用 stop 接口（后端执行 -F 清空所有链）
     await firewallApi.stop()
-    ElMessage.success('所有规则已清空，防火墙已重置')
+    ElMessage.success('面板规则已清空')
     await checkStatus()
+    if (sysDialogVisible.value) await loadSystemRules()
   } catch (e: any) {
-    if (e !== 'cancel') ElMessage.error(e?.message || '重置失败')
+    if (e !== 'cancel') ElMessage.error(e?.message || '清空失败')
   } finally { resetLoading.value = false }
 }
 
@@ -670,68 +644,80 @@ onMounted(async () => {
   }
 })
 
-onUnmounted(() => {
-  mql?.removeEventListener('change', syncWide)
-})
+onUnmounted(() => { mql?.removeEventListener('change', syncWide) })
 </script>
 
 <style scoped>
 .page-container { padding: 20px; }
-.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.page-header { margin-bottom: 20px; }
 .page-title { font-size: 1.5rem; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px; }
 .icon { font-size: 1.3rem; }
+.muted { color: #909399; font-size: 13px; }
+.hint { margin-left: 8px; color: #909399; font-size: 12px; }
+.mono { font-family: 'Courier New', monospace; font-size: 12px; }
+.danger-text { color: #f56c6c; font-weight: 600; }
+.diag-pre { margin: 0; white-space: pre-wrap; color: #666; font-size: 13px; font-family: monospace; }
+
 .quick-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
-/* ── 服务状态条：窄屏换行 ── */
+/* 状态条 */
 .svc-bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
-.svc-bar-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-width: 0; }
+.svc-bar-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
 .svc-bar-right { display: flex; gap: 8px; flex-wrap: wrap; }
+.backend-name { font-weight: 600; }
 
-/* ── 回收站头部：标题与按钮组窄屏换行 ── */
-.trash-bar {
-  display: flex; justify-content: space-between; align-items: center;
-  gap: 10px; flex-wrap: wrap; margin-bottom: 10px;
-}
+/* nft 统计行 */
+.stat-row { display: flex; gap: 24px; flex-wrap: wrap; margin-top: 14px; padding-top: 14px; border-top: 1px solid #f0f0f0; }
+.stat { display: flex; flex-direction: column; gap: 2px; }
+.stat-label { font-size: 12px; color: #909399; }
+.stat-value { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat-value.small { font-size: 13px; font-weight: 500; }
+
+.warn-line { margin-top: 12px; font-size: 13px; color: #e6a23c; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+/* 分区标题条 */
+.section-bar { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.section-title { font-weight: 600; }
 .trash-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
-/* 顶部告警条：文案与按钮窄屏换行 */
-.alert-bar {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 10px; flex-wrap: wrap; width: 100%;
-}
+/* 顶部告警条 */
+.alert-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; width: 100%; }
 
-/* ── 表格横向滚动容器 ──
-   不要给 .el-table 设 min-width：那会让表格根节点比容器宽、整表撑破视口。
-   横向滚动交给 el-table 内部的 .el-scrollbar__wrap。 */
-.table-wrap {
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  -webkit-overflow-scrolling: touch;
-  overscroll-behavior-x: contain;
+/* 内核规则面板 */
+.sys-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+.sys-body { max-height: 60vh; overflow: auto; }
+.sys-table { margin-bottom: 18px; border: 1px solid #ebeef5; border-radius: 8px; overflow: hidden; }
+.sys-table-head {
+  display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  background: #fafafa; border-bottom: 1px solid #ebeef5;
 }
-.table-wrap :deep(.el-table) {
-  width: 100%;
-  min-width: 0;
-  max-width: 100%;
-}
+.sys-table-name { font-family: 'Courier New', monospace; font-weight: 700; font-size: 14px; }
+.sys-chain { border-top: 1px solid #f5f5f5; }
+.sys-chain:first-of-type { border-top: none; }
+.sys-chain-head { display: flex; align-items: center; gap: 12px; padding: 8px 14px; flex-wrap: wrap; }
+.sys-chain-name { font-family: 'Courier New', monospace; font-weight: 600; font-size: 13px; }
+.sys-meta { font-size: 12px; color: #909399; font-family: 'Courier New', monospace; }
+.sys-count { margin-left: auto; font-size: 12px; color: #c0c4cc; }
+.sys-rule-table { padding: 0 6px 6px; }
 
-/* 操作列按钮组：窄屏换行排列，不相互挤压 */
+/* 表格横向滚动容器 */
+.table-wrap { width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; }
+.table-wrap :deep(.el-table) { width: 100%; min-width: 0; max-width: 100%; }
+
 .row-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .row-actions :deep(.el-button) { margin-left: 0; }
 
 @media (max-width: 900px) {
   .quick-actions :deep(.el-button) { flex: 1 1 45%; margin-left: 0; }
   .row-actions :deep(.el-button) { font-size: 12px; padding: 5px 8px; }
+  .stat-row { gap: 16px; }
 }
 
 @media (max-width: 480px) {
   .page-container { padding: 14px; }
   .svc-bar { flex-direction: column; align-items: stretch; }
   .svc-bar-right :deep(.el-button) { flex: 1 1 45%; margin-left: 0; }
-  .trash-bar { flex-direction: column; align-items: stretch; }
+  .section-bar { flex-direction: column; align-items: stretch; }
   .trash-actions :deep(.el-button) { flex: 1 1 30%; margin-left: 0; }
   .quick-actions :deep(.el-button) { flex: 1 1 100%; margin-left: 0; }
   .row-actions :deep(.el-button) { flex: 1 1 45%; }

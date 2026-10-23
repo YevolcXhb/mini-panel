@@ -220,6 +220,7 @@ func NewRouter() *gin.Engine {
 		fwGroup.POST("/stop", fw.Stop)
 		fwGroup.GET("/diagnose", fw.Diagnose)
 		fwGroup.GET("/live-rules", fw.LiveRules)
+		fwGroup.GET("/system-rules", fw.SystemRules)
 		fwGroup.POST("/insert", fw.InsertRule)
 		fwGroup.DELETE("/live-rule", fw.DeleteLiveRule)
 		fwGroup.POST("/lockdown", fw.Lockdown)

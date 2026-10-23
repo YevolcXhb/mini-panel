@@ -14,9 +14,11 @@ import (
 )
 
 var (
-	CONF            *config.Config
-	DB              *gorm.DB
-	LOG             *logrus.Logger
+	CONF *config.Config
+	DB   *gorm.DB
+	// 预置一个默认 logger，让单元测试或未调用 InitLogger 的场景也不会因 nil 解引用崩溃。
+	// InitLogger 会整体替换它。
+	LOG             = logrus.New()
 	Cron            *cron.Cron
 	IsAndroidChroot bool
 	DockRootClient  *dockroot.Client

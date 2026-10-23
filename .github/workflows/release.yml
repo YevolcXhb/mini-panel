@@ -40,7 +40,9 @@ jobs:
           VERSION=${GITHUB_REF_NAME#v}
           GIT_COMMIT=$(git rev-parse --short HEAD)
           BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S')
-          LDFLAGS="-X main.version=${VERSION} -X main.buildTime=${BUILD_TIME} -X main.gitCommit=${GIT_COMMIT} -s -w"
+          # 不要加 -s -w：strip 后的二进制在 Android chroot（内核 4.14 aarch64）
+          # 上启动即 Segmentation fault，实测必崩，只能保留符号表。
+          LDFLAGS="-X main.version=${VERSION} -X main.buildTime=${BUILD_TIME} -X main.gitCommit=${GIT_COMMIT}"
 
           mkdir -p ../build
 

@@ -245,8 +245,9 @@ export const firewallApi = {
   stop: () => api.post('/firewall/stop'),
   diagnose: () => api.get('/firewall/diagnose'),
   liveRules: (chain?: string, family?: string, table?: string) => api.get('/firewall/live-rules', { params: { ...(chain ? { chain } : {}), ...(family ? { family } : {}), ...(table ? { table } : {}) } }),
-  insertRule: (data: { chain: string; position: number; spec: string[]; family?: string }) => api.post('/firewall/insert', data),
-  deleteLiveRule: (chain: string, num: number, family?: string) => api.delete('/firewall/live-rule', { params: { chain, num, ...(family ? { family } : {}) } }),
+  systemRules: (chain?: string, table?: string) => api.get('/firewall/system-rules', { params: { ...(chain ? { chain } : {}), ...(table ? { table } : {}) } }),
+  insertRule: (data: { chain: string; position: number; spec: string[]; family?: string; table?: string }) => api.post('/firewall/insert', data),
+  deleteLiveRule: (chain: string, num: number, family?: string, table?: string) => api.delete('/firewall/live-rule', { params: { chain, num, ...(family ? { family } : {}), ...(table ? { table } : {}) } }),
   lockdown: () => api.post('/firewall/lockdown')
 }
 

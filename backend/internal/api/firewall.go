@@ -146,17 +146,42 @@ func (h *FirewallAPI) Diagnose(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": report})
 }
 
-// LiveRules 实时查看系统 iptables 规则
+// LiveRules 实时查看系统规则
+// iptables 后端返回文本；nft 后端返回结构化 JSON
 func (h *FirewallAPI) LiveRules(c *gin.Context) {
 	chain := c.Query("chain")
 	family := c.Query("family")
 	table := c.Query("table")
+
+	// struct=1 或无参数时优先给结构化数据，前端不再解析文本
+	if c.Query("struct") == "1" {
+		view, err := h.service.SystemRules(table, chain)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 200, "data": view})
+		return
+	}
+
 	output, err := h.service.LiveRules(chain, family, table)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": output})
+}
+
+// SystemRules 返回结构化的内核规则视图（目前仅 nft 后端支持）
+func (h *FirewallAPI) SystemRules(c *gin.Context) {
+	table := c.Query("table")
+	chain := c.Query("chain")
+	view, err := h.service.SystemRules(table, chain)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": view})
 }
 
 // InsertRule 插入规则到指定位置
@@ -166,29 +191,34 @@ func (h *FirewallAPI) InsertRule(c *gin.Context) {
 		Position int      `json:"position"`
 		Spec     []string `json:"spec"`
 		Family   string   `json:"family"`
+		Table    string   `json:"table"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": 400, "message": err.Error()})
 		return
 	}
-	if err := h.service.InsertRule(req.Chain, req.Position, req.Spec, req.Family); err != nil {
+	if err := h.service.InsertRule(req.Chain, req.Position, req.Spec, req.Family, req.Table); err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "规则已插入"})
 }
 
-// DeleteLiveRule 按行号删除系统规则
+// DeleteLiveRule 删除系统规则（nft 后端按 handle）
 func (h *FirewallAPI) DeleteLiveRule(c *gin.Context) {
 	chain := c.Query("chain")
 	family := c.Query("family")
+	table := c.Query("table")
 	numStr := c.Query("num")
+	if numStr == "" {
+		numStr = c.Query("handle")
+	}
 	num, err := strconv.Atoi(numStr)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"code": 400, "message": "无效的行号"})
+		c.JSON(http.StatusOK, gin.H{"code": 400, "message": "无效的行号/handle"})
 		return
 	}
-	if err := h.service.DeleteLiveRule(chain, num, family); err != nil {
+	if err := h.service.DeleteLiveRule(chain, num, family, table); err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": 500, "message": err.Error()})
 		return
 	}
